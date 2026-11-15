@@ -21,6 +21,8 @@ registered account permissions and credentials. Refused or ambiguous actions sto
 Follow [Your first market maker in 10 minutes](docs/first-market-maker.md) for the paper → report →
 small-live workflow. See the [strategy chooser](docs/strategies.md#strategy-chooser) and
 [risk-limit FAQ](docs/risk-limits.md) before changing a config.
+New to quoting? [Market making 101](docs/market-making-101.md) explains spreads, inventory,
+adverse selection, fees and why paper fills differ from live.
 
 Browse the five commented [paper configs in the gallery](configs/gallery/README.md), or
 [contribute a bug report, strategy idea or PR](CONTRIBUTING.md).
