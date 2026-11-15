@@ -1,0 +1,13 @@
+.git
+.venv
+.env
+.env.*
+.glyde-mm
+*.egg-info
+__pycache__
+.pytest_cache
+.ruff_cache
+build
+dist
+logs
+glyde-mm.yaml

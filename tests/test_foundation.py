@@ -303,3 +303,98 @@ def test_book_rejects_crossed_and_preserves_decimals():
     raw["levels"][1][0]["px"] = "99"
     with pytest.raises(OneApiError):
         book_from_wire(raw)
+
+
+async def test_websocket_application_heartbeat_is_joined_on_exit():
+    import asyncio
+
+    sent = []
+    pinged = asyncio.Event()
+
+    class Socket:
+        async def send(self, raw):
+            sent.append(json.loads(raw))
+            if sent[-1].get("method") == "ping":
+                pinged.set()
+
+        def __aiter__(self):
+            return self.frames()
+
+        async def frames(self):
+            async with asyncio.timeout(1):
+                await pinged.wait()
+            yield '{"channel":"pong"}'
+
+    @asynccontextmanager
+    async def connect(*args, **kwargs):
+        yield Socket()
+
+    async with OneApiClient(Config(), connect_ws=connect, heartbeat_interval=0.001) as api:
+        assert [row async for row in api.stream([])] == [{"channel": "pong"}]
+    count = len(sent)
+    await asyncio.sleep(0.01)
+    assert len(sent) == count
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        {"resting": {"oid": None}},
+        {"resting": {"oid": True}},
+        {"resting": {"oid": "01"}},
+        {"resting": {"oid": 0}},
+        {"resting": {"oid": 2**64}},
+        {"resting": {"oid": 1}, "error": "contradiction"},
+        {"filled": {"oid": 1}},
+        {"filled": {"oid": 1, "totalSz": "0", "avgPx": "100"}},
+        {"filled": {"oid": 1, "totalSz": "2", "avgPx": "100"}},
+        {"filled": {"oid": 1, "totalSz": "0.5", "avgPx": "101"}},
+        {"filled": {"oid": 1, "totalSz": "NaN", "avgPx": "100"}},
+        {"resting": {"oid": 1, "cloid": "wrong"}},
+    ],
+)
+async def test_malformed_receipts_never_authorize_pending_release(client, status):
+    api, _ = client
+    result = {"status": "ok", "response": {"data": {"statuses": [status]}}}
+    with pytest.raises(OutcomeUnknown):
+        api._order_results(result, [OrderRequest("BTC", "buy", D(1), D(100))])
+
+
+async def test_well_formed_filled_receipt_control(client):
+    api, _ = client
+    result = {
+        "status": "ok",
+        "response": {
+            "data": {
+                "statuses": [
+                    {"filled": {"oid": 1, "totalSz": "0.5", "avgPx": "99"}},
+                ]
+            }
+        },
+    }
+    assert (
+        api._order_results(result, [OrderRequest("BTC", "buy", D(1), D(100))])[0].status == "filled"
+    )
+
+
+def test_decimal_wire_does_not_apply_context_rounding():
+    from decimal import localcontext
+
+    from glyde_mm.client import wire_decimal
+
+    value = D("123456789012345678901234567890.12345678900")
+    with localcontext() as context:
+        context.prec = 6
+        assert wire_decimal(value) == "123456789012345678901234567890.123456789"
+        assert wire_decimal(D("1000")) == "1000"
+
+
+async def test_paper_duplicate_cut_cannot_replay_consumed_liquidity():
+    paper = PaperExchange()
+    await paper.on_book(book())
+    await paper.place_orders([OrderRequest("BTC", "buy", D(1), D(99))])
+    crossing = book("97", "98", quantity="0.25", time=1001)
+    await paper.on_book(crossing)
+    assert sum(row.quantity for row in paper.fills) == D("0.25")
+    await paper.on_book(crossing)
+    assert sum(row.quantity for row in paper.fills) == D("0.25")

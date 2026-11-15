@@ -1,0 +1,26 @@
+# Review every limit and replace the PUBLIC account address before using live mode.
+# Values are examples, not exchange minimum sizes or a promise that orders qualify.
+mode: live
+base_url: https://api.glyde.trade/v1
+symbol: BTC
+owner: 'REPLACE_WITH_YOUR_PUBLIC_GLYDE_ACCOUNT_ADDRESS'
+# If Glyde assigns a vault/namespace for this account, add that exact public address:
+# vault_address: 'REPLACE_WITH_YOUR_ASSIGNED_PUBLIC_VAULT_ADDRESS'
+mainnet: true
+private_key_env: GLYDE_API_PRIVATE_KEY
+read_api_key_env: GLYDE_READ_API_KEY
+strategy: pure_market_making
+strategy_config:
+  bid_spread: '0.002'
+  ask_spread: '0.002'
+  order_amount: '0.0001'
+  order_refresh_time: 30
+  order_levels: 1
+  minimum_spread: '0.001'
+  hanging_orders_enabled: false
+risk:
+  max_position: '0.001'
+  max_order_notional: '25'
+  max_daily_loss: '5'
+  stale_book_seconds: '5'
+  account_age_seconds: '10'
