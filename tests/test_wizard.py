@@ -67,7 +67,7 @@ def test_existing_file_and_symlink_are_never_overwritten(tmp_path):
 
 
 def test_invalid_combined_limits_do_not_write_a_partial_file(tmp_path):
-    answers = iter(["", "", "", "1e20", "", "", "", ""])
+    answers = iter(["", "", "", "1e20", "", "", "", "", ""])
     path = tmp_path / "bot.yaml"
     with pytest.raises(ValueError, match="too small"):
         run_wizard(path, input_fn=lambda _: next(answers), print_fn=lambda _: None)
