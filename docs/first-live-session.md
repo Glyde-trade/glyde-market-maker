@@ -40,7 +40,9 @@ directory rather than being reset for the wizard.
 
 Use a dedicated account. Cleanup can cancel manual orders on the selected symbol; it
 never flattens positions. If cancellation fails, verify the venue and reconcile the
-original IDs; do not delete risk state or automatically rerun. From another terminal,
-the [stop command](../README.md#if-something-goes-wrong) with the **original config path**
-can coordinate the session. Multi-symbol first sessions are intentionally refused; use
+original IDs; do not delete risk state or automatically rerun. During the paper preview,
+use Ctrl-C. After live begins, the [stop command](../README.md#if-something-goes-wrong)
+from another terminal with the **original config path** can coordinate that live runner;
+the original live config does not address the preview's paper-mode stop lock.
+Multi-symbol first sessions are intentionally refused; use
 the ordinary reviewed `run` workflow after practicing with multi-symbol paper mode.
