@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import replace
 from decimal import Decimal as D
@@ -138,6 +139,14 @@ async def test_paper_places_real_strategy_quotes_through_risk_without_private_re
     assert await paper.open_orders() == []
     assert paper.cancellations >= 1
     assert list(tmp_path.glob("paper-*.json"))
+    events = [
+        json.loads(line)
+        for line in next(tmp_path.glob("logs/run-*/events.jsonl")).read_text().splitlines()
+    ]
+    assert events[0]["event"] == "run_header"
+    assert {"version", "commit"} <= events[0].keys()
+    assert events[-1]["event"] == "run_ended" and events[-1]["outcome"] == "stopped"
+    assert "strategy_started" in {row["event"] for row in events}
 
 
 async def test_explicit_live_routes_only_through_managed_transport_and_cancels_on_stop(
