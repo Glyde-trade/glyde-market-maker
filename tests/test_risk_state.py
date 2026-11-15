@@ -147,3 +147,26 @@ async def test_durable_gate_rechecks_latest_risk_and_stop_before_dispatch(
         release.set()
         await asyncio.gather(task, return_exceptions=True)
         await managed.close()
+
+
+@pytest.mark.parametrize("missing", ["execution", "order_attempts"])
+async def test_checkpoint_missing_current_fields_refuses_without_rewriting(tmp_path, missing):
+    path = tmp_path / "risk.json"
+    initial, _ = guard(path)
+    await initial.close_state()
+    checkpoint = json.loads(path.read_text())
+    del checkpoint[missing]
+    original = json.dumps(checkpoint)
+    path.write_text(original)
+    with pytest.raises(RiskViolation, match="risk_state_unavailable"):
+        guard(path)
+    assert path.read_text() == original
+
+
+def test_obsolete_risk_state_path_config_is_rejected(tmp_path):
+    from glyde_mm.config import load_config
+
+    path = tmp_path / "bot.yaml"
+    path.write_text("mode: paper\nrisk_state_path: ignored.json\n")
+    with pytest.raises(ValueError, match="unknown configuration field"):
+        load_config(path)
