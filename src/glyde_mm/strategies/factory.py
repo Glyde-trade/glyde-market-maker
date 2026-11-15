@@ -37,6 +37,8 @@ def parse_config(cls: type[ConfigT], values: dict[str, Any]) -> ConfigT:
             "upper_price",
             "order_amount",
             "refresh_tolerance_pct",
+            "order_refresh_tolerance_pct",
+            "inventory_target_base_ratio",
         }:
             if value is None and default is None:
                 continue
@@ -44,7 +46,7 @@ def parse_config(cls: type[ConfigT], values: dict[str, Any]) -> ConfigT:
                 converted[key] = Decimal(str(value))
             except InvalidOperation:
                 raise ValueError(f"{key} must be a decimal") from None
-        elif key in {"order_refresh_time", "max_order_age"}:
+        elif key in {"order_refresh_time", "max_order_age", "filled_order_delay"}:
             if isinstance(value, bool):
                 raise ValueError(f"{key} must be a number")
             converted[key] = float(value)

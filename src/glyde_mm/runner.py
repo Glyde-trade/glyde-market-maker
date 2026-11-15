@@ -146,6 +146,8 @@ async def _run_session(
     references = {}
     for symbol, market_config in selected.items():
         policy = validate_strategy_config(market_config.strategy, market_config.strategy_config)
+        if config.mode == "live" and getattr(policy, "filled_order_delay", 0) > 0:
+            raise ValueError("filled_order_delay requires identified paper-stream fills")
         if config.mode == "live" and getattr(policy, "ping_pong_enabled", False):
             raise ValueError(
                 "ping-pong requires paper tape fills until live fill delivery is qualified"

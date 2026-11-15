@@ -19,3 +19,9 @@ PMM directional price bands, additive ladder sizing and ping-pong design referen
 Hummingbot pure_market_making, revision 9af100d6822da7d2d0291a906c730ef172284ee2,
 under Apache License 2.0. Glyde rewrites the lifecycle and alternates entire sides
 on identified partial paper fills rather than Hummingbot's completed-order count.
+
+PMM inventory ratio/range, refresh tolerance and post-fill delay also reference
+Hummingbot pure_market_making under Apache License 2.0. The implementation is
+rewritten with Decimal and shared risk admission. Ratio targets use signed
+perpetual position value / equity; identified partial fills conservatively pause
+streaming-paper quoting. This is not spot-balance or complete-order parity.
