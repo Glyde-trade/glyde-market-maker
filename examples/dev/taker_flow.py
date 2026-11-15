@@ -7,9 +7,12 @@ import argparse
 import asyncio
 import ipaddress
 import random
+from contextlib import asynccontextmanager
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from urllib.parse import urlsplit
 from uuid import uuid4
+
+import httpx
 
 from glyde_mm.client import OneApiClient, OneApiError, OutcomeUnknown
 from glyde_mm.config import Config, decimal, load_config
@@ -38,6 +41,14 @@ def require_loopback(origin: str) -> None:
         raise ValueError("taker flow refuses non-loopback origins")
 
 
+@asynccontextmanager
+async def local_client(config: Config):
+    # Local development traffic must not inherit an outbound environment proxy.
+    async with httpx.AsyncClient(timeout=10, follow_redirects=False, trust_env=False) as http:
+        async with OneApiClient(config, http_client=http) as client:
+            yield client
+
+
 async def run_flow(
     config: Config,
     *,
@@ -47,7 +58,7 @@ async def run_flow(
     max_order_notional: Decimal = Decimal(25),
     max_total_notional: Decimal = Decimal(2500),
     seed: int = 7,
-    client_factory=OneApiClient,
+    client_factory=local_client,
     sleep=asyncio.sleep,
     report=emit,
 ) -> dict:

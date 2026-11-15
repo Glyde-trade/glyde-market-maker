@@ -184,3 +184,9 @@ async def test_notional_budget_refuses_before_dispatch():
             quantity=D(1),
             client_factory=lambda _: Client(),
         )
+
+
+async def test_default_local_client_never_inherits_proxy_or_redirects():
+    async with flow.local_client(Config(base_url="http://127.0.0.1:8080/v1")) as client:
+        assert client._http.trust_env is False
+        assert client._http.follow_redirects is False
