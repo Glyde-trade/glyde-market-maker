@@ -244,23 +244,23 @@ class RiskManagedClient:
             if symbol is None or order.symbol == symbol
         ]
         failure: Exception | None = None
-        if requests:
+        for request in requests:
             try:
-                results = await self.client.cancel_orders(requests)
-                if len(results) != len(requests):
+                results = await self.client.cancel_orders([request])
+                if len(results) != 1:
                     raise RiskViolation("cancel_outcome_unknown")
-                for request, result in zip(requests, results, strict=True):
-                    if result.status not in ("cancelled", "already_closed"):
-                        raise RiskViolation("cancel_outcome_unknown")
-                    if getattr(result, "order_id", None) not in (None, request.order_id) or getattr(
-                        result, "client_order_id", None
-                    ) not in (
-                        None,
-                        request.client_order_id or self._order_ids.get(request.order_id or ""),
-                    ):
-                        raise RiskViolation("cancel_identity_mismatch")
+                result = results[0]
+                if result.status not in ("cancelled", "already_closed"):
+                    raise RiskViolation("cancel_outcome_unknown")
+                if getattr(result, "order_id", None) not in (None, request.order_id) or getattr(
+                    result, "client_order_id", None
+                ) not in (
+                    None,
+                    request.client_order_id or self._order_ids.get(request.order_id or ""),
+                ):
+                    raise RiskViolation("cancel_identity_mismatch")
             except Exception as error:
-                failure = error
+                failure = failure or error
         try:
             await self.client.cancel_all(symbol)
         except Exception as error:

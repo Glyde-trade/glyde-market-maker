@@ -348,3 +348,35 @@ def test_confirmed_cleanup_does_not_repeat_known_cancellations():
         assert g.halted == "disconnected"
 
     asyncio.run(scenario())
+
+
+def test_first_cancel_failure_still_attempts_each_other_original_once():
+    async def scenario():
+        g, _ = guard()
+
+        class BrokenClient(FakeClient):
+            async def cancel_orders(self, orders):
+                results = []
+                for order in orders:
+                    self.cancelled.append(order)
+                    if order.order_id == "0":
+                        raise TimeoutError("first original cancel reply was lost")
+                    results.append(SimpleNamespace(status="cancelled", order_id=order.order_id))
+                return results
+
+            async def cancel_all(self, symbol=None):
+                self.all_cancels += 1
+                raise RuntimeError("private read credential expired")
+
+        raw = BrokenClient()
+        client = RiskManagedClient(raw, g)
+        await client.place_orders([Order(client_order_id="one"), Order(client_order_id="two")])
+        with pytest.raises(RiskViolation, match="cancel_outcome_unknown"):
+            await client.close()
+        assert [row.order_id for row in raw.cancelled] == ["0", "1"]
+        assert raw.all_cancels == 1
+        assert len(raw.placed) == 2
+        assert set(g.pending) == {"one", "two"}
+        assert g.halted == "closed"
+
+    asyncio.run(scenario())
