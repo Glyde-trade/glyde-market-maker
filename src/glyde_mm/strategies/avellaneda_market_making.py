@@ -9,7 +9,7 @@ from collections import deque
 from dataclasses import dataclass
 from decimal import Decimal, localcontext
 
-from glyde_mm.models import Account, Book, OrderRequest
+from glyde_mm.models import Account, Book, OrderRequest, Trade
 
 from .pure_market_making import (
     ONE,
@@ -22,6 +22,7 @@ from .pure_market_making import (
     require_decimal,
     valid_book,
 )
+from .stream_volatility import BookTradeVolatility
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,7 @@ class AvellanedaConfig:
     time_left_fraction: Decimal = ONE
     volatility_samples: int = 30
     sample_interval_ms: int = 1000
+    volatility_source: str = "book"
     price_ceiling: Decimal | None = None
     price_floor: Decimal | None = None
 
@@ -71,6 +73,11 @@ class AvellanedaConfig:
             raise ValueError("volatility_samples must be an integer in 2..4096")
         if type(self.sample_interval_ms) is not int or not 1 <= self.sample_interval_ms <= 60000:
             raise ValueError("sample_interval_ms must be an integer in 1..60000")
+        if not isinstance(self.volatility_source, str) or self.volatility_source not in {
+            "book",
+            "book_and_trades",
+        }:
+            raise ValueError("volatility_source must be book or book_and_trades")
 
 
 class AvellanedaMarketMakingStrategy(PureMarketMakingStrategy):
@@ -79,10 +86,17 @@ class AvellanedaMarketMakingStrategy(PureMarketMakingStrategy):
         self.model = config
         self._prices: deque[Decimal] = deque(maxlen=config.volatility_samples + 1)
         self._sample_bucket: int | None = None
+        self._stream_volatility = (
+            BookTradeVolatility(config.volatility_samples, config.sample_interval_ms)
+            if config.volatility_source == "book_and_trades"
+            else None
+        )
 
     @property
     def volatility(self) -> Decimal | None:
         """RMS absolute midpoint change per configured sampling interval, not percent."""
+        if self._stream_volatility is not None:
+            return self._stream_volatility.value
         if len(self._prices) != self.model.volatility_samples + 1:
             return None
         prices = tuple(self._prices)
@@ -102,6 +116,10 @@ class AvellanedaMarketMakingStrategy(PureMarketMakingStrategy):
         if self.book is None:
             self._prices.clear()
             self._sample_bucket = None
+            if self._stream_volatility is not None:
+                self._stream_volatility.clear()
+        elif self.book is book and self._stream_volatility is not None:
+            self._stream_volatility.on_book(book)
         elif self.book is book:
             bucket = book.timestamp_ms // self.model.sample_interval_ms
             if self._sample_bucket is None or bucket > self._sample_bucket:
@@ -111,6 +129,14 @@ class AvellanedaMarketMakingStrategy(PureMarketMakingStrategy):
                 assert mid is not None
                 self._prices.append(mid)
                 self._sample_bucket = bucket
+        if ready != (self.volatility is not None):
+            self._needs_refresh = True
+
+    async def on_trade(self, trade: Trade) -> None:
+        if self._stream_volatility is None or trade.symbol != self.context.symbol:
+            return
+        ready = self.volatility is not None
+        self._stream_volatility.on_trade(trade)
         if ready != (self.volatility is not None):
             self._needs_refresh = True
 

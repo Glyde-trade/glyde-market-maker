@@ -586,6 +586,35 @@ credential reads and private requests. See the [fixture provenance](tests/fixtur
 the initial recording is synthetic, so these checks catch client wire regressions
 without claiming the production service is reachable or qualified.
 
+## Avellaneda–Stoikov with public books and trades
+
+The existing `avellaneda_market_making` strategy adapts Hummingbot's normalized
+reservation-price/spread model. `risk_factor` controls inventory aversion,
+`liquidity_kappa` is an explicit order-book depth calibration, and
+`inventory_target_position` is a signed base-position target. These parameters do
+not raise any shared position, notional, loss or order-rate cap.
+
+For an opt-in streaming-paper experiment, copy
+[avellaneda-trades-paper.yaml](examples/avellaneda-trades-paper.yaml):
+
+```sh
+glyde-mm paper examples/avellaneda-trades-paper.yaml
+```
+
+`volatility_source: book_and_trades` uses the One API `l2Book` and `trades` streams.
+Each complete source-time interval contributes the mean of its latest midpoint
+and volume-weighted trade price. Volatility is the RMS change across consecutive
+completed intervals; repeated callbacks cannot warm it up. Missing books/trades,
+gaps or zero movement withhold quotes; lost readiness retires existing quotes on
+the next strategy tick. The default remains `volatility_source: book`.
+
+This combined estimator is a Glyde adaptation, not Hummingbot's automatic
+trade-intensity calibration. `liquidity_kappa` stays user-configured. The combined
+mode currently refuses live and book-only replay before trading: paper results
+do not qualify private fills or live execution. See the
+[model equations and sampling contract](docs/strategies.md#avellaneda-market-making)
+and [Apache-2.0 reference](https://github.com/hummingbot/hummingbot/tree/9af100d6822da7d2d0291a906c730ef172284ee2/hummingbot/strategy/avellaneda_market_making).
+
 ## Type checking
 
 Install development tools with `python -m pip install -e '.[dev]'`, then run

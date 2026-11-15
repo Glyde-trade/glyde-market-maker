@@ -25,3 +25,9 @@ Hummingbot pure_market_making under Apache License 2.0. The implementation is
 rewritten with Decimal and shared risk admission. Ratio targets use signed
 perpetual position value / equity; identified partial fills conservatively pause
 streaming-paper quoting. This is not spot-balance or complete-order parity.
+
+Avellaneda-Stoikov reservation-price/spread design references Hummingbot's
+avellaneda_market_making at revision 9af100d6822da7d2d0291a906c730ef172284ee2,
+Apache License 2.0. Glyde retains signed perpetual inventory/equity normalization;
+the optional book-plus-trade VWAP volatility estimator is a Glyde adaptation,
+not Hummingbot's automatic trade-intensity calibration.
