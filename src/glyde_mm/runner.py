@@ -21,6 +21,7 @@ from .market_preflight import require_preflight
 from .metrics import Metrics
 from .models import Book
 from .paper import PaperExchange
+from .paper_result import PaperResult
 from .preflight import check_live_exposure
 from .reference import HYPERLIQUID_PUBLIC_URL, ExternalReference
 from .risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
@@ -80,7 +81,10 @@ async def run(
     report: Callable[[str], object] = print,
     allow_existing_exposure: bool = False,
     log_directory: Path | None = None,
+    paper_result: PaperResult | None = None,
 ) -> None:
+    if paper_result is not None and config.mode != "paper":
+        raise ValueError("paper result requires paper mode")
     stop = stop_event or asyncio.Event()
     with (
         RunLog(
@@ -88,7 +92,7 @@ async def run(
             mode=config.mode,
             strategy=config.strategy,
         ) as journal,
-        Metrics(config) as metrics,
+        Metrics(config, collect=True) if paper_result is not None else Metrics(config) as metrics,
     ):
         report(f"GLYDE-MM {journal.identity['version']} commit={journal.identity['commit']}")
         outcome = "completed"
@@ -112,6 +116,7 @@ async def run(
                     allow_existing_exposure=allow_existing_exposure,
                     risk_reasons=risk_reasons,
                     metrics=metrics,
+                    paper_result=paper_result,
                 )
             if stop.is_set():
                 outcome = "stopped"
@@ -128,6 +133,8 @@ async def run(
             )
             raise
         finally:
+            if paper_result is not None:
+                paper_result.outcome = outcome
             observer.finish(outcome)
             journal.emit("run_ended", outcome=outcome)
             await notify_session(
@@ -149,6 +156,7 @@ async def _run_session(
     observer: SnapshotPublisher,
     risk_reasons: list[str],
     metrics: Metrics,
+    paper_result: PaperResult | None,
     allow_existing_exposure: bool = False,
 ) -> None:
     selected = {market.symbol: market for market in config.market_configs()}
@@ -231,6 +239,11 @@ async def _run_session(
         resources = AsyncExitStack()
         tasks: list[asyncio.Task[None] | asyncio.Task[bool]] = []
         risk_stop = None
+
+        async def observe_paper() -> None:
+            if paper_result is not None and paper is not None:
+                await paper_result.observe(paper, metrics)
+
         try:
             if stop.is_set():
                 return
@@ -298,6 +311,7 @@ async def _run_session(
                 metrics.book(guard.books[book.symbol])
                 if paper is not None:
                     await paper.on_book(book)
+                    await observe_paper()
             if live is not None:
                 await check_live_exposure(
                     live, config.symbols, allow_existing_exposure=allow_existing_exposure
@@ -337,6 +351,13 @@ async def _run_session(
             async def receive_books() -> None:
                 nonlocal book_messages
                 async for frame in stream:
+                    if paper is not None and frame.get("channel") in {
+                        "resnapshot_required",
+                        "glydeSafety",
+                    }:
+                        if paper_result is not None:
+                            paper_result.pause("gap")
+                        raise OneApiError("paper source requires a fresh snapshot")
                     if live is not None and frame.get("channel") == "mmOwner":
                         guard.update_account(await live.account())
                         guard.set_open_orders(await live.open_orders())
@@ -353,6 +374,7 @@ async def _run_session(
                             if isinstance(strategy, AvellanedaMarketMakingStrategy):
                                 await strategy.on_trade(trade)
                             await paper.on_trade(trade)
+                            await observe_paper()
                         await deliver_fills()
                         guard.update_account(await raw.account())
                         continue
@@ -368,12 +390,15 @@ async def _run_session(
                     book_messages += 1
                     if paper is not None:
                         await paper.on_book(book)
+                        await observe_paper()
                         await deliver_fills()
                     strategy = strategies[book.symbol]
                     strategy.context = replace(
                         strategy.context, price_tick=_price_tick(book, precision[book.symbol])
                     )
                     await strategy.on_book(book)
+                if paper_result is not None:
+                    paper_result.pause("disconnect")
                 raise OneApiError("book stream disconnected")
 
             async def receive_reference() -> None:
@@ -403,6 +428,7 @@ async def _run_session(
                         await strategy.on_tick()
                         if paper is not None:
                             metrics.paper_fills(paper)
+                            await observe_paper()
                     if logged is None or now - logged >= 2:
                         journal.emit(
                             "progress",
@@ -457,6 +483,13 @@ async def _run_session(
         except BaseException as error:
             if isinstance(error, RiskViolation):
                 risk_stop = str(error)
+                if paper_result is not None and str(error) in {
+                    "stale_book",
+                    "stale_book_source",
+                    "stale_inputs",
+                    "stale_account",
+                }:
+                    paper_result.pause("stale")
             if guard.halted is not None:
                 risk_reasons.append(guard.halted)
             raise
@@ -481,10 +514,13 @@ async def _run_session(
                     try:
                         if cleanup_allowed:
                             await managed.close()
+                            if paper_result is not None and paper is not None:
+                                paper_result.cleanup_confirmed = not await paper.open_orders()
                     finally:
                         if live is not None:
                             await live.close()
                         if paper is not None:
+                            await observe_paper()
                             await observer.publish(guard, paper=paper)
                             reason = risk_stop or guard.halted
                             for market_config in selected.values():
