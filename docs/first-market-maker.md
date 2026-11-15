@@ -36,7 +36,7 @@ quote behavior, not a promise of lower financial risk. All presets retain your p
 notional and daily-loss caps. Amounts are base units, so price changes can make an earlier size
 exceed its cap or fall below the venue minimum.
 
-Doctor makes one public metadata read. Missing keys are fine in paper mode; a failed public check
+This ordinary doctor command checks public market data. Missing keys are fine in paper mode; a failed public check
 must be resolved before continuing. A passing check does not verify private permissions or fills.
 
 ## Minutes 4–7: run paper, then stop
