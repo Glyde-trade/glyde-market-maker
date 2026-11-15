@@ -92,9 +92,25 @@ def test_publish_requires_smoke_and_only_github_token_with_both_architectures():
     import yaml
 
     root = Path(__file__).parents[1]
-    release = yaml.safe_load((root / ".github/workflows/release.yml").read_text())
-    publish = release["jobs"]["publish-container"]
-    assert set(publish["needs"]) == {"release", "container-smoke"}
+
+    def workflow(name):
+        return yaml.load((root / ".github/workflows" / name).read_text(), Loader=yaml.BaseLoader)
+
+    release = workflow("release.yml")
+    assert release["on"]["push"]["tags"] == ["v*"]
+    caller = release["jobs"]["publish-container"]
+    assert caller["needs"] == "release"  # Matching tag/version and checked wheel remain required.
+    assert caller["uses"] == "./.github/workflows/publish-container.yml"
+    assert caller["permissions"] == {"contents": "read", "packages": "write"}
+    container = workflow("publish-container.yml")
+    assert set(container["on"]) == {"push", "workflow_call"}
+    assert container["on"]["push"] == {"branches": ["master"]}
+    assert container["permissions"] == {"contents": "read"}
+    assert container["jobs"]["container-smoke"]["uses"] == (
+        "./.github/workflows/container-smoke.yml"
+    )
+    publish = container["jobs"]["publish"]
+    assert publish["needs"] == "container-smoke"
     assert publish["permissions"] == {"contents": "read", "packages": "write"}
     login = next(row for row in publish["steps"] if "docker/login-action@" in row.get("uses", ""))
     assert login["with"]["password"] == "${{ secrets.GITHUB_TOKEN }}"
@@ -104,3 +120,40 @@ def test_publish_requires_smoke_and_only_github_token_with_both_architectures():
     assert build["with"]["platforms"] == "linux/amd64,linux/arm64"
     assert "${{ github.ref_name }}" in build["with"]["tags"]
     assert "sha-${{ github.sha }}" in build["with"]["tags"]
+
+    assert "secrets.GITHUB_TOKEN" not in build["with"].get("build-args", "")
+    assert not {"secrets", "secret-envs", "secret-files"} & build["with"].keys()
+    assert set(publish) <= {"needs", "runs-on", "timeout-minutes", "permissions", "steps"}
+    assert [row["run"] for row in publish["steps"] if "run" in row] == [
+        'python scripts/write-build-info.py "$GITHUB_SHA"'
+    ]
+    for row in publish["steps"]:
+        if row.get("uses", "").startswith("actions/checkout@"):
+            assert row["with"]["persist-credentials"] == "false"
+        assert not row.get("env")
+
+
+def test_every_pr_runs_offline_tests_types_and_ruff_on_hosted_runners():
+    import yaml
+
+    root = Path(__file__).parents[1]
+    ci = yaml.load((root / ".github/workflows/ci.yml").read_text(), Loader=yaml.BaseLoader)
+    assert "pull_request" in ci["on"] and ci["permissions"] == {"contents": "read"}
+    test = ci["jobs"]["test"]
+    assert test["strategy"]["fail-fast"] == "false"
+    assert test["strategy"]["matrix"]["python"] == ["3.11", "3.12", "3.13"]
+    checks = {row["run"] for row in test["steps"] if "run" in row}
+    assert {"ruff check .", "ruff format --check .", "mypy --strict src/glyde_mm"} <= checks
+    assert 'pytest -q -m "not offline_soak"' in checks
+    assert any(
+        "tests/test_offline_soak.py" in row.get("run", "")
+        for row in ci["jobs"]["offline-soak"]["steps"]
+    )
+    for path in (root / ".github/workflows").glob("*.yml"):
+        workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
+        for job in workflow["jobs"].values():
+            if "uses" in job:
+                assert job["uses"].startswith("./.github/workflows/")
+                assert (root / job["uses"]).is_file()
+            else:
+                assert job["runs-on"] == "ubuntu-latest"

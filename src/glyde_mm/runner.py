@@ -357,7 +357,10 @@ async def _run_session(
                 for symbol in selected:
                     try:
                         book = guard.check_fresh(symbol)
-                        guard.check_fresh(paused.get(symbol, symbol))
+                        dependency = paused.get(symbol, symbol)
+                        # Confirmed retirement of a flat peer removes its valuation dependency.
+                        if dependency != symbol and guard.has_market_exposure(dependency):
+                            guard.check_fresh(dependency)
                     except StaleMarket as error:
                         await pause_market(symbol, error.symbol)
                         continue

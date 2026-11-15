@@ -118,6 +118,9 @@ def test_daily_loss_and_attempt_budget_shared_across_markets_and_restart(tmp_pat
     g.consume_order_rate(1)
     g.reserve(OrderRequest("ETH", "buy", D(".1"), D(9), "eth"))
     g.consume_order_rate(1)
+    import asyncio
+
+    asyncio.run(g.flush_state())
     restored = guard(state_path=path, rate=2)
     with pytest.raises(RiskViolation, match="order_rate_limit"):
         restored.consume_order_rate(1)
@@ -571,3 +574,17 @@ async def test_owner_refresh_waits_until_inflight_cancellation_is_resolved():
     await cancelling
     await refreshing
     assert reads == ["account"] and g.halted is None and g._execution is None
+
+
+@pytest.mark.parametrize("exposure", ["position", "pending", "open", "flat", "no_account"])
+def test_recovery_dependency_requires_actual_exposure(exposure):
+    g = guard()
+    if exposure == "position":
+        g.update_account(replace(g.account_state, positions={"ETH": D("0.1")}))
+    elif exposure == "pending":
+        g.pending["intent"] = OrderRequest("ETH", "buy", D("0.1"), D(9), "intent")
+    elif exposure == "open":
+        g.set_open_orders([OpenOrder("1", "ETH", "sell", D("0.1"), D(11))])
+    elif exposure == "no_account":
+        g.account_state = None
+    assert g.has_market_exposure("ETH") == (exposure != "flat")

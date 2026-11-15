@@ -320,6 +320,7 @@ class RiskHistory(RuleBasedStateMachine):
 
     @rule()
     def restart_with_original_risk_file(self):
+        self.run(self.guard.close_state())
         self.make_client()
         for price in [100, 101, 100]:
             self.observe(price)

@@ -6,8 +6,8 @@ A paper-first market maker for Glyde's One API. Python 3.11+, one YAML file and 
 Strategy designs are adapted from [Hummingbot](https://github.com/hummingbot/hummingbot)
 (Apache-2.0); see [NOTICE](NOTICE).
 
-See [stock Hummingbot connector compatibility](docs/hummingbot.md) for the local
-wire-probe results and the authentication adapters still required.
+See the [Hummingbot connector guide](docs/hummingbot.md) for the adapted
+`glyde_perpetual` connector and its offline qualification scope.
 
 For SDK URLs, separate trading/read credentials, Python 0.24 examples and
 snapshot/reconnect rules, see the [One API developer quickstart](docs/one-api-quickstart.md).
@@ -15,6 +15,9 @@ Source support does not establish that a
 deployment has enabled the corresponding API; start with public reads and paper.
 
 ## Current status
+
+The features below describe **current master**; tagged wheels can lag behind it. Use the
+Git install in the quickstart for the new flags, and check `glyde-mm paper --help`.
 
 `glyde-mm paper <config>` runs the selected strategy through the risk layer into the paper
 exchange: pure market making places one simulated bid and one ask by default. Public books
@@ -37,6 +40,7 @@ glyde-mm preflight live-small.yaml
 glyde-mm run live-small.yaml
 ```
 
+<<<<<<< HEAD
 Preflight uses only public `meta` and `l2Book`, lists credential variable **names/presence**
 without reading values, and requires each selected `meta.universe` row's version-1
 `glydeOrderRules`. It checks the advertised `quantityStep` (which need not be a power of ten),
@@ -56,6 +60,21 @@ future prices. Live risk checks and typed confirmation still apply. The live wiz
 proposed amount up to the native lot and bid-side minimum, then preflights that frozen config
 against **unchanged** risk caps before private diagnostics and the preview. If the minimum
 cannot fit those caps, it refuses instead of raising a cap.
+=======
+Preflight uses only public `meta` and `l2Book`, reports credential variable names/presence
+without reading values, and checks quote sizing against your risk caps. A PASS is bound to
+the exact config and expires after five minutes. Config changes require another preflight.
+Current master requires the older advertised `minOrderSize`; absent limits produce FIX,
+never an inferred minimum or a permission bypass.
+
+**Pending native order rules:** [MM PR81](https://github.com/Glyde-trade/glyde-market-maker/pull/81)
+is held for [One API PR1206](https://github.com/Glyde-trade/glyde/pull/1206). That pair adds
+per-market `glydeOrderRules`: native `quantityStep`, USD `minimumNotionalUsd`, `priceTick`
+and decimal/significant-figure/integer constraints. The consumer checks every nominal lot
+and both rounded bid/ask notionals, keeps risk caps unchanged and invalidates old receipts.
+It is **not landed or a deployed capability**. Missing/invalid rules will refuse; paper or
+doctor success never establishes private permissions, margin or future order acceptance.
+>>>>>>> master
 
 See [Troubleshooting](docs/troubleshooting.md) for common refusals, unknown outcomes and reports.
 
@@ -79,20 +98,21 @@ before replacing an existing installation.
 
 ## Start in five minutes
 
-**1. Install.** Install the `v0.6.1` GitHub Release wheel with
-[pipx](https://pipx.pypa.io/stable/installation/) (Python 3.11+):
-
-```sh
-pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.6.1/glyde_market_maker-0.6.1-py3-none-any.whl'
-glyde-mm --version
-```
-
-Until that release exists, or to install from source, use the Git fallback in a virtual environment:
+**1. Install current source.** Use Python 3.11+ in a virtual environment:
 
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install 'git+https://github.com/Glyde-trade/glyde-market-maker.git'
+glyde-mm --version
+```
+
+For a pinned release, the `v0.6.1` wheel remains available through
+[pipx](https://pipx.pypa.io/stable/installation/), but does not include every current-master
+feature below:
+
+```sh
+pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.6.1/glyde_market_maker-0.6.1-py3-none-any.whl'
 ```
 
 If environment creation reports that `ensurepip` is unavailable on Debian/Ubuntu, install the
@@ -114,10 +134,14 @@ trade tape with approximate queue position and partial fills. No trading key or
 funded account is needed; paper fills are not a prediction of live execution.
 
 ```sh
-glyde-mm paper glyde-mm.yaml
+glyde-mm paper glyde-mm.yaml --duration 60s --report paper-result.json
 ```
 
-Stop with Ctrl-C. Review simulated fills and inventory before considering live mode. Paper and live
+The timer stops quoting and begins cleanup; Ctrl-C can stop it earlier. `--duration` accepts
+seconds, `s`, `m` or `h` (maximum 24 hours). `--report` creates a new private JSON result with
+simulated PnL, drawdown, fills, inventory, stop reason and cleanup status; use a fresh filename
+for each session. It differs from the diagnostic `glyde-mm report <logdir>` command.
+Review `PAPER SUMMARY` and `cleanup_confirmed` before considering live mode. Paper and live
 orders go through the same risk boundary; `paper` forces simulation even if the YAML says `live`.
 
 ## Check your setup
@@ -424,9 +448,14 @@ docker run --rm -it --init \
 The container runs as a non-root user. For live mode, mount the reviewed live YAML and pass existing
 environment variables by **name** with `--env GLYDE_API_PRIVATE_KEY --env GLYDE_READ_API_KEY`;
 use `run /work/live-small.yaml`. Do not copy credentials into the image.
-The release workflow tags amd64/arm64 images with the version and `sha-<full SHA>`.
-CI checks the real CLI with a loopback fake One API, non-root
-UID and public-only requests; this does not qualify live exchange credentials.
+The GHCR workflow builds amd64/arm64 images on default-branch `master` pushes and is
+called by the matching-version tag release. Tags are `master` or `v<version>`, plus
+`sha-<full SHA>`. Publication requires the real 20-second paper CLI/container smoke with a
+loopback fake One API, non-root UID and public-only requests. PR checks run on GitHub-hosted
+Ubuntu runners: offline tests (Python 3.11–3.13), strict mypy, Ruff check/format, packaging and
+container smoke. Publishing uses only the job-scoped `GITHUB_TOKEN` for registry login;
+credentials are never build arguments. Package visibility remains owner-managed. These checks
+do not qualify live exchange credentials.
 
 ## Development
 
@@ -579,12 +608,13 @@ Current source supports a `markets` list in place of `symbol`:
 ```yaml
 mode: paper
 strategy: pure_market_making
-strategy_config: {bid_spread: '0.01', ask_spread: '0.01'}
+strategy_config: {order_refresh_time: 30}
 markets:
   - symbol: BTC
     max_position: '0.001'
-    strategy_config: {order_amount: '0.0001'}
+    strategy_config: {order_amount: '0.0001', bid_spread: '0.01', ask_spread: '0.01'}
   - symbol: ETH
+    strategy: inventory_skewed
     max_position: '0.02'
     strategy_config: {order_amount: '0.002'}
 risk:
@@ -613,8 +643,9 @@ uses the larger of the current ask and relevant limit prices. External positions
 also count: a missing or stale book for any exposed asset refuses new orders. This is a
 local pre-trade bound, not a guarantee against price changes or losses.
 
-All books must arrive before quoting. One Glyde WS session carries every selected book
-and the shared owner/order/fill state; HTTP is used only for startup snapshots and metadata.
+All books must arrive before quoting. In **live mode**, one Glyde WS session carries every
+selected book and shared owner/order/fill state; HTTP is used only for startup snapshots and
+metadata. Paper subscribes to public books/trades and keeps its simulated account locally.
 A stale book pauses that market and confirms cancellation of its quotes. Other fresh
 markets keep quoting once the stale market is flat and its outstanding orders are retired.
 A fresh book restarts the paused strategy instance, including its volatility warm-up.
@@ -743,16 +774,12 @@ there is no HTTP fallback. Initial subscription snapshots must cover all private
 roots before quoting. Earlier private fill rows are not replayed as new fills.
 
 Disconnect stops the session and attempts cancellation of recorded original IDs,
-even if read authority has expired. Exact terminal/cancel receipts for every tracked ID
-can complete cleanup after read-stream failure, without requiring a new snapshot from that
-failed stream. The old stream stays invalid: account reads and new orders still refuse.
-A fresh manual session must pass startup checks and install complete snapshots before quoting.
-The same durable daily-loss and order-rate state is retained. Failed or unconfirmed cleanup stays an error;
-the bot does not claim that unknown orders disappeared. There is no automatic
-reconnect, and lost actions are never re-signed or replayed. A manual restart repeats startup exposure
-checks and requires a fresh WS snapshot; it cannot resume from a delta or gap.
-The durable risk/unknown-outcome fence remains in force. Private evidence caches
-are bounded; exhausting them stops the session rather than dropping evidence.
+even if read authority has expired. Confirmed terminal/cancel receipts retire tracked IDs once,
+without waiting for a dead read stream; the old session still refuses reads and new orders.
+There is no automatic reconnect. Restart repeats exposure checks and requires fresh complete
+WS snapshots while retaining durable loss, rate and unknown-outcome state. Lost or refused
+cancel receipts stay an error, even if the venue might already be empty; no order is re-signed
+to escape uncertainty. Private evidence caches are bounded; exhaustion stops the session.
 
 ### Offline quote-resilience checks
 

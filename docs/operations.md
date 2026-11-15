@@ -50,6 +50,26 @@ local history; it is not a safe reset. Preserve the entire directory privately.
 Do not publish state, account IDs, keys, env files or webhook URLs. The runner uses
 private files/directories; root and Docker administrators can still inspect them.
 
+## Risk-state durability and slow disks
+
+State snapshots are immutable and written by one background worker, with at most
+one active write and one coalesced successor. File `fsync`, atomic replacement and
+directory `fsync` run off the asyncio loop, so disk latency cannot stall incoming
+books or manufacture stale-feed quote churn. The JSON format is unchanged.
+
+An external order or cancellation still awaits its write-ahead intent barrier;
+nonblocking does not mean dispatching before durability. Orders recheck the latest
+account, orders, books and stop request after that wait. The placement budget stays
+reserved through disk/network waits and is retained for 60 seconds after a reply.
+
+Confirmed-reply clears are write-behind. A crash before their barrier completes
+can retain a conservative original-intent quarantine even for a completed action;
+reconcile the original IDs rather than clearing it blindly. A write error refuses
+further placements. Orderly shutdown drains the writer; direct `RiskGuard` users
+must await `flush_state()` before depending on a checkpoint and `close_state()`
+on exit. Slow or failed storage can delay a durability barrier or shutdown, but
+never authorizes an unjournaled order or resets the loss/rate limits.
+
 ## Stop, kill switch and cancel-all
 
 Ctrl-C/SIGTERM requests orderly runner cleanup. From another local terminal:
