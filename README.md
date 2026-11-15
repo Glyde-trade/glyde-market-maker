@@ -68,12 +68,26 @@ orders go through the same risk boundary; `paper` forces simulation even if the 
 glyde-mm doctor glyde-mm.yaml
 ```
 
-Doctor validates the YAML and strategy settings, reports whether the configured key environment
-variables are present, and makes one public metadata request to `base_url` (by default
-`https://api.glyde.trade/v1/info`). It never prints key values, sends private credentials, opens a
-WebSocket or submits an order. Missing keys are optional in paper mode and fail the check in live
-mode. Invalid config, an unavailable API or an unavailable market also returns a nonzero exit code.
-A passing public check does not verify key validity, account permissions or live execution.
+Doctor validates YAML and strategy settings and checks public metadata plus a fresh
+book. It reports the quantity step and the runner's price tick at the current
+midpoint. The public metadata does not expose minimum order size/notional, so
+those limits are reported as unavailable rather than inferred from precision.
+Missing keys are optional in paper mode and fail the check in live mode.
+
+Ordinary doctor runs never send credentials. To check your configured live
+account's read permissions explicitly:
+
+```sh
+glyde-mm doctor live.yaml --private
+```
+
+This performs only authenticated `clearinghouseState` and `openOrders` reads;
+it prints neither balances nor addresses nor key values. Paper configurations
+refuse `--private` before connecting. Doctor never opens a WebSocket, constructs
+a signing wallet or submits an order. Even a successful private check does not
+prove trading-key authorization or that a live order would be accepted.
+Configuration, connectivity, stale/missing book and requested read-permission
+failures return a nonzero exit code.
 
 ## Go live with small, explicit limits
 

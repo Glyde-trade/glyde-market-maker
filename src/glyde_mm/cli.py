@@ -49,6 +49,10 @@ def main(argv: list[str] | None = None) -> int:
         run = commands.add_parser(name)
         run.add_argument("config_path", nargs="?")
         run.add_argument("--config", dest="config_option")
+        if name == "doctor":
+            run.add_argument(
+                "--private", action="store_true", help="check live read permissions only"
+            )
     report = commands.add_parser("report", help="summarize private run logs for a support ticket")
     report.add_argument("logdir", type=Path)
     for name in ("record", "replay"):
@@ -97,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "doctor":
             from .doctor import check
 
-            return asyncio.run(check(config_path))
+            return asyncio.run(check(config_path, private=args.private))
         selected = load_config(config_path)
         if args.command == "paper":
             from dataclasses import replace
