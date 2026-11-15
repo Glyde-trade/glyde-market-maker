@@ -10,3 +10,5 @@ build/
 logs/
 .glyde-mm/
 glyde-mm.yaml
+
+.glyde-mm/

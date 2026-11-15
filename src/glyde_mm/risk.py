@@ -282,7 +282,9 @@ class RiskManagedClient:
         async with self._lock:
             try:
                 results = await self.client.cancel_orders(orders)
-                if len(results) != len(orders) or any(r.status != "cancelled" for r in results):
+                if len(results) != len(orders) or any(
+                    r.status not in ("cancelled", "already_closed") for r in results
+                ):
                     raise RiskViolation("cancel_outcome_unknown")
                 for request, result in zip(orders, results, strict=True):
                     if getattr(result, "order_id", None) not in (None, request.order_id) or getattr(
