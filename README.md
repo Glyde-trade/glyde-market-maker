@@ -13,7 +13,15 @@ The bot stops on refused or ambiguous actions rather than falling back to anothe
 
 ## Start in five minutes
 
-**1. Install in a virtual environment.** Until a package release is published, install from this repo:
+**1. Install.** Once the `v0.1.0` GitHub Release is published, install its wheel with
+[pipx](https://pipx.pypa.io/stable/installation/) (Python 3.11+):
+
+```sh
+pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.1.0/glyde_market_maker-0.1.0-py3-none-any.whl'
+glyde-mm --version
+```
+
+Until that release exists, or to install from source, use the Git fallback in a virtual environment:
 
 ```sh
 python3 -m venv .venv
@@ -150,3 +158,18 @@ ruff check .
 ```
 
 Tests use fake One API clients/servers and require no network or credentials.
+
+## Package releases
+
+The maintainer updates `project.version` in `pyproject.toml`, then creates the matching `v<version>`
+tag. The tag workflow builds the source archive and wheel, tests an isolated wheel installation,
+and attaches both to a GitHub Release using only the repository's `GITHUB_TOKEN`. It does not
+publish to PyPI. A mismatched tag fails before publishing; PR packaging checks do not create tags or releases.
+
+To run the same packaging check locally:
+
+```sh
+python -m pip install 'pip>=23' 'build>=1.2,<2'
+python -m build
+python scripts/check-wheel-install.py dist/*.whl
+```
