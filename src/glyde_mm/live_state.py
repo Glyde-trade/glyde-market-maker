@@ -6,6 +6,10 @@ import asyncio
 import time
 from collections.abc import AsyncGenerator, Sequence
 from dataclasses import replace
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .metrics import Metrics
 
 from .client import OneApiError, account_from_wire, book_from_wire, orders_from_wire
 from .config import Config, decimal
@@ -29,8 +33,11 @@ def counter(value: object) -> int:
 
 
 class LiveStateClient:
-    def __init__(self, source: MarketClient, config: Config) -> None:
+    def __init__(
+        self, source: MarketClient, config: Config, *, metrics: Metrics | None = None
+    ) -> None:
         self.source, self.config = source, config
+        self.metrics = metrics
         self._account: Account | None = None
         self._account_time = 0
         self._orders: list[OpenOrder] = []
@@ -242,7 +249,13 @@ class LiveStateClient:
     def consume(self, frame: JsonObject) -> None:
         try:
             self._consume(frame)
-        except Exception:
+        except Exception as error:
+            if (
+                self.metrics
+                and self._failure is None
+                and str(error) == "live stream continuity gap"
+            ):
+                self.metrics.count("gaps")
             self.invalidate("live stream invalid, gapped or disconnected")
             raise
 
@@ -435,4 +448,6 @@ class LiveStateClient:
         self._account, self._account_time, self._orders = account, stamp, orders
         self._terminal, self._seen_fills = terminal, seen
         self.check()
+        if self.metrics:
+            self.metrics.account_cut(account.received_at, stamp / 1000)
         self._emit({"channel": "mmOwner", "fills": fills})

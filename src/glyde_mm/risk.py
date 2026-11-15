@@ -20,6 +20,7 @@ from .config import RiskConfig
 from .models import CancelRequest
 
 if TYPE_CHECKING:
+    from .metrics import Metrics
     from .models import (
         Account,
         Book,
@@ -438,8 +439,10 @@ class RiskManagedClient:
         stop_event: asyncio.Event | None = None,
         cleanup_symbol: str | None = None,
         cleanup_symbols: tuple[str, ...] | None = None,
+        metrics: Metrics | None = None,
     ) -> None:
         self.client, self.guard = client, guard
+        self.metrics = metrics
         self._lock = asyncio.Lock()
         self._order_ids: dict[str, str] = {}
         self._closed = False
@@ -500,6 +503,8 @@ class RiskManagedClient:
                     request.client_order_id or self._order_ids.get(request.order_id or ""),
                 ):
                     raise RiskViolation("cancel_identity_mismatch")
+                if self.metrics and result.status == "cancelled":
+                    self.metrics.count("quotes_cancelled")
             except Exception as error:
                 failure = failure or error
         try:
@@ -558,6 +563,8 @@ class RiskManagedClient:
                 for key in reserved:
                     self.guard.pending.pop(key, None)
                 reason = str(error) if isinstance(error, RiskViolation) else "pretrade_refused"
+                if self.metrics:
+                    self.metrics.refused(reason, len(prepared))
                 try:
                     await self._cancel_and_halt(self.guard.halted or reason)
                 except Exception as cleanup_error:
@@ -584,6 +591,13 @@ class RiskManagedClient:
                         if result.status == "filled":
                             self.guard.account_state = None
                 self.guard.finish_execution(owned)
+                if self.metrics:
+                    self.metrics.count(
+                        "quotes_placed", sum(r.status in {"resting", "filled"} for r in results)
+                    )
+                    self.metrics.refused(
+                        "venue_rejected", sum(r.status == "rejected" for r in results)
+                    )
                 return results
             except BaseException as error:
                 try:
@@ -610,6 +624,10 @@ class RiskManagedClient:
                     if key is not None:
                         self.guard.pending.pop(key, None)
                 self.guard.finish_execution(owned)
+                if self.metrics:
+                    self.metrics.count(
+                        "quotes_cancelled", sum(r.status == "cancelled" for r in results)
+                    )
                 return results
             except BaseException:
                 await self._cancel_and_halt("cancel_outcome_unknown")
