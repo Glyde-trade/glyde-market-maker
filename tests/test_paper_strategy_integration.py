@@ -9,17 +9,17 @@ from decimal import Decimal
 
 import httpx
 import pytest
+
 from glyde_mm.client import OneApiClient, book_from_wire
 from glyde_mm.config import Config
 from glyde_mm.models import OrderRequest
 from glyde_mm.paper import PaperExchange
+from glyde_mm.risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
 from glyde_mm.strategies.pure_market_making import (
     PureMarketMakingConfig,
     PureMarketMakingStrategy,
     StrategyContext,
 )
-
-from glyde_mm.risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
 from glyde_mm.testing import FakeOneApiServer
 
 D = Decimal
