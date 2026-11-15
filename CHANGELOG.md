@@ -1,8 +1,10 @@
 # Changelog
 
-Only published version headings describe a release; Unreleased changes require current source.
+GitHub version tags/releases are the publication record; Unreleased changes require current source.
 
 ## [Unreleased]
+
+## [0.3.0]
 
 - Paper streaming consumes public trade prints with approximate queue-ahead and partial
   fills. Synthetic tape controls cover allocation and closing fills; fees, funding,
@@ -24,7 +26,10 @@ Only published version headings describe a release; Unreleased changes require c
 - Repository contribution forms, a five-config paper gallery and tokenless PyPI publishing
   preparation are included. PyPI publishing remains an explicit maintainer opt-in. (#33, #34)
 
-Multi-symbol support remains a v0.3.0 prerequisite and is not yet included above.
+- Multi-symbol sessions run independent instances of one strategy type through one account,
+  dispatcher, paper ledger, daily-loss/unknown-outcome state and order-attempt budget. Explicit
+  per-market position caps and a required gross `max_total_notional` avoid cross-asset netting.
+  Doctor, typed confirmation and stop cover the configured set; record/replay remain single-market. (#43)
 
 ## [0.2.0]
 
@@ -39,6 +44,7 @@ Multi-symbol support remains a v0.3.0 prerequisite and is not yet included above
 
 - Initial Python One API client, offline fake server, paper simulator and strategy foundation.
 
-[Unreleased]: https://github.com/Glyde-trade/glyde-market-maker/compare/v0.2.0...master
+[Unreleased]: https://github.com/Glyde-trade/glyde-market-maker/compare/v0.3.0...master
+[0.3.0]: https://github.com/Glyde-trade/glyde-market-maker/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Glyde-trade/glyde-market-maker/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Glyde-trade/glyde-market-maker/releases/tag/v0.1.0

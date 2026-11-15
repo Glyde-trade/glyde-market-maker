@@ -2,7 +2,7 @@
 
 Use the first session to learn the paper workflow, stop cleanly and inspect its report.
 Live mode is a separate, explicit step once your account, permissions and limits are ready.
-This guide uses current master / v0.2.0 features; the older v0.1.0 wheel has no report command.
+This guide uses current master / v0.3.0 features; the older v0.1.0 wheel has no report command.
 
 ## Minutes 0–2: install and create a workspace
 
