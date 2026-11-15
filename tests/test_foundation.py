@@ -16,8 +16,8 @@ from glyde_mm.models import Book, CancelRequest, Level, ModifyRequest, OrderRequ
 from glyde_mm.paper import PaperExchange
 
 D = Decimal
-# Explicitly public deterministic test wallet, never an account with funds.
-TEST_KEY = "01" * 32
+# Ephemeral test-only wallet: no key material is committed or funded.
+TEST_KEY = EthAccount.create().key.hex()
 OWNER = "0x" + "22" * 20
 CLOID = "0x" + "ab" * 16
 
