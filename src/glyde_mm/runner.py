@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .client import OneApiClient, OneApiError, book_from_wire, trades_from_wire
 from .config import Config
+from .dashboard import SnapshotPublisher
 from .models import Book
 from .paper import PaperExchange
 from .preflight import check_live_exposure
@@ -76,6 +77,8 @@ async def run(
     with RunLog(state_directory / "logs", mode=config.mode, strategy=config.strategy) as journal:
         report(f"GLYDE-MM {journal.identity['version']} commit={journal.identity['commit']}")
         outcome = "completed"
+        observer = SnapshotPublisher(journal.directory / "dashboard.json", config, journal.run_id)
+        report(f"Dashboard state: {observer.path}")
         try:
             async with RunnerControl(config, state_directory, stop):
                 await _run_session(
@@ -88,6 +91,7 @@ async def run(
                     stop_event=stop,
                     report=report,
                     journal=journal,
+                    observer=observer,
                     allow_existing_exposure=allow_existing_exposure,
                 )
             if stop.is_set():
@@ -104,6 +108,7 @@ async def run(
             )
             raise
         finally:
+            observer.finish(outcome)
             journal.emit("run_ended", outcome=outcome)
 
 
@@ -118,6 +123,7 @@ async def _run_session(
     stop_event: asyncio.Event | None = None,
     report: Callable[[str], object] = print,
     journal: RunLog,
+    observer: SnapshotPublisher,
     allow_existing_exposure: bool = False,
 ) -> None:
     policy = validate_strategy_config(config.strategy, config.strategy_config)
@@ -309,6 +315,7 @@ async def _run_session(
                             pending_orders=len(guard.pending),
                             paper_fills=len(raw.fills) if config.mode == "paper" else 0,
                         )
+                        await observer.publish(guard, paper=raw if config.mode == "paper" else None)
                         logged = now
                     if config.mode == "paper" and (reported is None or now - reported >= 2):
                         await report_paper_status(raw, config, report, risk_stop=guard.halted)
@@ -359,6 +366,7 @@ async def _run_session(
                         await managed.close()
                     finally:
                         if config.mode == "paper":
+                            await observer.publish(guard, paper=raw)
                             reason = risk_stop or guard.halted
                             await report_paper_status(
                                 raw,
