@@ -36,11 +36,11 @@ before replacing an existing installation.
 
 ## Start in five minutes
 
-**1. Install.** Once the `v0.2.0` GitHub Release is published, install its wheel with
+**1. Install.** Once the `v0.3.0` GitHub Release is published, install its wheel with
 [pipx](https://pipx.pypa.io/stable/installation/) (Python 3.11+):
 
 ```sh
-pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.2.0/glyde_market_maker-0.2.0-py3-none-any.whl'
+pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.3.0/glyde_market_maker-0.3.0-py3-none-any.whl'
 glyde-mm --version
 ```
 
@@ -367,7 +367,9 @@ The maintainer updates `project.version` in `pyproject.toml`, then creates the m
 tag. The tag workflow builds the source archive and wheel, tests an isolated wheel installation,
 and attaches both to a GitHub Release using only the repository's `GITHUB_TOKEN`. Release packages
 embed the checked-out commit, which the isolated install check verifies against the build SHA.
-Both CI and tag builds run `twine check --strict` on the distributions. LICENSE and NOTICE
+Release notes come from the matching version in [CHANGELOG.md](CHANGELOG.md); missing or
+duplicate version entries refuse release. Both CI and tag builds run `twine check --strict`
+on the distributions. LICENSE and NOTICE
 are included in the source and wheel archives. A mismatched tag fails before publishing;
 PR packaging checks do not create tags, releases or PyPI uploads.
 

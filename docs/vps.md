@@ -2,7 +2,7 @@
 
 Choose **one** recipe: Docker Compose or a Linux systemd service. Both examples start
 in paper mode, persist `.glyde-mm`, bound console logs, and disable automatic restarts.
-They use current source, including `stop`; the published v0.2.0 wheel predates that command.
+They require v0.3.0 or current source, including `stop`; the v0.2.0 wheel predates that command.
 Review and pin the source commit you deploy. These examples do not provision an account,
 grant credentials or qualify a host for live trading.
 

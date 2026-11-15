@@ -1,7 +1,7 @@
 # Upgrading from 0.2
 
-v0.3.0 is being prepared. Until its release is published, the features below require
-a reviewed source checkout. Keep using the published v0.2.0 wheel if you need that exact
+Use the v0.3.0 wheel once its GitHub Release is published, or a reviewed source revision.
+Until that publication, the features below require current source. Keep using the published v0.2.0 wheel if you need that exact
 version; do not assume an unchanged package version on master implies unchanged behavior.
 
 ## Stop before replacing the installation
@@ -38,9 +38,16 @@ Use the same config location and state volume after upgrading. Do not use Compos
   history; neither missing input is invented. See [paper fills](paper-fills.md) and
   [replay limits](replay.md).
 
-Existing single-symbol YAML remains the starting point. Multi-symbol configuration is still
-pending; do not add a speculative `markets` array until the merged implementation and example
-are included in the v0.3.0 release notes.
+Existing single-symbol YAML remains valid. To opt into multiple markets, replace `symbol`
+with `markets: [{symbol, max_position, strategy_config}, ...]` and explicitly set
+`risk.max_total_notional`. See [the paper example](../examples/multi-symbol-paper.yaml).
+All markets use the same strategy type, with independent instances and per-market overrides;
+there is one shared account, daily baseline, rate budget and unknown-outcome halt. Gross
+worst-case notional does not net opposite assets. Missing/stale marks for any exposed asset
+refuse new orders; a failure stops the whole session. Retain the exact market set for `stop`,
+and type the complete comma-separated list to confirm live startup. Doctor checks all markets,
+while record/replay still require a single-symbol config. Per-market paper summaries show
+the same account-wide PnL, so do not add those PnL figures together.
 
 ## Recheck before live
 
