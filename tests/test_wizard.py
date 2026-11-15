@@ -16,7 +16,7 @@ def test_defaults_are_paper_private_and_have_no_secret(tmp_path):
     assert data["strategy_config"]["hanging_orders_enabled"] is False
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert "private_key:" not in path.read_text()
-    assert data["risk"]["max_order_notional"] == "10"
+    assert data["risk"]["max_order_notional"] == "25"
 
 
 def test_interactive_validation_repompts_without_printing_input(tmp_path):

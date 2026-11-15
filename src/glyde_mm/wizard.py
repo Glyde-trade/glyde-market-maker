@@ -61,7 +61,7 @@ def run_wizard(
         "0.002",
         lambda value: _decimal(value, maximum=Decimal("1")),
     )
-    maximum_order = ask("Maximum notional per order in USDC", "10", _decimal)
+    maximum_order = ask("Maximum notional per order in USDC", "25", _decimal)
     maximum_position = ask("Maximum absolute position in base units", "0.001", _decimal)
     maximum_loss = ask("Stop after daily account equity loss in USDC", "5", _decimal)
     private_key_env = ask(
