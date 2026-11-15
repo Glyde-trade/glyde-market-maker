@@ -25,6 +25,9 @@ small-live workflow. See the [strategy chooser](docs/strategies.md#strategy-choo
 Browse the five commented [paper configs in the gallery](configs/gallery/README.md), or
 [contribute a bug report, strategy idea or PR](CONTRIBUTING.md).
 
+For a persistent host, use the [VPS recipes](docs/vps.md): Docker Compose with a state
+volume and rotated logs, or a systemd paper service with a private env file.
+
 > **Quickstart GIF — placeholder:** a captioned paper-mode `init → doctor → paper → Ctrl-C → report`
 > recording will go here. No demo recording is attached yet; use the
 > [text tutorial](docs/first-market-maker.md).
