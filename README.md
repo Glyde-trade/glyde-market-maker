@@ -183,3 +183,16 @@ The runner prints that identity at startup. Each run keeps at most four 1 MiB
 segments; older run directories remain until you remove them. Diagnostics contain
 mode, strategy, event counts and a fixed exit category, never keys, addresses,
 balances, order bodies or raw errors. Directory permissions are 0700 and files 0600.
+
+To prepare a support ticket without reading credentials or contacting the exchange:
+
+```bash
+glyde-mm report .glyde-mm/logs
+# Or choose one run directory to share only that session.
+```
+
+The command prints validated JSON with build identity, mode, strategy, last retained
+counters and exit category. A missing exit is labeled `incomplete`; it does not
+mean cleanup succeeded. Rotated-away history is explicit. Malformed logs are refused
+without printing their contents. Reports accept up to 50 runs / 64 MiB; select one
+run if the directory exceeds that limit. Review the summary before sharing it.
