@@ -41,7 +41,8 @@ class OutcomeUnknown(OneApiError):
 def wire_decimal(value: Decimal) -> str:
     if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
         raise ValueError("price and quantity must be finite positive Decimals")
-    return format(value.normalize(), "f")
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
 
 
 def book_from_wire(data: dict[str, Any]) -> Book:
@@ -70,10 +71,14 @@ class OneApiClient:
         *,
         http_client: httpx.AsyncClient | None = None,
         connect_ws: Callable = websockets.connect,
+        heartbeat_interval: float = 20,
     ) -> None:
         self.config = config
         self._http = http_client or httpx.AsyncClient(timeout=10, follow_redirects=False)
         self._owns_http = http_client is None
+        if heartbeat_interval <= 0:
+            raise ValueError("heartbeat interval must be positive")
+        self._heartbeat_interval = heartbeat_interval
         self._connect_ws = connect_ws
         self._wallet = None
         self._assets: dict[str, tuple[int, int]] = {}
@@ -247,31 +252,57 @@ class OneApiClient:
             raise OneApiError("exchange refused the action")
         try:
             statuses = result["response"]["data"]["statuses"]
-            if len(statuses) != count:
+            if not isinstance(statuses, list) or len(statuses) != count:
                 raise ValueError
             return statuses
         except (KeyError, TypeError, ValueError):
             raise OutcomeUnknown("exchange receipt does not match the submitted batch") from None
 
+    @staticmethod
+    def _receipt_order_id(value: object) -> str:
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise OutcomeUnknown("invalid order receipt identity")
+        text = str(value)
+        if not re.fullmatch(r"[1-9][0-9]{0,19}", text) or int(text) > 2**64 - 1:
+            raise OutcomeUnknown("invalid order receipt identity")
+        return text
+
     def _order_results(self, result: dict, orders: Sequence[OrderRequest]) -> list[OrderResult]:
         responses = []
         for request, status in zip(orders, self._statuses(result, len(orders)), strict=True):
-            if isinstance(status, dict) and "resting" in status:
-                responses.append(
-                    OrderResult("resting", str(status["resting"]["oid"]), request.client_order_id)
-                )
-            elif isinstance(status, dict) and "filled" in status:
-                responses.append(
-                    OrderResult("filled", str(status["filled"]["oid"]), request.client_order_id)
-                )
-            elif isinstance(status, dict) and "error" in status:
+            if not isinstance(status, dict) or len(status) != 1:
+                raise OutcomeUnknown("unrecognized or contradictory order receipt")
+            if "error" in status and isinstance(status["error"], str):
                 responses.append(
                     OrderResult(
                         "rejected", client_order_id=request.client_order_id, error="order refused"
                     )
                 )
-            else:
+                continue
+            kind = next(iter(status))
+            if kind not in {"resting", "filled"} or not isinstance(status[kind], dict):
                 raise OutcomeUnknown("unrecognized order receipt")
+            row = status[kind]
+            required = {"oid"} if kind == "resting" else {"oid", "totalSz", "avgPx"}
+            if not required <= row.keys() or row.keys() - required - {"cloid"}:
+                raise OutcomeUnknown("invalid order receipt shape")
+            oid = self._receipt_order_id(row["oid"])
+            if "cloid" in row and row["cloid"] != request.client_order_id:
+                raise OutcomeUnknown("order receipt client identity mismatch")
+            if kind == "filled":
+                try:
+                    if not isinstance(row["totalSz"], str) or not isinstance(row["avgPx"], str):
+                        raise ValueError
+                    size, price = decimal(row["totalSz"]), decimal(row["avgPx"])
+                    if not 0 < size <= request.quantity or price <= 0:
+                        raise ValueError
+                    if (request.side == "buy" and price > request.price) or (
+                        request.side == "sell" and price < request.price
+                    ):
+                        raise ValueError
+                except ValueError:
+                    raise OutcomeUnknown("invalid filled-order receipt economics") from None
+            responses.append(OrderResult(kind, oid, request.client_order_id))
         return responses
 
     async def modify_orders(self, orders: Sequence[ModifyRequest]) -> list[OrderResult]:
@@ -353,13 +384,24 @@ class OneApiClient:
         ) as socket:
             for subscription in subscriptions:
                 await socket.send(json.dumps({"method": "subscribe", "subscription": subscription}))
-            async for raw in socket:
-                if not isinstance(raw, str):
-                    raise OneApiError("unexpected binary WebSocket frame")
+
+            async def heartbeat() -> None:
+                while True:
+                    await asyncio.sleep(self._heartbeat_interval)
+                    await socket.send('{"method":"ping"}')
+
+            async with asyncio.TaskGroup() as tasks:
+                task = tasks.create_task(heartbeat())
                 try:
-                    frame = json.loads(raw)
-                except ValueError:
-                    raise OneApiError("invalid WebSocket JSON") from None
-                if not isinstance(frame, dict) or frame.get("channel") == "error":
-                    raise OneApiError("WebSocket subscription refused")
-                yield frame
+                    async for raw in socket:
+                        if not isinstance(raw, str):
+                            raise OneApiError("unexpected binary WebSocket frame")
+                        try:
+                            frame = json.loads(raw)
+                        except ValueError:
+                            raise OneApiError("invalid WebSocket JSON") from None
+                        if not isinstance(frame, dict) or frame.get("channel") == "error":
+                            raise OneApiError("WebSocket subscription refused")
+                        yield frame
+                finally:
+                    task.cancel()
