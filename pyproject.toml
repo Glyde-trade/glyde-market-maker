@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "glyde-market-maker"
-version = "0.5.0"
+version = "0.6.0"
 description = "Paper-first, exact-decimal market making on Glyde One API"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -18,7 +18,7 @@ Source = "https://github.com/Glyde-trade/glyde-market-maker"
 Issues = "https://github.com/Glyde-trade/glyde-market-maker/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "ruff>=0.11,<1", "mypy>=1.15,<2", "types-PyYAML>=6,<7"]
+dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "ruff>=0.11,<1", "mypy>=1.15,<2", "types-PyYAML>=6,<7", "aiohttp>=3.11,<4"]
 
 [project.scripts]
 glyde-mm = "glyde_mm.cli:main"

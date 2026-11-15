@@ -15,6 +15,7 @@ from .risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
 from .runlog import RunLog
 from .runner import _price_tick
 from .strategies import StrategyContext, create_strategy
+from .strategies.avellaneda_market_making import AvellanedaConfig
 from .strategies.factory import validate_strategy_config
 
 
@@ -54,6 +55,8 @@ async def _replay(
     if config.markets:
         raise ValueError("record/replay requires a single-symbol configuration")
     policy = validate_strategy_config(config.strategy, config.strategy_config)
+    if isinstance(policy, AvellanedaConfig) and policy.volatility_source == "book_and_trades":
+        raise ValueError("book_and_trades volatility is unavailable in book-only replay")
     if getattr(policy, "ping_pong_enabled", False):
         raise ValueError(
             "ping-pong requires identified tape fills, unavailable in book-only replay"

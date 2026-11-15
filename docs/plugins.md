@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from glyde_mm.strategies.plugin import StrategyPlugin, Quote
 
+
 @dataclass(frozen=True)
 class Settings:
     spread: Decimal = Decimal("0.002")
@@ -30,6 +31,7 @@ class Settings:
     def __post_init__(self):
         if not 0 < self.spread < 1 or self.amount <= 0:
             raise ValueError("invalid spread or amount")
+
 
 class MyQuotes(StrategyPlugin[Settings]):
     config_type = Settings

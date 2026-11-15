@@ -5,6 +5,8 @@ on:
 permissions:
   contents: read
 jobs:
+  container-smoke:
+    uses: ./.github/workflows/container-smoke.yml
   release:
     runs-on: ubuntu-latest
     permissions:
@@ -55,6 +57,44 @@ jobs:
             dist/*.tar.gz
           if-no-files-found: error
           retention-days: 7
+  publish-container:
+    needs: [release, container-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python scripts/write-build-info.py "$GITHUB_SHA"
+      - name: Set up multi-architecture emulation
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish version and full commit tags
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/glyde-trade/glyde-market-maker:${{ github.ref_name }}
+            ghcr.io/glyde-trade/glyde-market-maker:sha-${{ github.sha }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            REVISION=${{ github.sha }}
   publish-pypi:
     if: vars.PYPI_PUBLISH_ENABLED == 'true'
     needs: release

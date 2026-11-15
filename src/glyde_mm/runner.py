@@ -25,6 +25,7 @@ from .risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
 from .runlog import RunLog
 from .shutdown import RunnerControl
 from .strategies import StrategyContext, create_strategy
+from .strategies.avellaneda_market_making import AvellanedaConfig, AvellanedaMarketMakingStrategy
 from .strategies.factory import Strategy, validate_strategy_config
 from .strategies.pure_market_making import PureMarketMakingConfig
 from .transport import ClientFactory, JsonObject
@@ -147,6 +148,14 @@ async def _run_session(
     references = {}
     for symbol, market_config in selected.items():
         policy = validate_strategy_config(market_config.strategy, market_config.strategy_config)
+        if (
+            config.mode == "live"
+            and isinstance(policy, AvellanedaConfig)
+            and policy.volatility_source == "book_and_trades"
+        ):
+            raise ValueError("book_and_trades volatility requires streaming paper mode")
+        if config.mode == "live" and getattr(policy, "filled_order_delay", 0) > 0:
+            raise ValueError("filled_order_delay requires identified paper-stream fills")
         if config.mode == "live" and getattr(policy, "ping_pong_enabled", False):
             raise ValueError(
                 "ping-pong requires paper tape fills until live fill delivery is qualified"
@@ -326,6 +335,9 @@ async def _run_session(
                         if any(trade.symbol not in selected for trade in trades):
                             raise OneApiError("trade market mismatch")
                         for trade in trades:
+                            strategy = strategies[trade.symbol]
+                            if isinstance(strategy, AvellanedaMarketMakingStrategy):
+                                await strategy.on_trade(trade)
                             await paper.on_trade(trade)
                         await deliver_fills()
                         guard.update_account(await raw.account())

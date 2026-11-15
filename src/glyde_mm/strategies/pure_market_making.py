@@ -65,12 +65,15 @@ class PureMarketMakingConfig:
     order_amount: Decimal = Decimal("0.001")
     order_refresh_time: float = 30.0
     refresh_tolerance_pct: Decimal | None = None
+    order_refresh_tolerance_pct: Decimal | None = None
+    filled_order_delay: float = 0.0
     max_order_age: float = 300.0
     order_levels: int = 1
     order_level_spread: Decimal = Decimal("0.001")
     order_level_amount: Decimal = ZERO
     inventory_skew_enabled: bool = False
     inventory_target_position: Decimal = ZERO
+    inventory_target_base_ratio: Decimal | None = None
     inventory_range_multiplier: Decimal = ONE
     minimum_spread: Decimal = ZERO
     price_ceiling: Decimal | None = None
@@ -84,6 +87,21 @@ class PureMarketMakingConfig:
 
     def __post_init__(self) -> None:
         validate_refresh_settings(self.refresh_tolerance_pct, self.max_order_age)
+        validate_refresh_settings(self.order_refresh_tolerance_pct, self.max_order_age)
+        if self.refresh_tolerance_pct is not None and self.order_refresh_tolerance_pct is not None:
+            raise ValueError("configure only one refresh tolerance name")
+        if (
+            isinstance(self.filled_order_delay, bool)
+            or not math.isfinite(self.filled_order_delay)
+            or not 0 <= self.filled_order_delay <= 86400
+        ):
+            raise ValueError("filled_order_delay must be finite seconds in 0..86400")
+        if self.inventory_target_base_ratio is not None:
+            require_decimal(self.inventory_target_base_ratio, "inventory_target_base_ratio")
+            if self.inventory_target_base_ratio > ONE or self.inventory_target_position != ZERO:
+                raise ValueError(
+                    "base ratio must be in 0..1 and cannot combine with position target"
+                )
         if self.reference_source not in {"glyde", "hyperliquid"}:
             raise ValueError("reference_source must be glyde or hyperliquid")
         require_decimal(self.reference_skew_bps, "reference_skew_bps", minimum=Decimal("-1000"))
@@ -149,6 +167,14 @@ class PureMarketMakingConfig:
         ):
             raise ValueError("price_floor must be below price_ceiling")
 
+    @property
+    def price_refresh_tolerance(self) -> Decimal | None:
+        return (
+            self.order_refresh_tolerance_pct
+            if self.order_refresh_tolerance_pct is not None
+            else self.refresh_tolerance_pct
+        )
+
 
 def validate_refresh_settings(tolerance: Decimal | None, max_age: float) -> None:
     if tolerance is not None:
@@ -172,7 +198,13 @@ def valid_book(book: Book, symbol: str) -> bool:
     )
 
 
-def inventory_ratios(position: Decimal, config: PureMarketMakingConfig) -> tuple[Decimal, Decimal]:
+def inventory_ratios(
+    position: Decimal,
+    config: PureMarketMakingConfig,
+    *,
+    equity: Decimal | None = None,
+    mid: Decimal | None = None,
+) -> tuple[Decimal, Decimal]:
     """Hummingbot's linear size skew, adapted to a signed perpetual position target."""
     if not isinstance(position, Decimal) or not position.is_finite():
         raise ValueError("position must be a finite signed Decimal")
@@ -185,9 +217,15 @@ def inventory_ratios(position: Decimal, config: PureMarketMakingConfig) -> tuple
         ),
         ZERO,
     )
-    distance = (config.inventory_target_position - position) / (
-        total_size * config.inventory_range_multiplier
-    )
+    target = config.inventory_target_position
+    width = total_size * config.inventory_range_multiplier
+    if config.inventory_target_base_ratio is not None:
+        if equity is None or mid is None or not equity.is_finite() or equity <= ZERO or mid <= ZERO:
+            return ZERO, ZERO
+        # Perpetual inventory is signed position value / equity, not a spot balance ratio.
+        target = equity * config.inventory_target_base_ratio / mid
+        width = min(width, equity / (TWO * mid))
+    distance = (target - position) / width
     bid = max(ZERO, min(TWO, ONE + distance))
     return bid, TWO - bid
 
@@ -223,6 +261,7 @@ class PureMarketMakingStrategy:
         self._ping_pong_side: str | None = None
         self._ping_fills: set[tuple[str, str]] = set()
         self._needs_refresh = False
+        self._quote_after = 0.0
         self._lock = asyncio.Lock()
 
     def _quote_mid(self, book: Book) -> Decimal | None:
@@ -238,7 +277,7 @@ class PureMarketMakingStrategy:
         mid = self._quote_mid(book)
         assert mid is not None
         bid_ratio, ask_ratio = inventory_ratios(
-            account.positions.get(book.symbol, ZERO), self.config
+            account.positions.get(book.symbol, ZERO), self.config, equity=account.equity, mid=mid
         )
         orders = []
         for level in range(self.config.order_levels):
@@ -289,7 +328,7 @@ class PureMarketMakingStrategy:
 
     async def on_fill(self, fill: Fill) -> None:
         if fill.symbol == self.context.symbol:
-            if self.config.ping_pong_enabled:
+            if self.config.ping_pong_enabled or self.config.filled_order_delay > 0:
                 order = self._active.get(fill.order_id)
                 if order is None:
                     return
@@ -308,7 +347,11 @@ class PureMarketMakingStrategy:
                     or (fill.side == "sell" and fill.price < order.price)
                 ):
                     self.blocked = True
-                    raise RiskViolation("ping_pong_fill_evidence")
+                    raise RiskViolation(
+                        "ping_pong_fill_evidence"
+                        if self.config.ping_pong_enabled
+                        else "delayed_fill_evidence"
+                    )
                 identity = fill.order_id, fill.trade_id
                 if identity in self._ping_fills:
                     return
@@ -316,7 +359,10 @@ class PureMarketMakingStrategy:
                     self.blocked = True
                     raise RiskViolation("ping_pong_fill_budget")
                 self._ping_fills.add(identity)
-                self._ping_pong_side = "sell" if fill.side == "buy" else "buy"
+                if self.config.ping_pong_enabled:
+                    self._ping_pong_side = "sell" if fill.side == "buy" else "buy"
+                if self.config.filled_order_delay > 0:
+                    self._quote_after = self.context.clock() + self.config.filled_order_delay
             # Fill callbacks trigger a fresh account read; they never release tracked orders.
             self._fill_generation += 1
             self._needs_refresh = True
@@ -343,7 +389,7 @@ class PureMarketMakingStrategy:
         )
 
     def _within_tolerance(self, desired: tuple[OrderRequest, ...]) -> bool:
-        tolerance = self.config.refresh_tolerance_pct
+        tolerance = self.config.price_refresh_tolerance
         if tolerance is None or len(desired) != len(self._active):
             return False
 
@@ -422,10 +468,13 @@ class PureMarketMakingStrategy:
             ):
                 return
             try:
+                if self.context.clock() < self._quote_after:
+                    await self._cancel_active()
+                    return
                 if (
                     book is not None
                     and self._active
-                    and self.config.refresh_tolerance_pct is not None
+                    and self.config.price_refresh_tolerance is not None
                     and not self._needs_refresh
                     and not self._age_expired(now)
                     and not self._must_replace(book)
@@ -451,6 +500,8 @@ class PureMarketMakingStrategy:
                     return
                 account = await self.context.client.account()
                 if self.blocked:
+                    return
+                if self.context.clock() < self._quote_after:
                     return
                 # Cancellation/account awaits may have received a newer book or fills.
                 book = self.book
@@ -487,6 +538,10 @@ class PureMarketMakingStrategy:
                         if self.config.ping_pong_enabled:
                             raise RiskViolation("ping_pong_fill_evidence")
                         immediate_fill = True
+                        if self.config.filled_order_delay > 0:
+                            self._quote_after = (
+                                self.context.clock() + self.config.filled_order_delay
+                            )
                     elif result.status != "rejected":
                         raise RuntimeError("order outcome unknown")
                 self._active_since = now if self._active else None

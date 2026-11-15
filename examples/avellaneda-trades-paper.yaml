@@ -1,0 +1,24 @@
+# Streaming paper only: no signing key, private account or live orders.
+# Requires both books and trades in 31 consecutive one-second intervals,
+# plus a next-interval event to close the final sample. Quiet tapes may never warm up.
+mode: paper
+base_url: https://api.glyde.trade/v1
+symbol: BTC
+paper_balance: '1000'
+strategy: avellaneda_market_making
+strategy_config:
+  volatility_source: book_and_trades
+  volatility_samples: 30
+  sample_interval_ms: 1000
+  risk_factor: '1'
+  liquidity_kappa: '1'
+  inventory_target_position: '0'
+  order_amount: '0.0001'
+  minimum_spread: '0.001'
+  order_refresh_time: 30
+risk:
+  max_position: '0.001'
+  max_order_notional: '25'
+  max_daily_loss: '5'
+  stale_book_seconds: '5'
+  account_age_seconds: '10'

@@ -4,6 +4,23 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 ## [Unreleased]
 
+## [0.6.0]
+
+- Tag releases publish version/full-SHA GHCR images for amd64 and arm64, using
+  only the repository GITHUB_TOKEN. A real non-root container paper CLI runs
+  against a loopback fake One API for 20 seconds and must show quotes, fills and
+  confirmed cleanup before image publishing; no credentials are supplied.
+- Avellaneda gains opt-in streaming-paper book-plus-trade volatility, using
+  complete consecutive source-time intervals. Missing inputs retire quotes;
+  default book-only behavior and shared risk admission remain unchanged. (#62)
+- PMM adds signed-perpetual equity-ratio inventory targets, an explicit refresh
+  tolerance alias, and conservative identified-fill delays in streaming paper.
+  These options do not relax risk limits; live refuses nonzero fill delay. (#61)
+- Typed Python strategy plugins reuse host-owned risk, placement/cancellation
+  identity and lifecycle handling; plugin import explicitly executes local code. (#59)
+- CLI paper coverage verifies both quote sides fill through public prints and
+  position/notional refusals place no simulated or live orders. (#60)
+
 ## [0.5.0]
 
 - Optional chat webhooks send bounded, best-effort risk-stop, unknown-outcome,
@@ -80,7 +97,8 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 - Initial Python One API client, offline fake server, paper simulator and strategy foundation.
 
-[Unreleased]: https://github.com/Glyde-trade/glyde-market-maker/compare/v0.5.0...master
+[Unreleased]: https://github.com/Glyde-trade/glyde-market-maker/compare/v0.6.0...master
+[0.6.0]: https://github.com/Glyde-trade/glyde-market-maker/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Glyde-trade/glyde-market-maker/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Glyde-trade/glyde-market-maker/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Glyde-trade/glyde-market-maker/releases/tag/v0.3.0

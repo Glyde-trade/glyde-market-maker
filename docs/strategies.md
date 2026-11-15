@@ -150,6 +150,30 @@ Missing/zero volatility produces **no quotes** and retires tracked orders at the
 next tick. Warmup completion enables the next tick without waiting for an empty
 refresh period. No fixed-spread or guessed-volatility fallback is used.
 
+### Optional streaming-paper trade input
+
+Set `volatility_source: book_and_trades` to include actual public `trades` alongside
+`l2Book` through the existing One API stream. The default `book` keeps the original
+midpoint-only model. No separate exchange client or order coordinator is created.
+
+The combined estimator samples completed source-time intervals. For each interval
+it averages the latest accepted midpoint with that interval's trade VWAP, then
+computes RMS changes across `volatility_samples + 1` consecutive complete samples.
+The next interval's first event closes the previous interval, so warmup also needs
+that closing event. Both book and trade input are mandatory per interval. A missing
+channel, skipped interval or zero volatility withholds quotes; losing readiness
+retires existing quotes on the next tick, even before the refresh deadline.
+Trades that arrive after their interval has closed are ignored. Duplicate trade
+IDs within an interval count once; conflicting IDs or more than 4096 distinct
+prints in one interval refuse rather than silently truncating the sample.
+
+This is an explicit Glyde estimator adaptation. It does not fit Hummingbot's
+trade-arrival intensity or infer optimal `liquidity_kappa` from an incomplete tape.
+Combined mode currently runs only in streaming paper; live and book-only replay
+refuse it before credentials or orders. Inventory, rounding, post-only placement,
+confirmed cancellation and shared risk admission remain the existing lifecycle.
+See [the paper config](../examples/avellaneda-trades-paper.yaml).
+
 `liquidity_kappa` is an explicit positive inverse-price calibration; this first
 implementation does not claim to estimate trade-arrival intensity or optimal
 parameters from an incomplete tape. Defaults and the example are illustrative,
