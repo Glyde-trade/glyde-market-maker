@@ -331,7 +331,8 @@ def test_old_public_surface_reports_one_api_not_served(
     calls = install_public_info(monkeypatch, status=status, at=at)
     assert main(["doctor", str(configuration)]) == 1
     output = capsys.readouterr().out
-    assert "this endpoint does not serve One API yet" in output
+    assert f"requested One API read unavailable at this endpoint: HTTP {status}" in output
+    assert "One API may not be deployed yet" in output
     assert "secret" not in output
     assert len(calls) == (1 if at == "meta" else 2)
 
@@ -342,6 +343,6 @@ def test_other_public_failures_keep_generic_diagnostic(configuration, monkeypatc
     assert main(["doctor", str(configuration)]) == 1
     output = capsys.readouterr().out
     assert "Public info: FAIL (unavailable" in output
-    assert "does not serve One API yet" not in output
+    assert "One API may not be deployed yet" not in output
     assert "secret" not in output
     assert len(calls) == 1

@@ -98,7 +98,10 @@ async def check(
         StopIteration,
     ) as error:
         if isinstance(error, OneApiHTTPError) and error.status_code in {401, 404}:
-            report("Public info: FAIL (this endpoint does not serve One API yet)")
+            report(
+                f"Public info: FAIL (requested One API read unavailable at this endpoint: "
+                f"HTTP {error.status_code}; One API may not be deployed yet)"
+            )
         else:
             report(
                 "Public info: FAIL (unavailable, stale book or configured market metadata invalid)"
