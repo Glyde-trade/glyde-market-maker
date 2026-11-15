@@ -1,0 +1,19 @@
+# Set this explicit price band around the current BTC book before starting.
+mode: paper
+base_url: https://api.glyde.trade/v1
+symbol: BTC
+paper_balance: '1000'
+strategy: grid
+strategy_config:
+  lower_price: '90000'
+  upper_price: '110000'
+  order_amount: '0.0001'
+  levels: 5
+  order_refresh_time: 30
+  minimum_spread: '0.001'
+risk:
+  max_position: '0.001'
+  max_order_notional: '25'
+  max_daily_loss: '5'
+  stale_book_seconds: '5'
+  account_age_seconds: '10'

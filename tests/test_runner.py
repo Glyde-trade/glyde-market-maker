@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import replace
 from decimal import Decimal as D
 
 import pytest
@@ -186,3 +187,33 @@ def test_cli_paper_forces_simulation_and_run_uses_explicit_config(tmp_path, monk
     assert cli.main(["paper", str(path)]) == 0
     assert cli.main(["run", str(path)]) == 0
     assert seen == [("paper", tmp_path / ".glyde-mm"), ("live", tmp_path / ".glyde-mm")]
+
+
+async def test_grid_config_is_selectable_by_the_same_safe_runner(tmp_path):
+    stop, placed = asyncio.Event(), asyncio.Event()
+    selected = replace(
+        config(),
+        strategy="grid",
+        strategy_config={
+            "lower_price": "90",
+            "upper_price": "110",
+            "order_amount": "0.01",
+            "levels": 5,
+        },
+    )
+    source = Source(selected, stop=stop, placed=placed)
+    paper = Paper(selected.paper_balance, stop=stop, placed=placed)
+    await asyncio.wait_for(
+        run(
+            selected,
+            state_directory=tmp_path,
+            client_factory=lambda _: source,
+            paper_factory=lambda _: paper,
+            stop_event=stop,
+            report=lambda _: None,
+        ),
+        2,
+    )
+    assert len(paper.submissions) == 4
+    assert all(D("90") <= order.price <= D("110") for order in paper.submissions)
+    assert await paper.open_orders() == []
