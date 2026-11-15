@@ -112,6 +112,27 @@ moves quotes outside the band. Grid uses the same risk limits and cancel-before-
 glyde-mm paper examples/grid-paper.yaml
 ```
 
+For a beginner preset, run `glyde-mm init --output grid.yaml`, choose **grid**,
+then Conservative, Balanced or Active. Enter the current reference price: the
+wizard fixes a band at 90–110% of that value and budgets sizes within your caps.
+The band stays fixed until you edit the YAML; it does not follow a moving market.
+
+| Preset | Fixed levels | Refresh | Trade-off |
+| --- | --- | --- | --- |
+| Conservative | 3 | 60 seconds | Fewer, wider-spaced quotes and lower turnover |
+| Balanced | 5 | 30 seconds | More coverage inside the same band |
+| Active | 7 | 10 seconds | Denser quotes and more cancellation/refresh activity |
+
+`levels` counts the whole band, not levels per side. Midpoint, too-close and
+coarse-tick duplicate levels are skipped. All levels share the position cap;
+adding levels does not grant extra exposure. Try `glyde-mm doctor grid.yaml`,
+then `glyde-mm paper grid.yaml`. No preset enables live trading.
+
+The linear-level design references
+[Hummingbot's grid executor](https://github.com/hummingbot/hummingbot/blob/9af100d6822da7d2d0291a906c730ef172284ee2/hummingbot/strategy_v2/executors/grid_executor/grid_executor.py)
+(Apache-2.0; see NOTICE). This is a simple two-sided quoting grid using Glyde's
+shared lifecycle, without a separate paired take-profit executor or profit guarantee.
+
 ## Inventory-skewed quoting
 
 Try [examples/inventory-skewed-paper.yaml](examples/inventory-skewed-paper.yaml)

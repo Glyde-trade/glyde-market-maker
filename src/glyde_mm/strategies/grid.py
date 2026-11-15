@@ -1,4 +1,5 @@
 # Copyright 2026 Glyde. Licensed under the Apache License, Version 2.0.
+# Grid-level design reference: Hummingbot grid_executor (Apache-2.0), revision 9af100d6822d.
 """A fixed-range grid using the shared cancel-before-replace PMM lifecycle."""
 
 from __future__ import annotations
