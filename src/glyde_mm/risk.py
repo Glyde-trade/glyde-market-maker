@@ -350,13 +350,19 @@ class RiskManagedClient:
     """The sole strategy write boundary; unknown outcomes never trigger a resend."""
 
     def __init__(
-        self, client: TradingClient, guard: RiskGuard, *, stop_event: asyncio.Event | None = None
+        self,
+        client: TradingClient,
+        guard: RiskGuard,
+        *,
+        stop_event: asyncio.Event | None = None,
+        cleanup_symbol: str | None = None,
     ) -> None:
         self.client, self.guard = client, guard
         self._lock = asyncio.Lock()
         self._order_ids: dict[str, str] = {}
         self._closed = False
         self._stop_event = stop_event
+        self._cleanup_symbol = cleanup_symbol
 
     def _ensure_running(self) -> None:
         if self._closed or (self._stop_event is not None and self._stop_event.is_set()):
@@ -416,7 +422,7 @@ class RiskManagedClient:
     async def _cancel_and_halt(self, reason: str) -> None:
         self.guard.halted = self.guard.halted or reason
         # Reservations clear only after known cancels and discovery both succeed.
-        await self._cancel_before_discovery()
+        await self._cancel_before_discovery(self._cleanup_symbol)
 
     async def place_orders(self, orders: Sequence[OrderRequest]) -> list[OrderResult]:
         async with self._lock:
