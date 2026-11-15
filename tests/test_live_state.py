@@ -435,3 +435,23 @@ async def test_bounded_delivery_queue_refuses_instead_of_dropping_fill_updates()
                 state.consume(frame)
     with pytest.raises(OneApiError):
         await state.account()
+
+
+async def test_cancel_ack_waits_for_push_before_reusing_account_and_orders(monkeypatch):
+    fake, http, _, state, stream = await started(monkeypatch)
+    try:
+        result = await state.place_orders(
+            [OrderRequest("BTC", "buy", D("0.1"), D(99), "0x" + "a" * 32)]
+        )
+        assert await state.open_orders()
+        fake.emit_on_action = False
+        await state.cancel_orders([CancelRequest("BTC", result[0].order_id)])
+        cached = asyncio.create_task(state.account())
+        await asyncio.sleep(0)
+        assert not cached.done()
+        fake.emit_owner()
+        assert (await asyncio.wait_for(cached, 1)).positions == {}
+        assert await state.open_orders() == []
+        assert [row.get("type") for row in fake.requests if "type" in row] == ["meta"]
+    finally:
+        await finish(http, state, stream)

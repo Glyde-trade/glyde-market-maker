@@ -104,7 +104,11 @@ class LiveStateClient:
         async with asyncio.timeout(2):
             while True:
                 self.check()
-                if self._account is not None and "mm-owner" not in self._pending:
+                if (
+                    self._account is not None
+                    and "mm-owner" not in self._pending
+                    and not any(order.order_id in self._cancelled for order in self._orders)
+                ):
                     if all(
                         oid in self._terminal
                         or oid in self._cancelled
