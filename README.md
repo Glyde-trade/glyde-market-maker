@@ -40,7 +40,6 @@ glyde-mm preflight live-small.yaml
 glyde-mm run live-small.yaml
 ```
 
-<<<<<<< HEAD
 Preflight uses only public `meta` and `l2Book`, lists credential variable **names/presence**
 without reading values, and requires each selected `meta.universe` row's version-1
 `glydeOrderRules`. It checks the advertised `quantityStep` (which need not be a power of ten),
@@ -60,21 +59,6 @@ future prices. Live risk checks and typed confirmation still apply. The live wiz
 proposed amount up to the native lot and bid-side minimum, then preflights that frozen config
 against **unchanged** risk caps before private diagnostics and the preview. If the minimum
 cannot fit those caps, it refuses instead of raising a cap.
-=======
-Preflight uses only public `meta` and `l2Book`, reports credential variable names/presence
-without reading values, and checks quote sizing against your risk caps. A PASS is bound to
-the exact config and expires after five minutes. Config changes require another preflight.
-Current master requires the older advertised `minOrderSize`; absent limits produce FIX,
-never an inferred minimum or a permission bypass.
-
-**Pending native order rules:** [MM PR81](https://github.com/Glyde-trade/glyde-market-maker/pull/81)
-is held for [One API PR1206](https://github.com/Glyde-trade/glyde/pull/1206). That pair adds
-per-market `glydeOrderRules`: native `quantityStep`, USD `minimumNotionalUsd`, `priceTick`
-and decimal/significant-figure/integer constraints. The consumer checks every nominal lot
-and both rounded bid/ask notionals, keeps risk caps unchanged and invalidates old receipts.
-It is **not landed or a deployed capability**. Missing/invalid rules will refuse; paper or
-doctor success never establishes private permissions, margin or future order acceptance.
->>>>>>> master
 
 See [Troubleshooting](docs/troubleshooting.md) for common refusals, unknown outcomes and reports.
 
