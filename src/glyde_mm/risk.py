@@ -203,6 +203,21 @@ class RiskGuard:
         self, reason: str, originals: Sequence[OrderRequest | CancelRequest]
     ) -> bool:
         if self._execution is not None:
+            if reason == "cancel_outcome_unknown":
+                retained = list(self._execution["originals"])
+                for original in originals:
+                    row = {
+                        "symbol": original.symbol,
+                        "order_id": getattr(original, "order_id", None),
+                        "client_order_id": original.client_order_id,
+                    }
+                    if row not in retained:
+                        retained.append(row)
+                if retained != self._execution["originals"]:
+                    expanded = {**self._execution, "originals": retained}
+                    self._validate_execution(expanded)
+                    self._execution = expanded
+                    self._persist()
             return False
         record = {
             "reason": reason,
@@ -219,6 +234,15 @@ class RiskGuard:
         self._execution = record
         self._persist()
         return True
+
+    def execution_cancellations(self, symbol: str | None) -> tuple[CancelRequest, ...]:
+        if self._execution is None:
+            return ()
+        return tuple(
+            CancelRequest(row["symbol"], row["order_id"], row["client_order_id"])
+            for row in self._execution["originals"]
+            if symbol is None or row["symbol"] == symbol
+        )
 
     def finish_execution(self, owned: bool) -> None:
         if not owned:
@@ -428,13 +452,33 @@ class RiskManagedClient:
 
     async def _cancel_before_discovery(self, symbol: str | None = None) -> None:
         ids = {key: oid for oid, key in self._order_ids.items()}
-        requests = [
-            CancelRequest(
-                order.symbol, order_id=ids.get(key), client_order_id=None if key in ids else key
+        requests = []
+        seen = set()
+        for order in [*self.guard.pending.values(), *self.guard.open_orders]:
+            if symbol is not None and order.symbol != symbol:
+                continue
+            oid = getattr(order, "order_id", None) or ids.get(order.client_order_id or "")
+            request = CancelRequest(
+                order.symbol,
+                order_id=oid,
+                client_order_id=None if oid is not None else order.client_order_id,
             )
-            for key, order in self.guard.pending.items()
-            if symbol is None or order.symbol == symbol
-        ]
+            identity = request.symbol, request.order_id, request.client_order_id
+            if identity not in seen:
+                requests.append(request)
+                seen.add(identity)
+        # Restarts retain durable originals even when in-memory reservations are gone.
+        for original in self.guard.execution_cancellations(symbol):
+            oid = original.order_id or ids.get(original.client_order_id or "")
+            request = CancelRequest(
+                original.symbol,
+                order_id=oid,
+                client_order_id=None if oid is not None else original.client_order_id,
+            )
+            identity = request.symbol, request.order_id, request.client_order_id
+            if identity not in seen:
+                requests.append(request)
+                seen.add(identity)
         failure: Exception | None = None
         owned = False
         try:
@@ -514,7 +558,10 @@ class RiskManagedClient:
                 for key in reserved:
                     self.guard.pending.pop(key, None)
                 reason = str(error) if isinstance(error, RiskViolation) else "pretrade_refused"
-                await self._cancel_and_halt(self.guard.halted or reason)
+                try:
+                    await self._cancel_and_halt(self.guard.halted or reason)
+                except Exception as cleanup_error:
+                    raise error from cleanup_error
                 raise
             try:
                 owned = self.guard.begin_execution("order_outcome_unknown", prepared)
@@ -538,8 +585,11 @@ class RiskManagedClient:
                             self.guard.account_state = None
                 self.guard.finish_execution(owned)
                 return results
-            except BaseException:
-                await self._cancel_and_halt("order_outcome_unknown")
+            except BaseException as error:
+                try:
+                    await self._cancel_and_halt("order_outcome_unknown")
+                except Exception as cleanup_error:
+                    raise error from cleanup_error
                 raise
 
     async def cancel_orders(self, orders: Sequence[CancelRequest]) -> list[CancelResult]:
