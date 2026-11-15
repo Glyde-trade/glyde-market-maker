@@ -1,6 +1,7 @@
 # Guided first live session
 
-This current-source command is for a deliberate, **single-symbol** first session, not
+Available in v0.4.0 and current source, this command is for a deliberate, **single-symbol**
+first session, not
 unattended trading. It requires a reviewed config with `mode: live`, exact owner/vault
 addresses and credentials already present through your private environment file.
 Never put key values in YAML. Doctor/paper success is not proof of trading authorization.
