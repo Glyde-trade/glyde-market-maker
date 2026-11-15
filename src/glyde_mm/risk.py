@@ -485,10 +485,11 @@ class RiskManagedClient:
                     self.guard.reserve(order)
                     reserved.append(order.client_order_id)
                 self.guard.consume_order_rate(len(prepared))
-            except BaseException:
+            except BaseException as error:
                 for key in reserved:
                     self.guard.pending.pop(key, None)
-                await self._cancel_and_halt(self.guard.halted or "pretrade_refused")
+                reason = str(error) if isinstance(error, RiskViolation) else "pretrade_refused"
+                await self._cancel_and_halt(self.guard.halted or reason)
                 raise
             try:
                 owned = self.guard.begin_execution("order_outcome_unknown", prepared)

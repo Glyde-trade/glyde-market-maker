@@ -349,3 +349,94 @@ async def test_record_replay_refuse_multi_before_any_io(tmp_path):
         await record_books(selected, tmp_path / "missing", 1)
     with pytest.raises(ValueError, match="single-symbol"):
         await replay(selected, tmp_path / "missing", 1)
+
+
+async def test_doctor_checks_both_markets_and_private_reads_once(tmp_path, monkeypatch):
+    import time
+
+    from glyde_mm import doctor
+
+    path = tmp_path / "doctor.yaml"
+    path.write_text("""mode: live
+owner: '0x1111111111111111111111111111111111111111'
+vault_address: '0x2222222222222222222222222222222222222222'
+markets:
+ - {symbol: BTC, max_position: '0.1'}
+ - {symbol: ETH, max_position: '1'}
+risk: {max_total_notional: '50'}
+""")
+    monkeypatch.setenv("GLYDE_API_PRIVATE_KEY", "must-not-load-or-print")
+    monkeypatch.setenv("GLYDE_READ_API_KEY", "must-not-print")
+    calls, lines = [], []
+
+    class Source:
+        def __init__(self, config):
+            assert config.symbols == ("BTC", "ETH")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def meta(self):
+            calls.append("meta")
+            return {"universe": [{"name": s, "szDecimals": 2} for s in ("BTC", "ETH")]}
+
+        async def book(self, symbol):
+            calls.append(symbol)
+            return replace(book(symbol), timestamp_ms=time.time_ns() // 1_000_000)
+
+        async def account(self):
+            calls.append("account")
+            return Account(D(1000))
+
+        async def open_orders(self):
+            calls.append("orders")
+            return []
+
+    monkeypatch.setattr(doctor, "OneApiClient", Source)
+    assert await doctor.check(path, private=True, report=lines.append) == 0
+    assert calls == ["meta", "BTC", "ETH", "account", "orders"]
+    assert "must-not" not in "\n".join(lines)
+
+
+async def test_shared_cleanup_attempts_second_market_after_first_failure():
+    from glyde_mm.risk import RiskManagedClient
+
+    calls = []
+
+    class Source:
+        async def cancel_all(self, symbol):
+            calls.append(symbol)
+            if symbol == "BTC":
+                raise OSError("unavailable")
+
+    managed = RiskManagedClient(Source(), guard(), cleanup_symbols=("BTC", "ETH"))
+    with pytest.raises(RiskViolation, match="cancel_outcome_unknown"):
+        await managed.close()
+    assert calls == ["BTC", "ETH"]
+
+
+def test_live_cli_requires_full_ordered_market_confirmation(tmp_path, monkeypatch, capsys):
+    from glyde_mm import cli
+
+    path = tmp_path / "live.yaml"
+    path.write_text("""mode: live
+markets:
+ - {symbol: BTC, max_position: '0.1'}
+ - {symbol: ETH, max_position: '1'}
+risk: {max_total_notional: '50'}
+""")
+    calls = []
+
+    async def run(selected, directory, **kwargs):
+        calls.append(selected.symbols)
+
+    monkeypatch.setattr(cli, "run_with_signals", run)
+    monkeypatch.setattr("builtins.input", lambda _: "BTC")
+    assert cli.main(["run", str(path)]) == 1 and not calls
+    monkeypatch.setattr("builtins.input", lambda _: "BTC,ETH")
+    assert cli.main(["run", str(path)]) == 0
+    assert calls == [("BTC", "ETH")]
+    assert "max_total_notional=50" in capsys.readouterr().out
