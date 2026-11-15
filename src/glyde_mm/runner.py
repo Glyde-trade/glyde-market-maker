@@ -20,6 +20,7 @@ from .preflight import check_live_exposure
 from .reference import HYPERLIQUID_PUBLIC_URL, ExternalReference
 from .risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
 from .runlog import RunLog
+from .shutdown import RunnerControl
 from .strategies import StrategyContext, create_strategy
 from .strategies.factory import validate_strategy_config
 
@@ -71,23 +72,25 @@ async def run(
     report: Callable[[str], object] = print,
     allow_existing_exposure: bool = False,
 ) -> None:
+    stop = stop_event or asyncio.Event()
     with RunLog(state_directory / "logs", mode=config.mode, strategy=config.strategy) as journal:
         report(f"GLYDE-MM {journal.identity['version']} commit={journal.identity['commit']}")
         outcome = "completed"
         try:
-            await _run_session(
-                config,
-                state_directory=state_directory,
-                client_factory=client_factory,
-                reference_factory=reference_factory,
-                paper_factory=paper_factory,
-                strategy_factory=strategy_factory,
-                stop_event=stop_event,
-                report=report,
-                journal=journal,
-                allow_existing_exposure=allow_existing_exposure,
-            )
-            if stop_event is not None and stop_event.is_set():
+            async with RunnerControl(config, state_directory, stop):
+                await _run_session(
+                    config,
+                    state_directory=state_directory,
+                    client_factory=client_factory,
+                    reference_factory=reference_factory,
+                    paper_factory=paper_factory,
+                    strategy_factory=strategy_factory,
+                    stop_event=stop,
+                    report=report,
+                    journal=journal,
+                    allow_existing_exposure=allow_existing_exposure,
+                )
+            if stop.is_set():
                 outcome = "stopped"
         except BaseException as error:
             outcome = (
@@ -158,7 +161,7 @@ async def _run_session(
             if stop.is_set():
                 return
         raw = paper_factory(config.paper_balance) if config.mode == "paper" else source
-        managed = RiskManagedClient(raw, guard, stop_event=stop)
+        managed = RiskManagedClient(raw, guard, stop_event=stop, cleanup_symbol=config.symbol)
         strategy = None
         stream = None
         reference_stream = None
