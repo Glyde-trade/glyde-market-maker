@@ -11,7 +11,7 @@ from pathlib import Path
 
 import httpx
 
-from .client import OneApiClient, OneApiError
+from .client import OneApiClient, OneApiError, OneApiHTTPError
 from .config import load_config
 from .runner import _price_tick
 from .strategies.factory import validate_strategy_config
@@ -96,8 +96,16 @@ async def check(
         KeyError,
         AttributeError,
         StopIteration,
-    ):
-        report("Public info: FAIL (unavailable, stale book or configured market metadata invalid)")
+    ) as error:
+        if isinstance(error, OneApiHTTPError) and error.status_code in {401, 404}:
+            report(
+                f"Public info: FAIL (requested One API read unavailable at this endpoint: "
+                f"HTTP {error.status_code}; One API may not be deployed yet)"
+            )
+        else:
+            report(
+                "Public info: FAIL (unavailable, stale book or configured market metadata invalid)"
+            )
         return 1
     if not private:
         report(

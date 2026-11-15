@@ -19,7 +19,7 @@ def configuration(tmp_path):
     return path
 
 
-def install_public_info(monkeypatch, *, payload=None, failure=False):
+def install_public_info(monkeypatch, *, payload=None, failure=False, status=200, at="meta"):
     from glyde_mm import doctor
 
     calls = []
@@ -30,6 +30,8 @@ def install_public_info(monkeypatch, *, payload=None, failure=False):
         assert body["type"] in {"meta", "l2Book"}
         assert "X-Glyde-API-Key" not in request.headers
         calls.append(request)
+        if body["type"] == at and status != 200:
+            return httpx.Response(status, json={"error": "never-print-response-secret"})
         if failure:
             raise httpx.ConnectError("never-print-transport-secret", request=request)
         if body["type"] == "l2Book":
@@ -318,4 +320,29 @@ def test_stale_public_book_fails_without_private_reads(configuration, monkeypatc
     monkeypatch.setattr(doctor.OneApiClient, "book", old_book)
     assert main(["doctor", str(configuration)]) == 1
     assert "Public info: FAIL" in capsys.readouterr().out
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("status", [401, 404])
+@pytest.mark.parametrize("at", ["meta", "l2Book"])
+def test_old_public_surface_reports_one_api_not_served(
+    configuration, monkeypatch, capsys, status, at
+):
+    calls = install_public_info(monkeypatch, status=status, at=at)
+    assert main(["doctor", str(configuration)]) == 1
+    output = capsys.readouterr().out
+    assert f"requested One API read unavailable at this endpoint: HTTP {status}" in output
+    assert "One API may not be deployed yet" in output
+    assert "secret" not in output
+    assert len(calls) == (1 if at == "meta" else 2)
+
+
+@pytest.mark.parametrize("status", [403, 429, 503])
+def test_other_public_failures_keep_generic_diagnostic(configuration, monkeypatch, capsys, status):
+    calls = install_public_info(monkeypatch, status=status)
+    assert main(["doctor", str(configuration)]) == 1
+    output = capsys.readouterr().out
+    assert "Public info: FAIL (unavailable" in output
+    assert "One API may not be deployed yet" not in output
+    assert "secret" not in output
     assert len(calls) == 1

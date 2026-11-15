@@ -35,6 +35,14 @@ class OneApiError(RuntimeError):
     """An exchange failure with a sanitized, non-secret diagnostic."""
 
 
+class OneApiHTTPError(OneApiError):
+    """A refused HTTP status without response bodies, URLs or credential details."""
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(f"One API refused request (HTTP {status_code})")
+
+
 class OutcomeUnknown(OneApiError):
     """A submitted action may have committed; reconcile, do not blindly re-sign/retry."""
 
@@ -115,7 +123,7 @@ class OneApiClient:
         if response.status_code >= 500 and action:
             raise OutcomeUnknown("exchange outcome unknown; reconcile the original request")
         if response.status_code != 200:
-            raise OneApiError(f"One API refused request (HTTP {response.status_code})")
+            raise OneApiHTTPError(response.status_code)
         try:
             result = response.json()
         except ValueError:
