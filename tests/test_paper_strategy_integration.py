@@ -182,6 +182,7 @@ async def test_actual_paper_mark_loss_trips_daily_kill_and_cannot_resume(monkeyp
         assert await paper.open_orders() == []
         assert guard.pending == {}
         assert [action for action, _ in actions] == ["place", "place", "cancel", "cancel_all"]
+        await guard.flush_state()
         state = json.loads((tmp_path / "risk.json").read_text())
         assert state["equity_start"] == "10000" and state["loss_halted"] is True
         placements = sum(action == "place" for action, _ in actions)
@@ -192,6 +193,7 @@ async def test_actual_paper_mark_loss_trips_daily_kill_and_cannot_resume(monkeyp
             await managed.place_orders([primer])
         assert guard.halted == "daily_loss" and await paper.open_orders() == []
         assert sum(action == "place" for action, _ in actions) == placements
+        await guard.flush_state()
         restarted = RiskGuard(guard.limits, state_path=tmp_path / "risk.json")
         assert restarted.halted == "daily_loss"
         assert all(row["path"].endswith("/info") for row in fake.requests)

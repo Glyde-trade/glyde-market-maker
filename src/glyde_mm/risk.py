@@ -5,9 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-import os
 import secrets
-import tempfile
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -18,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from .config import RiskConfig
 from .models import CancelRequest
+from .risk_state import RiskStateStore
 
 if TYPE_CHECKING:
     from .metrics import Metrics
@@ -154,6 +153,8 @@ class RiskGuard:
             except (ValueError, KeyError, TypeError, OSError) as exc:
                 raise RiskViolation("risk_state_unavailable") from exc
 
+        self._state_store = RiskStateStore(state_path) if state_path is not None else None
+
     @staticmethod
     def _validate_execution(record: dict[str, Any]) -> None:
         if (
@@ -205,6 +206,21 @@ class RiskGuard:
         self._order_attempts.extend([now] * count)
         self._rate_monotonic.extend([clock] * count)
         self._persist()
+
+    def refresh_order_rate(self, count: int) -> None:
+        now, clock = self.wall_clock(), self.clock()
+        if (
+            not math.isfinite(now)
+            or not math.isfinite(clock)
+            or now < self._order_attempts[-1]
+            or clock < self._rate_monotonic[-1]
+        ):
+            self.halted = "order_rate_clock"
+            raise RiskViolation(self.halted)
+        # Disk/network waits cannot make a dispatched batch's budget expire early.
+        self._order_attempts[-count:] = [now] * count
+        self._rate_monotonic[-count:] = [clock] * count
+        self._last_rate_clock = clock
 
     def begin_execution(
         self, reason: str, originals: Sequence[OrderRequest | CancelRequest]
@@ -262,16 +278,36 @@ class RiskGuard:
             self._execution = original
             raise
 
-    def _persist(self) -> None:
-        if self.state_path is None:
-            return
-        path = self.state_path
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        temporary: str | None = None
+    def _check_state(self) -> None:
         try:
-            with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as handle:
-                temporary = handle.name
-                json.dump(
+            if self._state_store is not None:
+                self._state_store.check()
+        except OSError as error:
+            self.halted = "risk_state_unavailable"
+            raise RiskViolation(self.halted) from error
+
+    async def flush_state(self) -> None:
+        try:
+            if self._state_store is not None:
+                await self._state_store.flush()
+        except OSError as error:
+            self.halted = "risk_state_unavailable"
+            raise RiskViolation(self.halted) from error
+
+    async def close_state(self) -> None:
+        try:
+            if self._state_store is not None:
+                await self._state_store.close()
+        except OSError as error:
+            self.halted = "risk_state_unavailable"
+            raise RiskViolation(self.halted) from error
+
+    def _persist(self) -> None:
+        if self._state_store is None:
+            return
+        try:
+            self._state_store.submit(
+                json.dumps(
                     {
                         "day": self._day,
                         "equity_start": str(self._equity_start)
@@ -280,24 +316,12 @@ class RiskGuard:
                         "loss_halted": self.halted == "daily_loss",
                         "execution": self._execution,
                         "order_attempts": self._order_attempts,
-                    },
-                    handle,
+                    }
                 )
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
-            temporary = None
-            descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-        except OSError as exc:
+            )
+        except OSError as error:
             self.halted = "risk_state_unavailable"
-            raise RiskViolation(self.halted) from exc
-        finally:
-            if temporary is not None:
-                Path(temporary).unlink(missing_ok=True)
+            raise RiskViolation(self.halted) from error
 
     def update_book(self, book: Book) -> None:
         prior = self.books.get(book.symbol)
@@ -308,7 +332,8 @@ class RiskGuard:
             book = replace(book, received_at=min(book.received_at, prior.received_at))
         self.books[book.symbol] = book
 
-    def update_account(self, account: Account) -> None:
+    def _observe_account(self, account: Account) -> None:
+        self._check_state()
         if not _positive(account.equity) or any(
             not isinstance(v, Decimal) or not v.is_finite() for v in account.positions.values()
         ):
@@ -327,10 +352,32 @@ class RiskGuard:
             self.halted = "daily_loss"
             self._persist()
             raise RiskViolation(self.halted)
+
+    def update_account(self, account: Account) -> None:
+        self._observe_account(account)
         if self._execution is not None:
             self.halted = self._execution["reason"]
         if self.halted is not None:
             raise RiskViolation(self.halted)
+
+    def revalidate_execution(
+        self, orders: Sequence[OrderRequest], account: Account, open_orders: Sequence[OpenOrder]
+    ) -> None:
+        self._observe_account(account)
+        if self.halted is not None:
+            raise RiskViolation(self.halted)
+        self.set_open_orders(open_orders)
+        retained = {
+            row.client_order_id: self.pending.pop(row.client_order_id)
+            for row in orders
+            if row.client_order_id in self.pending
+        }
+        try:
+            for row in orders:
+                self.reserve(row)
+        except BaseException:
+            self.pending.update(retained)
+            raise
 
     def set_open_orders(self, orders: Sequence[OpenOrder | OrderRequest]) -> None:
         self.open_orders = list(orders)
@@ -343,6 +390,7 @@ class RiskGuard:
         )
 
     def check_fresh(self, symbol: str) -> Book:
+        self._check_state()
         if self.halted is not None:
             raise RiskViolation(self.halted)
         book, account = self.books.get(symbol), self.account_state
@@ -465,6 +513,7 @@ class RiskManagedClient:
         self._cleanup_symbols = cleanup_symbols or (cleanup_symbol,)
 
     def _ensure_running(self) -> None:
+        self.guard._check_state()
         if self._closed or (self._stop_event is not None and self._stop_event.is_set()):
             raise RiskViolation("client_closed")
 
@@ -501,6 +550,7 @@ class RiskManagedClient:
         owned = False
         try:
             owned = self.guard.begin_execution("cancel_outcome_unknown", requests)
+            await self.guard.flush_state()
         except Exception as error:
             failure = error
         for request in requests:
@@ -598,7 +648,20 @@ class RiskManagedClient:
                 raise
             try:
                 owned = self.guard.begin_execution("order_outcome_unknown", prepared)
+                await self.guard.flush_state()
+                self._ensure_running()
+                account = await self.client.account()
+                open_orders = await self.client.open_orders()
+                self._ensure_running()
+                previous_day = self.guard._day
+                self.guard.revalidate_execution(prepared, account, open_orders)
+                if self.guard._day != previous_day:
+                    await self.guard.flush_state()
+                    for order in prepared:
+                        self.guard.check_fresh(order.symbol)
+                self.guard.refresh_order_rate(len(prepared))
                 results = await self.client.place_orders(prepared)
+                self.guard.refresh_order_rate(len(prepared))
                 if len(results) != len(prepared) or any(
                     r.status not in ("resting", "filled", "rejected") for r in results
                 ):
@@ -636,6 +699,7 @@ class RiskManagedClient:
         async with self._lock:
             try:
                 owned = self.guard.begin_execution("cancel_outcome_unknown", orders)
+                await self.guard.flush_state()
                 results = await self.client.cancel_orders(orders)
                 if len(results) != len(orders) or any(
                     r.status not in ("cancelled", "already_closed") for r in results
@@ -709,7 +773,10 @@ class RiskManagedClient:
     async def close(self) -> None:
         async with self._lock:
             self._closed = True
-            await self._cancel_and_halt("closed")
+            try:
+                await self._cancel_and_halt("closed")
+            finally:
+                await self.guard.close_state()
 
     async def __aenter__(self) -> RiskManagedClient:
         return self
