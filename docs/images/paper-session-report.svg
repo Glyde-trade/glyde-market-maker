@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="565" viewBox="0 0 900 565" role="img" aria-labelledby="title desc">
+<title id="title">Actual offline paper replay support report</title>
+<desc id="desc">Synthetic public-book fixture: completed paper replay, 61 books, two simulated fills, zero pending orders. This is a text rendering of the actual command output, not live trading evidence.</desc>
+<rect width="900" height="565" rx="12" fill="#111827"/>
+<text x="24" y="30" fill="#a8b6cc" font-family="monospace" font-size="14">OFFLINE FIXTURE · PAPER SESSION REPORT</text>
+<g font-family="monospace" font-size="14" xml:space="preserve">
+<text x="24" y="64" fill="#8be9a0">$ glyde-mm report examples/.glyde-mm/logs</text>
+<text x="24" y="85" fill="#e3e8ef">{</text>
+<text x="24" y="106" fill="#e3e8ef">  &quot;runs&quot;: [</text>
+<text x="24" y="127" fill="#e3e8ef">    {</text>
+<text x="24" y="148" fill="#e3e8ef">      &quot;commit&quot;: &quot;d4bbbd57ffad8798eadd55ad97b861ab74921679&quot;,</text>
+<text x="24" y="169" fill="#e3e8ef">      &quot;first_observed_at&quot;: &quot;2026-11-15T06:01:54.631333+00:00&quot;,</text>
+<text x="24" y="190" fill="#e3e8ef">      &quot;history_truncated&quot;: false,</text>
+<text x="24" y="211" fill="#e3e8ef">      &quot;last_observed_at&quot;: &quot;2026-11-15T06:01:54.636598+00:00&quot;,</text>
+<text x="24" y="232" fill="#e3e8ef">      &quot;last_progress&quot;: {</text>
+<text x="24" y="253" fill="#e3e8ef">        &quot;book_messages&quot;: 61,</text>
+<text x="24" y="274" fill="#e3e8ef">        &quot;paper_fills&quot;: 2,</text>
+<text x="24" y="295" fill="#e3e8ef">        &quot;pending_orders&quot;: 0</text>
+<text x="24" y="316" fill="#e3e8ef">      },</text>
+<text x="24" y="337" fill="#e3e8ef">      &quot;mode&quot;: &quot;paper&quot;,</text>
+<text x="24" y="358" fill="#e3e8ef">      &quot;outcome&quot;: &quot;completed&quot;,</text>
+<text x="24" y="379" fill="#e3e8ef">      &quot;run_id&quot;: &quot;d79bcf7e0b6048edb070454155194e09&quot;,</text>
+<text x="24" y="400" fill="#e3e8ef">      &quot;segments&quot;: 1,</text>
+<text x="24" y="421" fill="#e3e8ef">      &quot;strategy&quot;: &quot;pure_market_making&quot;,</text>
+<text x="24" y="442" fill="#e3e8ef">      &quot;version&quot;: &quot;0.2.0&quot;</text>
+<text x="24" y="463" fill="#e3e8ef">    }</text>
+<text x="24" y="484" fill="#e3e8ef">  ],</text>
+<text x="24" y="505" fill="#e3e8ef">  &quot;schema&quot;: 1</text>
+<text x="24" y="526" fill="#e3e8ef">}</text>
+</g>
+</svg>
