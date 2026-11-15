@@ -17,7 +17,7 @@ _FIELDS = {
     "run_ended": {"outcome"},
 }
 _OUTCOMES = {"completed", "stopped", "cancelled", "risk_stop", "transport_error", "error"}
-_STRATEGIES = {"pure_market_making", "avellaneda_market_making", "grid"}
+_STRATEGIES = {"pure_market_making", "avellaneda_market_making", "grid", "inventory_skewed"}
 
 
 class RunLog:
