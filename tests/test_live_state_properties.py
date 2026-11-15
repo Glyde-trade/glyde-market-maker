@@ -407,6 +407,15 @@ class CacheHistory(RuleBasedStateMachine):
             assert account.positions.get("BTC", ZERO) == expected
 
     def teardown(self):
+        pending = asyncio.all_tasks(self.loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+
+            async def drain_tasks():
+                await asyncio.gather(*pending, return_exceptions=True)
+
+            self.run(drain_tasks())
         for active in reversed(self.patches):
             active.stop()
         self.loop.close()
@@ -442,6 +451,14 @@ EVENTS = st.lists(
         for price in (100, 101, 100, 102)
         for item in (("book", price, 1, 1), ("trade", price, 1, 0))
     ]
+)
+@example(
+    events=[
+        item
+        for price in (100, 101, 100, 102)
+        for item in (("book", price, 1, 1), ("trade", price, 1, 0))
+    ]
+    + [("gap", 100, 1, 0)]
 )
 @settings(max_examples=150, deadline=None, derandomize=True)
 def test_sparse_avellaneda_stream_is_finite_and_bounded(events):
