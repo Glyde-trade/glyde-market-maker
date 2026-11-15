@@ -27,6 +27,7 @@ glyde-mm = "glyde_mm.cli:main"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = ["offline_soak: deterministic ten-minute simulated WS fault soak"]
 
 [tool.ruff]
 line-length = 100
