@@ -63,7 +63,7 @@ async def run_flow(
     report=emit,
 ) -> dict:
     require_loopback(config.base_url)
-    if config.mode != "live" or len(config.symbols) != 1:
+    if config.mode != "live" or config.markets:
         raise ValueError("use an explicit single-symbol local live test config")
     if type(count) is not int or not 1 <= count <= 1000 or not 0.25 <= interval <= 60:
         raise ValueError("count must be 1..1000 and interval 0.25..60 seconds")

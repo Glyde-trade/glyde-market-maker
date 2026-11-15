@@ -190,3 +190,16 @@ async def test_default_local_client_never_inherits_proxy_or_redirects():
     async with flow.local_client(Config(base_url="http://127.0.0.1:8080/v1")) as client:
         assert client._http.trust_env is False
         assert client._http.follow_redirects is False
+
+
+async def test_one_entry_markets_config_cannot_trade_default_btc_by_mistake():
+    from glyde_mm.config import MarketConfig, RiskConfig
+
+    config = Config(
+        mode="live",
+        base_url="http://127.0.0.1:8080/v1",
+        markets=(MarketConfig("ETH", D(1)),),
+        risk=RiskConfig(max_total_notional=D(100)),
+    )
+    with pytest.raises(ValueError, match="single-symbol"):
+        await flow.run_flow(config, client_factory=lambda _: pytest.fail("no implicit BTC client"))
