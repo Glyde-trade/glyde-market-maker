@@ -4,6 +4,26 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 ## [Unreleased]
 
+## [0.5.0]
+
+- Optional chat webhooks send bounded, best-effort risk-stop, unknown-outcome,
+  daily-loss and session-end notifications after cleanup. URLs come only from an
+  environment variable and are suppressed from transport logs. Alerts are off by
+  default and never establish trading or cleanup success. (#53)
+- An interrupted wizard preview remains interrupted even if its countdown expires
+  during cleanup; live confirmation cannot proceed after that interruption. (#56)
+- Offline `reconcile` compares complete captured maker-order receipts and private
+  fills against the paper tape model, reporting quantities, slippage and available
+  fees. Diagnostic logs alone are insufficient, and discrepancies are not profit
+  forecasts or proof of missed venue fills. (#54)
+- PMM gains opt-in streaming-paper ping-pong, switching sides only on identified
+  fills of tracked orders. Bands and scaled ladder controls retain shared risk
+  limits. Live and book-only replay refuse ping-pong before trading. (#55)
+- Every source module is checked with strict mypy in CI, typed transport boundaries
+  are explicit, and wheels publish the PEP 561 typing marker. (#52)
+- The loopback read-only dashboard introduced in v0.4 remains available; chat alerts
+  complement local snapshots and reports without adding remote trading controls.
+
 ## [0.4.0]
 
 - Guided `live-wizard` runs doctor and a two-minute paper preview of a frozen Conservative
@@ -60,7 +80,8 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 - Initial Python One API client, offline fake server, paper simulator and strategy foundation.
 
-[Unreleased]: https://github.com/Glyde-trade/glyde-market-maker/compare/v0.4.0...master
+[Unreleased]: https://github.com/Glyde-trade/glyde-market-maker/compare/v0.5.0...master
+[0.5.0]: https://github.com/Glyde-trade/glyde-market-maker/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Glyde-trade/glyde-market-maker/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Glyde-trade/glyde-market-maker/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Glyde-trade/glyde-market-maker/releases/tag/v0.2.0

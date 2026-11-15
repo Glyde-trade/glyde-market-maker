@@ -18,6 +18,8 @@ Offline CLI tests exercise paper fills, signed live placement/cancellation and r
 submission. They do not qualify a deployed account: live use still requires the API capabilities,
 registered account permissions and credentials. Refused or ambiguous actions stop quoting.
 
+See [Troubleshooting](docs/troubleshooting.md) for common refusals, unknown outcomes and reports.
+
 Follow [Your first market maker in 10 minutes](docs/first-market-maker.md) for the paper → report →
 small-live workflow. See the [strategy chooser](docs/strategies.md#strategy-chooser) and
 [risk-limit FAQ](docs/risk-limits.md) before changing a config.
@@ -38,11 +40,11 @@ before replacing an existing installation.
 
 ## Start in five minutes
 
-**1. Install.** Once the `v0.4.0` GitHub Release is published, install its wheel with
+**1. Install.** Once the `v0.5.0` GitHub Release is published, install its wheel with
 [pipx](https://pipx.pypa.io/stable/installation/) (Python 3.11+):
 
 ```sh
-pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.4.0/glyde_market_maker-0.4.0-py3-none-any.whl'
+pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.5.0/glyde_market_maker-0.5.0-py3-none-any.whl'
 glyde-mm --version
 ```
 
@@ -399,7 +401,7 @@ a fixed warning without the URL; they never change the trading outcome or trigge
 Alerts are best effort, may duplicate after a lost response, and can be absent during a
 network/process failure. They are not a safety controller or proof that cancellation
 succeeded. Check local reports and the venue. Nothing is sent merely by adding an env var
-while `alerts_enabled` is false. This feature requires current source after v0.4.0.
+while `alerts_enabled` is false. This feature is included in v0.5.0.
 
 ## Package releases
 
@@ -564,6 +566,16 @@ trade snapshots/updates and subscription acknowledgements. It forbids sockets,
 credential reads and private requests. See the [fixture provenance](tests/fixtures/one-api-public/README.md):
 the initial recording is synthetic, so these checks catch client wire regressions
 without claiming the production service is reachable or qualified.
+
+## Type checking
+
+Install development tools with `python -m pip install -e '.[dev]'`, then run
+`mypy --strict src/glyde_mm`. CI checks every source module on its Python matrix;
+there are no source exclusions or per-module relaxations. Dynamic JSON/YAML values
+are typed at the wire/config boundary, while exchange models, transport injection
+and strategy callbacks retain explicit types. The untyped third-party Hyperliquid
+SDK import is the only external import exception. Wheels include the PEP 561
+`py.typed` marker, checked by the package installation script.
 
 ### PMM ping-pong, bands and ladders
 

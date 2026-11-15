@@ -347,7 +347,7 @@ class PureMarketMakingStrategy:
         if tolerance is None or len(desired) != len(self._active):
             return False
 
-        def key(order: OrderRequest):
+        def key(order: OrderRequest) -> tuple[str, str, Decimal, Decimal]:
             return order.symbol, order.side, order.price, order.quantity
 
         for old, new in zip(
@@ -377,6 +377,7 @@ class PureMarketMakingStrategy:
                 raise RuntimeError("cancellation not confirmed")
             if result.order_id not in (None, request.order_id):
                 raise RuntimeError("cancellation identity mismatch")
+            assert request.order_id is not None
             if result.client_order_id not in (
                 None,
                 self._active[request.order_id].client_order_id,
@@ -400,6 +401,7 @@ class PureMarketMakingStrategy:
                 self.config.price_floor is not None or self.config.price_ceiling is not None
             ):
                 mid = self._quote_mid(book)
+                assert mid is not None
                 band = (
                     self.config.price_floor is not None and mid <= self.config.price_floor,
                     self.config.price_ceiling is not None and mid >= self.config.price_ceiling,

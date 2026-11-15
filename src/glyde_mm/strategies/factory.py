@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import fields
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, TypeAlias, TypeVar, cast
 
 from .avellaneda_market_making import AvellanedaConfig, AvellanedaMarketMakingStrategy
 from .grid import GridConfig, GridStrategy
@@ -16,8 +16,14 @@ from .pure_market_making import (
     StrategyContext,
 )
 
+StrategyConfig: TypeAlias = (
+    PureMarketMakingConfig | GridConfig | AvellanedaConfig | InventorySkewedConfig
+)
+Strategy: TypeAlias = PureMarketMakingStrategy | GridStrategy
+ConfigT = TypeVar("ConfigT", bound=StrategyConfig)
 
-def parse_config(cls: type, values: dict[str, Any]):
+
+def parse_config(cls: type[ConfigT], values: dict[str, Any]) -> ConfigT:
     definitions = {field.name: field for field in fields(cls)}
     if not isinstance(values, dict) or set(values) - definitions.keys():
         raise ValueError("unknown strategy configuration field")
@@ -42,30 +48,37 @@ def parse_config(cls: type, values: dict[str, Any]):
             if isinstance(value, bool):
                 raise ValueError(f"{key} must be a number")
             converted[key] = float(value)
-    return cls(**converted)
+    return cast(ConfigT, cls(**converted))
 
 
-_STRATEGIES = {
-    "inventory_skewed": (InventorySkewedStrategy, InventorySkewedConfig),
-    "avellaneda_market_making": (AvellanedaMarketMakingStrategy, AvellanedaConfig),
-    "grid": (GridStrategy, GridConfig),
-    "pure_market_making": (PureMarketMakingStrategy, PureMarketMakingConfig),
+_CONFIGS: dict[str, type[StrategyConfig]] = {
+    "inventory_skewed": InventorySkewedConfig,
+    "avellaneda_market_making": AvellanedaConfig,
+    "grid": GridConfig,
+    "pure_market_making": PureMarketMakingConfig,
 }
 
 
-def validate_strategy_config(name: str, values: dict[str, Any]):
+def validate_strategy_config(
+    name: str, values: dict[str, Any]
+) -> StrategyConfig | PluginDefinition:
     if name.startswith("plugin:"):
         return load_plugin(name, values)
     try:
-        _, config_type = _STRATEGIES[name]
+        config_type = _CONFIGS[name]
     except KeyError:
         raise ValueError("unsupported strategy") from None
     return parse_config(config_type, values)
 
 
-def create_strategy(name: str, context: StrategyContext, values: dict[str, Any]):
+def create_strategy(name: str, context: StrategyContext, values: dict[str, Any]) -> Strategy:
     selected = validate_strategy_config(name, values)
     if isinstance(selected, PluginDefinition):
         return PluginStrategy(context, selected)
-    strategy_type, _ = _STRATEGIES[name]
-    return strategy_type(context, selected)
+    if isinstance(selected, InventorySkewedConfig):
+        return InventorySkewedStrategy(context, selected)
+    if isinstance(selected, AvellanedaConfig):
+        return AvellanedaMarketMakingStrategy(context, selected)
+    if isinstance(selected, GridConfig):
+        return GridStrategy(context, selected)
+    return PureMarketMakingStrategy(context, selected)

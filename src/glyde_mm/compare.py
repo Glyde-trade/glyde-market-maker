@@ -8,9 +8,10 @@ from itertools import groupby
 from pathlib import Path
 
 from .config import Config
+from .models import Account
 from .paper import PaperExchange
 from .presets import strategy_preset
-from .public_tape import read_tape
+from .public_tape import TapeEvent, read_tape
 from .reference import ExternalReference
 from .risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
 from .runner import _price_tick
@@ -90,12 +91,21 @@ async def compare_strategies(
     return Comparison(events[baseline].received_at_ms, events[-1].received_at_ms, tuple(rows))
 
 
-async def _simulate(config, size, events, baseline, name, strategy_name, preset, external):
+async def _simulate(
+    config: Config,
+    size: int,
+    events: list[TapeEvent],
+    baseline: int,
+    name: str,
+    strategy_name: str,
+    preset: str,
+    external: bool,
+) -> ComparisonRow:
     start, end = events[baseline].received_at_ms, events[-1].received_at_ms
     now = start
 
     class TapePaper(PaperExchange):
-        async def account(self):
+        async def account(self) -> Account:
             return replace(await super().account(), received_at=now / 1000)
 
     paper = TapePaper(config.paper_balance, clock_ms=lambda: now)
@@ -105,6 +115,7 @@ async def _simulate(config, size, events, baseline, name, strategy_name, preset,
         for event in reversed(events[: baseline + 1])
         if event.source == "glyde" and event.book
     )
+    assert book is not None and book.mid is not None
     values = strategy_preset(
         strategy_name,
         preset,
@@ -126,12 +137,7 @@ async def _simulate(config, size, events, baseline, name, strategy_name, preset,
         else None
     )
     guard = RiskGuard(
-        RiskLimits(
-            **{
-                key: float(value) if key.endswith("seconds") else value
-                for key, value in vars(config.risk).items()
-            }
-        ),
+        RiskLimits.from_config(config.risk),
         clock=lambda: now / 1000,
         wall_clock=lambda: now / 1000,
         reference_check=reference.center if reference else None,
@@ -168,13 +174,13 @@ async def _simulate(config, size, events, baseline, name, strategy_name, preset,
     status = "completed"
     fill_index = 0
 
-    def advance(timestamp):
+    def advance(timestamp: int) -> None:
         nonlocal now, prior_time, uptime
         if quoting:
             uptime += timestamp - prior_time
         now = prior_time = timestamp
 
-    async def sample():
+    async def sample() -> Account:
         nonlocal low, high, peak, drawdown, quoting
         account = await paper.account()
         position = account.positions.get(config.symbol, ZERO)
@@ -184,14 +190,14 @@ async def _simulate(config, size, events, baseline, name, strategy_name, preset,
         quoting = {order.side for order in await paper.open_orders()} == {"buy", "sell"}
         return account
 
-    async def stop(error):
+    async def stop(error: RiskViolation) -> None:
         nonlocal running, status
         status = "stopped: " + str(error)
         running = False
         await strategy.stop()
         await managed.close()
 
-    async def tick():
+    async def tick() -> None:
         if running:
             try:
                 guard.update_account(await paper.account())

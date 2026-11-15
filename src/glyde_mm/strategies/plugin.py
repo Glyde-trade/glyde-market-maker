@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
 from decimal import Decimal, InvalidOperation
-from typing import Generic, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import Any, Generic, TypeVar, Union, get_args, get_origin, get_type_hints
 
 from glyde_mm.models import Account, Book, Fill, OrderRequest, Side
 from glyde_mm.risk import RiskManagedClient
@@ -77,7 +77,7 @@ class StrategyPlugin(ABC, Generic[Parameters]):
         pass
 
 
-def _scalar(kind: type, value: object, name: str):
+def _scalar(kind: type, value: object, name: str) -> Any:
     if get_origin(kind) in {Union, types.UnionType}:
         alternatives = get_args(kind)
         if len(alternatives) == 2 and type(None) in alternatives:
@@ -93,7 +93,7 @@ def _scalar(kind: type, value: object, name: str):
         if result.is_finite():
             return result
     elif kind is float:
-        if type(value) in {int, float} and math.isfinite(value):
+        if isinstance(value, (int, float)) and type(value) is not bool and math.isfinite(value):
             return float(value)
     elif kind in {bool, int, str} and type(value) is kind:
         return value
@@ -112,11 +112,12 @@ def _supported(kind: type) -> bool:
     )
 
 
-def parse_parameters(config_type: type, values: dict) -> object:
+def parse_parameters(config_type: type, values: dict[str, Any]) -> object:
+    config_params = getattr(config_type, "__dataclass_params__", None)
     if (
         not isinstance(config_type, type)
         or not is_dataclass(config_type)
-        or not config_type.__dataclass_params__.frozen
+        or not getattr(config_params, "frozen", False)
     ):
         raise ValueError("plugin config_type must be a frozen dataclass")
     definitions = {field.name for field in fields(config_type)}
@@ -142,12 +143,12 @@ def parse_parameters(config_type: type, values: dict) -> object:
 
 @dataclass(frozen=True)
 class PluginDefinition:
-    plugin_type: type[StrategyPlugin]
+    plugin_type: type[StrategyPlugin[Any]]
     parameters: object
     execution: PureMarketMakingConfig
 
 
-def load_plugin(name: str, values: dict) -> PluginDefinition:
+def load_plugin(name: str, values: dict[str, Any]) -> PluginDefinition:
     parts = name.split(":")
     if (
         len(parts) != 3
@@ -163,15 +164,14 @@ def load_plugin(name: str, values: dict) -> PluginDefinition:
         "refresh_tolerance_pct",
     }:
         raise ValueError("unknown plugin host configuration field")
-    execution = PureMarketMakingConfig(
-        **{
-            key: _scalar(Decimal if key == "refresh_tolerance_pct" else float, value, key)
-            if value is not None or key != "refresh_tolerance_pct"
-            else None
-            for key, value in values.items()
-            if key != "parameters"
-        }
-    )
+    execution_values: dict[str, Any] = {
+        key: _scalar(Decimal if key == "refresh_tolerance_pct" else float, value, key)
+        if value is not None or key != "refresh_tolerance_pct"
+        else None
+        for key, value in values.items()
+        if key != "parameters"
+    }
+    execution = PureMarketMakingConfig(**execution_values)
     plugin_type = getattr(importlib.import_module(parts[1]), parts[2])
     if (
         not isinstance(plugin_type, type)

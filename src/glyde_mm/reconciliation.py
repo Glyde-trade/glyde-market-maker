@@ -7,6 +7,7 @@ import re
 from collections import defaultdict
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from .client import trades_from_wire
 from .config import decimal
@@ -17,13 +18,13 @@ from .public_tape import decode_event
 ZERO = Decimal(0)
 
 
-def _id(value):
+def _id(value: object) -> str:
     if type(value) not in (int, str) or not re.fullmatch(r"[0-9]{1,64}", str(value)):
         raise ValueError("invalid recorded identity")
     return str(value)
 
 
-def _number(value):
+def _number(value: object) -> Decimal:
     if len(str(value)) > 128:
         raise ValueError("execution number exceeds capture bounds")
     number = decimal(value)
@@ -32,14 +33,14 @@ def _number(value):
     return number
 
 
-def _positive(value):
+def _positive(value: object) -> Decimal:
     number = _number(value)
     if number <= 0:
         raise ValueError("invalid execution economics")
     return number
 
 
-def read_session(path: Path):
+def read_session(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if path.stat().st_size > 16 * 1024 * 1024:
         raise ValueError("session exceeds 16 MiB")
     with path.open() as source:
@@ -80,9 +81,11 @@ def read_session(path: Path):
     return header, events
 
 
-def _actual_fills(header, events, orders):
-    actual = defaultdict(list)
-    seen = {}
+def _actual_fills(
+    header: dict[str, Any], events: list[dict[str, Any]], orders: dict[str, Any]
+) -> dict[str, list[tuple[Decimal, Decimal, Decimal | None]]]:
+    actual: dict[str, list[tuple[Decimal, Decimal, Decimal | None]]] = defaultdict(list)
+    seen: dict[tuple[str, str], tuple[object, ...]] = {}
     for event in events:
         if event["type"] != "private":
             continue
@@ -128,7 +131,7 @@ def _actual_fills(header, events, orders):
     return actual
 
 
-async def reconcile_session(path: Path) -> dict:
+async def reconcile_session(path: Path) -> dict[str, Any]:
     try:
         header, events = read_session(path)
         orders = {}
@@ -233,13 +236,12 @@ async def reconcile_session(path: Path) -> dict:
                 sum((q * p for q, p, _ in simulated), ZERO) / paper_qty if paper_qty else None
             )
             live_vwap = sum((q * p for q, p, _ in observed), ZERO) / live_qty if live_qty else None
-            slippage = (
-                (live_vwap - paper_vwap) * (1 if request["side"] == "buy" else -1)
-                if matched
-                else None
-            )
+            slippage = None
+            if matched:
+                assert live_vwap is not None and paper_vwap is not None
+                slippage = (live_vwap - paper_vwap) * (1 if request["side"] == "buy" else -1)
             fee = (
-                sum((row[2] for row in observed), ZERO)
+                sum((row[2] for row in observed if row[2] is not None), ZERO)
                 if all(row[2] is not None for row in observed)
                 else None
             )

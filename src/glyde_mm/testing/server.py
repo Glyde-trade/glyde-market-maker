@@ -234,7 +234,11 @@ class FakeOneApiServer:
         ), tif
 
     def _reduction(self, order: _Order) -> Decimal:
-        quantity, _ = self._positions.get((order.user, order.coin), (ZERO, ZERO))
+        quantity, _ = (
+            self._positions.get((order.user, order.coin), (ZERO, ZERO))
+            if order.user is not None
+            else (ZERO, ZERO)
+        )
         if not order.reduce_only:
             return order.remaining
         if not quantity or (quantity > 0) == order.buy:
@@ -538,6 +542,7 @@ class FakeOneApiServer:
         kind = subscription["type"]
         if kind == "orderUpdates":
             return
+        data: Any
         user = str(subscription.get("user", self.user)).lower()
         if kind == "userFills":
             data = {
