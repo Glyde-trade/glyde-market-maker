@@ -155,9 +155,10 @@ base for portability with Python. The SDK's book schema permits mantissa 2 or 5
 only: `mantissa:1` throws `ValidationError` before any request, even though One
 API accepts it with `nSigFigs:5`. Default WS book requests include explicit null
 aggregation options; ACKs must preserve them. SDK response types are not a
-runtime guarantee of complete native facts. This public example disables
-automatic reconnect/resubscription and does not implement private authentication,
-Glyde atomic batch reduction or recovery after a gap.
+runtime guarantee of complete native facts. This five-second public example sets zero transport retries and disables
+resubscription. The SDK keep-alive can explicitly request a reconnect in a longer
+session; these settings are not a private lifecycle fence. The example does not
+implement private authentication, Glyde batch reduction or recovery after a gap.
 
 ## 3. Obtain two separate credentials
 
