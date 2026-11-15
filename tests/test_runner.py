@@ -196,6 +196,7 @@ def test_cli_paper_forces_simulation_and_run_uses_explicit_config(tmp_path, monk
         seen.append((config.mode, kwargs["state_directory"]))
 
     monkeypatch.setattr(cli, "run_strategy", fake_run)
+    monkeypatch.setattr("builtins.input", lambda _: "BTC")
     path = tmp_path / "bot.yaml"
     path.write_text("mode: live\n")
     assert cli.main(["paper", str(path)]) == 0
@@ -251,7 +252,8 @@ async def test_cli_installs_signal_driven_shutdown_without_sending_real_signals(
 
     monkeypatch.setattr(signal, "signal", set_handler)
 
-    async def fake_run(config, *, state_directory, stop_event):
+    async def fake_run(config, *, state_directory, stop_event, allow_existing_exposure=False):
+        assert allow_existing_exposure is False
         installed[signal.SIGTERM](signal.SIGTERM, None)
         await asyncio.wait_for(stop_event.wait(), 1)
 
