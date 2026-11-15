@@ -252,7 +252,7 @@ class RiskHistory(RuleBasedStateMachine):
                     quantity,
                     order.price,
                     oid,
-                    order.client_order_id,
+                    client_order_id=order.client_order_id,
                     trade_id=str(self.fill_serial),
                 )
             )
