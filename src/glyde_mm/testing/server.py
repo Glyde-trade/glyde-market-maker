@@ -490,9 +490,11 @@ class FakeOneApiServer:
         self._publish_books()
 
     def market_order(
-        self, coin: str, *, buy: bool, size: str, user: str = "0x" + "2" * 40
+        self, coin: str, *, buy: bool, size: str, user: str | None = None
     ) -> dict[str, Any]:
         """Explicit simulated counterparty trade; never contacts an exchange."""
+        if user is None:
+            user = "0x" + ("2" if self.user != "0x" + "2" * 40 else "1") * 40
         levels = self._book(coin, not buy)
         if not levels:
             return {"error": "No liquidity"}

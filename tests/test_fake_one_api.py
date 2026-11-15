@@ -270,8 +270,11 @@ def test_invalid_cancel_cannot_match_missing_cloid(server, oid):
     assert server.info({"type": "openOrders", "user": ALICE})[0]["oid"] == resting
 
 
-def test_default_market_control_is_a_counterparty_not_a_self_trade(server):
-    oid = place(server, wire(size="1"))["resting"]["oid"]
+@pytest.mark.parametrize("owner", [ALICE, BOB])
+def test_default_market_control_is_a_counterparty_not_a_self_trade(owner):
+    server = FakeOneApiServer(user=owner)
+    server.set_book("BTC", bids=[("99", "2")], asks=[("101", "2")])
+    oid = place(server, wire(size="1"), user=owner)["resting"]["oid"]
     server.market_order("BTC", buy=False, size="0.2")
-    fills = server.info({"type": "userFills", "user": ALICE})
+    fills = server.info({"type": "userFills", "user": owner})
     assert len(fills) == 1 and fills[0]["oid"] == oid and fills[0]["sz"] == "0.2"
