@@ -15,6 +15,7 @@ from .risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
 from .runlog import RunLog
 from .runner import _price_tick
 from .strategies import StrategyContext, create_strategy
+from .strategies.factory import validate_strategy_config
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,11 @@ async def _replay(
 ) -> ReplayResult:
     if config.markets:
         raise ValueError("record/replay requires a single-symbol configuration")
+    policy = validate_strategy_config(config.strategy, config.strategy_config)
+    if getattr(policy, "ping_pong_enabled", False):
+        raise ValueError(
+            "ping-pong requires identified tape fills, unavailable in book-only replay"
+        )
     size, start, observations = read_window(recording, config.symbol, minutes)
     config = replace(config, mode="paper")
     now = start / 1000

@@ -75,6 +75,7 @@ class PureMarketMakingConfig:
     minimum_spread: Decimal = ZERO
     price_ceiling: Decimal | None = None
     price_floor: Decimal | None = None
+    ping_pong_enabled: bool = False
     hanging_orders_enabled: bool = False
     reference_source: str = "glyde"
     reference_skew_bps: Decimal = ZERO
@@ -129,9 +130,12 @@ class PureMarketMakingConfig:
             raise ValueError("inventory_target_position must be a finite signed Decimal")
         if (
             type(self.inventory_skew_enabled) is not bool
+            or type(self.ping_pong_enabled) is not bool
             or self.hanging_orders_enabled is not False
         ):
-            raise ValueError("inventory skew must be boolean; hanging orders are unsupported")
+            raise ValueError(
+                "inventory skew/ping-pong must be boolean; hanging orders are unsupported"
+            )
         for name in ("price_floor", "price_ceiling"):
             value = getattr(self, name)
             if value is not None:
@@ -213,8 +217,11 @@ class PureMarketMakingStrategy:
         self._active: dict[str, OrderRequest] = {}
         self._last_refresh: float | None = None
         self._active_since: float | None = None
+        self._last_band: tuple[bool, bool] | None = None
         self._last_tick = -math.inf
         self._fill_generation = 0
+        self._ping_pong_side: str | None = None
+        self._ping_fills: set[tuple[str, str]] = set()
         self._needs_refresh = False
         self._lock = asyncio.Lock()
 
@@ -240,6 +247,8 @@ class PureMarketMakingStrategy:
                 ("buy", self.config.bid_spread, bid_ratio),
                 ("sell", self.config.ask_spread, ask_ratio),
             ):
+                if self.config.ping_pong_enabled and self._ping_pong_side not in (None, side):
+                    continue
                 if side == "buy" and self.config.price_ceiling is not None:
                     if mid >= self.config.price_ceiling:
                         continue
@@ -280,6 +289,34 @@ class PureMarketMakingStrategy:
 
     async def on_fill(self, fill: Fill) -> None:
         if fill.symbol == self.context.symbol:
+            if self.config.ping_pong_enabled:
+                order = self._active.get(fill.order_id)
+                if order is None:
+                    return
+                if (
+                    fill.side != order.side
+                    or fill.client_order_id not in (None, order.client_order_id)
+                    or not isinstance(fill.trade_id, str)
+                    or not 1 <= len(fill.trade_id) <= 128
+                    or not isinstance(fill.quantity, Decimal)
+                    or not fill.quantity.is_finite()
+                    or not ZERO < fill.quantity <= order.quantity
+                    or not isinstance(fill.price, Decimal)
+                    or not fill.price.is_finite()
+                    or fill.price <= ZERO
+                    or (fill.side == "buy" and fill.price > order.price)
+                    or (fill.side == "sell" and fill.price < order.price)
+                ):
+                    self.blocked = True
+                    raise RiskViolation("ping_pong_fill_evidence")
+                identity = fill.order_id, fill.trade_id
+                if identity in self._ping_fills:
+                    return
+                if len(self._ping_fills) >= 4096:
+                    self.blocked = True
+                    raise RiskViolation("ping_pong_fill_budget")
+                self._ping_fills.add(identity)
+                self._ping_pong_side = "sell" if fill.side == "buy" else "buy"
             # Fill callbacks trigger a fresh account read; they never release tracked orders.
             self._fill_generation += 1
             self._needs_refresh = True
@@ -347,6 +384,7 @@ class PureMarketMakingStrategy:
             ):
                 raise RuntimeError("cancellation identity mismatch")
         self._active.clear()
+        self._ping_fills.clear()
         self._active_since = None
 
     async def on_tick(self, now: float | None = None) -> None:
@@ -359,6 +397,17 @@ class PureMarketMakingStrategy:
             self._last_tick = now
             clock_start = self.context.clock()
             book = self.book
+            if book is not None and (
+                self.config.price_floor is not None or self.config.price_ceiling is not None
+            ):
+                mid = self._quote_mid(book)
+                band = (
+                    self.config.price_floor is not None and mid <= self.config.price_floor,
+                    self.config.price_ceiling is not None and mid >= self.config.price_ceiling,
+                )
+                if self._last_band is not None and band != self._last_band:
+                    self._needs_refresh = True
+                self._last_band = band
             due = (
                 self._last_refresh is None
                 or now - self._last_refresh >= self.config.order_refresh_time
@@ -434,6 +483,8 @@ class PureMarketMakingStrategy:
                             raise RuntimeError("duplicate resting order identity")
                         self._active[result.order_id] = order
                     elif result.status == "filled":
+                        if self.config.ping_pong_enabled:
+                            raise RiskViolation("ping_pong_fill_evidence")
                         immediate_fill = True
                     elif result.status != "rejected":
                         raise RuntimeError("order outcome unknown")
@@ -449,4 +500,5 @@ class PureMarketMakingStrategy:
         async with self._lock:
             await self.context.client.cancel_all(self.context.symbol)
             self._active.clear()
+            self._ping_fills.clear()
             self._active_since = None
