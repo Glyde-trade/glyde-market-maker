@@ -559,3 +559,16 @@ trade snapshots/updates and subscription acknowledgements. It forbids sockets,
 credential reads and private requests. See the [fixture provenance](tests/fixtures/one-api-public/README.md):
 the initial recording is synthetic, so these checks catch client wire regressions
 without claiming the production service is reachable or qualified.
+
+## Paper versus live execution report
+
+```sh
+glyde-mm reconcile --session-file /private/path/session.jsonl
+```
+
+Offline reconciliation compares captured private WS fills with public-tape paper
+fills for the same acknowledged original quotes. It reports slippage, model-missed
+quantities and actual USDC fee impact, with missing evidence refused or unavailable.
+A complete execution capture is required; ordinary diagnostic logs are insufficient.
+See [capture format and limitations](docs/reconciliation.md). No trading or state reset
+is performed.
