@@ -8,7 +8,7 @@ from decimal import Decimal as D
 import pytest
 
 from glyde_mm.config import Config, RiskConfig
-from glyde_mm.models import Account, OrderResult
+from glyde_mm.models import Account, CancelResult, OrderResult
 from glyde_mm.paper import PaperExchange
 from glyde_mm.risk import RiskViolation
 from glyde_mm.runner import risk_state_path, run
@@ -62,6 +62,9 @@ class Source:
         self.placed.set()
         self.stop.set()
         return [OrderResult("resting", str(i), row.client_order_id) for i, row in enumerate(orders)]
+
+    async def cancel_orders(self, orders):
+        return [CancelResult("cancelled", row.order_id, row.client_order_id) for row in orders]
 
     async def cancel_all(self, symbol=None):
         self.cancellations += 1

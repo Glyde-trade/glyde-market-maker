@@ -216,6 +216,7 @@ def test_unknown_send_retains_original_ids_and_never_resends(status):
         g, _ = guard()
         raw = FakeClient()
         raw.result = status
+        raw.cancel_result = "unknown"
         client = RiskManagedClient(raw, g)
         with pytest.raises((RiskViolation, TimeoutError)):
             await client.place_orders([Order()])
@@ -291,5 +292,59 @@ def test_stop_during_pretrade_read_prevents_dispatch():
         with pytest.raises(RiskViolation, match="client_closed"):
             await client.place_orders([Order()])
         assert raw.placed == [] and not g.pending
+
+    asyncio.run(scenario())
+
+
+def test_expired_private_read_does_not_prevent_known_original_cancel():
+    async def scenario():
+        g, _ = guard()
+
+        class ExpiredClient(FakeClient):
+            async def cancel_all(self, symbol=None):
+                self.all_cancels += 1
+                raise RuntimeError("private read credential expired before discovery")
+
+        raw = ExpiredClient()
+        client = RiskManagedClient(raw, g)
+        await client.place_orders([Order(client_order_id="known-original")])
+        with pytest.raises(RiskViolation, match="cancel_outcome_unknown"):
+            await client.close()
+        assert len(raw.cancelled) == 1
+        assert raw.cancelled[0].order_id == "0"
+        assert raw.cancelled[0].client_order_id is None
+        assert len(raw.placed) == 1
+        assert "known-original" in g.pending
+
+    asyncio.run(scenario())
+
+
+def test_ambiguous_original_is_cancelled_by_its_same_cloid_before_discovery():
+    async def scenario():
+        g, _ = guard()
+        raw = FakeClient()
+        raw.result = "timeout"
+        client = RiskManagedClient(raw, g)
+        with pytest.raises(TimeoutError):
+            await client.place_orders([Order(client_order_id="original-unknown")])
+        assert raw.cancelled[0].client_order_id == "original-unknown"
+        assert raw.cancelled[0].order_id is None
+        assert len(raw.placed) == 1
+        assert g.halted == "order_outcome_unknown"
+
+    asyncio.run(scenario())
+
+
+def test_confirmed_cleanup_does_not_repeat_known_cancellations():
+    async def scenario():
+        g, _ = guard()
+        raw = FakeClient()
+        client = RiskManagedClient(raw, g)
+        await client.place_orders([Order(client_order_id="one")])
+        await client.on_disconnect()
+        await client.close()
+        assert len(raw.cancelled) == 1
+        assert not g.pending
+        assert g.halted == "disconnected"
 
     asyncio.run(scenario())
