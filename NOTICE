@@ -31,3 +31,10 @@ avellaneda_market_making at revision 9af100d6822da7d2d0291a906c730ef172284ee2,
 Apache License 2.0. Glyde retains signed perpetual inventory/equity normalization;
 the optional book-plus-trade VWAP volatility estimator is a Glyde adaptation,
 not Hummingbot's automatic trade-intensity calibration.
+
+The optional glyde_perpetual Hummingbot connector subclasses/adapts Hummingbot's
+hyperliquid_perpetual connector at revision
+9af100d6822da7d2d0291a906c730ef172284ee2, Apache License 2.0.
+Hummingbot contributors retain their upstream copyright. Glyde rewrites the
+owner/read-auth/signing boundaries, exact-decimal order wire, metadata precision
+and private stream adaptation; the installed upstream framework remains required.
