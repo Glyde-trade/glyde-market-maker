@@ -29,6 +29,7 @@ def parse_config(cls: type, values: dict[str, Any]):
             "lower_price",
             "upper_price",
             "order_amount",
+            "refresh_tolerance_pct",
         }:
             if value is None and default is None:
                 continue
@@ -36,9 +37,9 @@ def parse_config(cls: type, values: dict[str, Any]):
                 converted[key] = Decimal(str(value))
             except InvalidOperation:
                 raise ValueError(f"{key} must be a decimal") from None
-        elif key == "order_refresh_time":
+        elif key in {"order_refresh_time", "max_order_age"}:
             if isinstance(value, bool):
-                raise ValueError("order_refresh_time must be a number")
+                raise ValueError(f"{key} must be a number")
             converted[key] = float(value)
     return cls(**converted)
 

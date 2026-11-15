@@ -282,13 +282,24 @@ no HL history and stops with `reference_unavailable` rather than inventing it.
 | `read_api_key_env` | Name of a separate private-read credential variable |
 | `strategy_config.order_amount` | Quantity per level in base units |
 | `strategy_config.bid_spread` / `ask_spread` | Fractions around the reference price |
+| `strategy_config.order_refresh_time` | Seconds between quote comparisons; default 30 |
+| `strategy_config.refresh_tolerance_pct` | Keep original IDs when every planned price moves by at most this percentage of its old price (`'0.1'` = 0.1%); `null` default disables tolerance, `'0'` keeps exact matches |
+| `strategy_config.max_order_age` | Retire quotes after this many seconds regardless of tolerance or refresh interval; default 300, maximum 86400 |
+| `risk.max_orders_per_minute` | Integer 1–6000, default 60; rolling count of individual submitted orders across all batches, including venue refusals; exceeding it stops quoting and cancels |
 | `risk.max_position` | Maximum absolute projected position, including outstanding orders |
 | `risk.max_order_notional` | Maximum USDC notional per order |
 | `risk.max_daily_loss` | Daily equity-loss kill switch in USDC |
 | `risk.stale_book_seconds` | Maximum book source/arrival age |
 | `risk.account_age_seconds` | Maximum account-observation age |
 
-Keep decimal values quoted in YAML. The only default API origin is `https://api.glyde.trade`.
+Refresh controls apply to all strategies. Fills, changed quantities, price bands and safety
+checks override tolerance. No hanging-order mode is enabled: every tracked quote must be
+confirmed cancelled before replacement. Tolerated checks never extend the original quote age.
+The rate budget is saved in the existing risk-state file before dispatch, survives restart,
+and is never refunded by cancellation. Cancels remain available when the cap is exhausted.
+Do not delete risk state to bypass a stop; the cap belongs to this bot, not other processes.
+
+Keep decimal values quoted in YAML (the rate cap is an unquoted integer). The only default API origin is `https://api.glyde.trade`.
 No signing key is needed to browse a public book in paper mode. Private endpoints may refuse
 requests until account permissions and read authorization are configured.
 

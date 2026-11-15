@@ -28,6 +28,8 @@ from .pure_market_making import (
 class AvellanedaConfig:
     order_amount: Decimal = Decimal("0.001")
     order_refresh_time: float = 30.0
+    refresh_tolerance_pct: Decimal | None = None
+    max_order_age: float = 300.0
     order_levels: int = 1
     order_level_spread: Decimal = Decimal("0.001")
     order_level_amount: Decimal = ZERO
@@ -45,6 +47,8 @@ class AvellanedaConfig:
         return PureMarketMakingConfig(
             order_amount=self.order_amount,
             order_refresh_time=self.order_refresh_time,
+            refresh_tolerance_pct=self.refresh_tolerance_pct,
+            max_order_age=self.max_order_age,
             order_levels=self.order_levels,
             order_level_spread=self.order_level_spread,
             order_level_amount=self.order_level_amount,

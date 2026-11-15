@@ -247,3 +247,98 @@ async def test_cancelled_submission_never_creates_a_fresh_attempt():
     count = len(client.calls)
     await strategy.on_tick(100)
     assert len(client.calls) == count
+
+
+async def test_refresh_tolerance_retains_ids_but_age_still_retires_them():
+    c, s = setup(order_refresh_time=10, refresh_tolerance_pct=D("1"), max_order_age=25)
+    await s.on_book(book())
+    await s.on_tick(0)
+    original = dict(s._active)
+    await s.on_book(book("100.5", 2))
+    await s.on_tick(10)
+    await s.on_tick(20)
+    assert s._active == original
+    assert [kind for kind, _ in c.calls] == ["place"]
+    await s.on_tick(25)
+    assert [kind for kind, _ in c.calls] == ["place", "cancel", "place"]
+    assert not set(original) & s._active.keys()
+
+
+async def test_tolerance_uses_exact_percentage_boundary():
+    c, s = setup(order_refresh_time=1, refresh_tolerance_pct=D("1"))
+    await s.on_book(book())
+    await s.on_tick(0)
+    await s.on_book(book("101", 2))
+    await s.on_tick(1)
+    assert [kind for kind, _ in c.calls] == ["place"]
+    await s.on_book(book("101.02", 3))
+    await s.on_tick(2)
+    assert [kind for kind, _ in c.calls] == ["place", "cancel", "place"]
+
+
+async def test_inventory_size_change_bypasses_price_tolerance():
+    c, s = setup(order_refresh_time=1, refresh_tolerance_pct=D("100"), inventory_skew_enabled=True)
+    await s.on_book(book())
+    await s.on_tick(0)
+    c.current = replace(c.current, positions={"BTC": D(1)})
+    await s.on_tick(1)
+    assert [kind for kind, _ in c.calls] == ["place", "cancel", "place"]
+    assert c.calls[-1][1][0].quantity == D("0.5")
+
+
+async def test_fill_bypasses_tolerance_before_refresh_interval():
+    c, s = setup(order_refresh_time=100, refresh_tolerance_pct=D("100"))
+    await s.on_book(book())
+    await s.on_tick(0)
+    await s.on_fill(Fill("BTC", "buy", D(1), D(99), "1-0"))
+    await s.on_tick(1)
+    assert [kind for kind, _ in c.calls] == ["place", "cancel", "place"]
+
+
+async def test_age_crossing_during_tolerance_account_wait_cannot_retain():
+    c, s = setup(order_refresh_time=1, refresh_tolerance_pct=D("100"), max_order_age=10)
+    clock = [0.0]
+    s.context = replace(s.context, clock=lambda: clock[0])
+    await s.on_book(book())
+    await s.on_tick(0)
+
+    async def advance_clock():
+        clock[0] = 11
+
+    c.on_account = advance_clock
+    await s.on_tick(1)
+    assert [kind for kind, _ in c.calls] == ["place", "cancel", "place"]
+
+
+async def test_max_age_forces_cleanup_even_when_timer_is_not_due_and_cancel_is_unknown():
+    c, s = setup(order_refresh_time=1000, refresh_tolerance_pct=D("100"), max_order_age=10)
+    await s.on_book(book())
+    await s.on_tick(0)
+    c.cancel_outcome = "unknown"
+    with pytest.raises(RuntimeError, match="cancellation not confirmed"):
+        await s.on_tick(10)
+    await s.on_tick(1000)
+    assert s.blocked
+    assert [kind for kind, _ in c.calls] == ["place", "cancel"]
+
+
+@pytest.mark.parametrize(
+    "name", ["pure_market_making", "avellaneda_market_making", "inventory_skewed", "grid"]
+)
+def test_all_strategy_configs_share_refresh_controls(name):
+    from glyde_mm.strategies.factory import create_strategy
+
+    values = {"refresh_tolerance_pct": "0.1", "max_order_age": 45}
+    if name == "grid":
+        values.update(lower_price="80", upper_price="120", order_amount="1")
+    c, s = setup()
+    selected = create_strategy(name, s.context, values)
+    assert selected.config.refresh_tolerance_pct == D("0.1")
+    assert selected.config.max_order_age == 45
+    for field, value in (
+        ("refresh_tolerance_pct", "-1"),
+        ("max_order_age", True),
+        ("max_order_age", 0),
+    ):
+        with pytest.raises(ValueError):
+            create_strategy(name, s.context, {**values, field: value})

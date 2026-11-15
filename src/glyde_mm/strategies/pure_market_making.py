@@ -64,6 +64,8 @@ class PureMarketMakingConfig:
     ask_spread: Decimal = Decimal("0.001")
     order_amount: Decimal = Decimal("0.001")
     order_refresh_time: float = 30.0
+    refresh_tolerance_pct: Decimal | None = None
+    max_order_age: float = 300.0
     order_levels: int = 1
     order_level_spread: Decimal = Decimal("0.001")
     order_level_amount: Decimal = ZERO
@@ -80,6 +82,7 @@ class PureMarketMakingConfig:
     reference_stale_seconds: Decimal = Decimal("3")
 
     def __post_init__(self) -> None:
+        validate_refresh_settings(self.refresh_tolerance_pct, self.max_order_age)
         if self.reference_source not in {"glyde", "hyperliquid"}:
             raise ValueError("reference_source must be glyde or hyperliquid")
         require_decimal(self.reference_skew_bps, "reference_skew_bps", minimum=Decimal("-1000"))
@@ -143,6 +146,15 @@ class PureMarketMakingConfig:
             raise ValueError("price_floor must be below price_ceiling")
 
 
+def validate_refresh_settings(tolerance: Decimal | None, max_age: float) -> None:
+    if tolerance is not None:
+        require_decimal(tolerance, "refresh_tolerance_pct")
+        if tolerance > 100:
+            raise ValueError("refresh_tolerance_pct must be <= 100")
+    if isinstance(max_age, bool) or not math.isfinite(max_age) or not 0 < max_age <= 86400:
+        raise ValueError("max_order_age must be positive and at most 86400 seconds")
+
+
 def valid_book(book: Book, symbol: str) -> bool:
     if book.symbol != symbol or not book.bids or not book.asks:
         return False
@@ -200,6 +212,7 @@ class PureMarketMakingStrategy:
         self.blocked = False
         self._active: dict[str, OrderRequest] = {}
         self._last_refresh: float | None = None
+        self._active_since: float | None = None
         self._last_tick = -math.inf
         self._fill_generation = 0
         self._needs_refresh = False
@@ -287,6 +300,32 @@ class PureMarketMakingStrategy:
                     return True
         return False
 
+    def _age_expired(self, now: float) -> bool:
+        return (
+            self._active_since is not None and now - self._active_since >= self.config.max_order_age
+        )
+
+    def _within_tolerance(self, desired: tuple[OrderRequest, ...]) -> bool:
+        tolerance = self.config.refresh_tolerance_pct
+        if tolerance is None or len(desired) != len(self._active):
+            return False
+
+        def key(order: OrderRequest):
+            return order.symbol, order.side, order.price, order.quantity
+
+        for old, new in zip(
+            sorted(self._active.values(), key=key), sorted(desired, key=key), strict=True
+        ):
+            if (old.symbol, old.side, old.quantity, old.reduce_only, old.time_in_force) != (
+                new.symbol,
+                new.side,
+                new.quantity,
+                new.reduce_only,
+                new.time_in_force,
+            ) or abs(new.price - old.price) * 100 > old.price * tolerance:
+                return False
+        return True
+
     async def _cancel_active(self) -> None:
         requests = [
             CancelRequest(self.context.symbol, order_id=oid) for oid, order in self._active.items()
@@ -307,6 +346,7 @@ class PureMarketMakingStrategy:
             ):
                 raise RuntimeError("cancellation identity mismatch")
         self._active.clear()
+        self._active_since = None
 
     async def on_tick(self, now: float | None = None) -> None:
         async with self._lock:
@@ -316,6 +356,7 @@ class PureMarketMakingStrategy:
             if not math.isfinite(now) or now < self._last_tick:
                 raise ValueError("tick time must be finite and monotonic")
             self._last_tick = now
+            clock_start = self.context.clock()
             book = self.book
             due = (
                 self._last_refresh is None
@@ -325,10 +366,35 @@ class PureMarketMakingStrategy:
                 book is not None
                 and not due
                 and not self._needs_refresh
+                and not self._age_expired(now)
                 and not self._must_replace(book)
             ):
                 return
             try:
+                if (
+                    book is not None
+                    and self._active
+                    and self.config.refresh_tolerance_pct is not None
+                    and not self._needs_refresh
+                    and not self._age_expired(now)
+                    and not self._must_replace(book)
+                ):
+                    account = await self.context.client.account()
+                    if self.blocked:
+                        return
+                    elapsed = self.context.clock() - clock_start
+                    if not math.isfinite(elapsed) or elapsed < 0:
+                        raise ValueError("clock must be finite and monotonic")
+                    book = self.book
+                    if (
+                        book is not None
+                        and not self._needs_refresh
+                        and not self._age_expired(now + elapsed)
+                        and not self._must_replace(book)
+                        and self._within_tolerance(self.quotes(book, account))
+                    ):
+                        self._last_refresh = now
+                        return
                 await self._cancel_active()
                 if self.blocked:
                     return
@@ -370,6 +436,7 @@ class PureMarketMakingStrategy:
                         immediate_fill = True
                     elif result.status != "rejected":
                         raise RuntimeError("order outcome unknown")
+                self._active_since = now if self._active else None
                 self._last_refresh = now
                 self._needs_refresh = immediate_fill or generation != self._fill_generation
             except BaseException:
@@ -381,3 +448,4 @@ class PureMarketMakingStrategy:
         async with self._lock:
             await self.context.client.cancel_all(self.context.symbol)
             self._active.clear()
+            self._active_since = None
