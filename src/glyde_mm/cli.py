@@ -18,11 +18,23 @@ from .version import build_identity
 
 
 async def run_with_signals(
-    selected, state_directory: Path, *, allow_existing_exposure: bool = False
-) -> None:
+    selected,
+    state_directory: Path,
+    *,
+    allow_existing_exposure: bool = False,
+    duration_seconds: float | None = None,
+    log_directory: Path | None = None,
+) -> bool:
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     previous = {}
+    timer = None
+    automatic = False
+
+    def automatic_stop() -> None:
+        nonlocal automatic
+        automatic = True
+        stop.set()
 
     def request_stop(*_: object) -> None:
         loop.call_soon_threadsafe(stop.set)
@@ -30,13 +42,22 @@ async def run_with_signals(
     try:
         for kind in (signal.SIGINT, signal.SIGTERM):
             previous[kind] = signal.signal(kind, request_stop)
+        if duration_seconds is not None:
+            if not 0 < duration_seconds <= 1800:
+                raise ValueError("session duration must be in 0..1800 seconds")
+            timer = loop.call_later(duration_seconds, automatic_stop)
+        options = {"log_directory": log_directory} if log_directory is not None else {}
         await run_strategy(
             selected,
             state_directory=state_directory,
             stop_event=stop,
             allow_existing_exposure=allow_existing_exposure,
+            **options,
         )
+        return duration_seconds is None or automatic
     finally:
+        if timer is not None:
+            timer.cancel()
         for kind, handler in previous.items():
             signal.signal(kind, handler)
 
@@ -53,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = config.add_subparsers(dest="config_command", required=True)
     create = sub.add_parser("init")
     create.add_argument("--output", default="glyde-mm.yaml")
-    for name in ("paper", "run", "doctor", "stop"):
+    for name in ("paper", "run", "doctor", "stop", "live-wizard"):
         run = commands.add_parser(name)
         run.add_argument("config_path", nargs="?")
         run.add_argument("--config", dest="config_option")
@@ -69,6 +90,9 @@ def main(argv: list[str] | None = None) -> int:
             run.add_argument(
                 "--private", action="store_true", help="check live read permissions only"
             )
+    dashboard = commands.add_parser("dashboard", help="serve one local read-only bot snapshot")
+    dashboard.add_argument("--state", required=True, type=Path)
+    dashboard.add_argument("--port", type=int, default=8080)
     report = commands.add_parser("report", help="summarize private run logs for a support ticket")
     report.add_argument("logdir", type=Path)
     for name in ("record", "replay"):
@@ -78,6 +102,11 @@ def main(argv: list[str] | None = None) -> int:
         history.add_argument("--book-file", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.command == "dashboard":
+            from .dashboard import serve
+
+            serve(args.state, args.port)
+            return 0
         if args.command == "report":
             from .report import summarize
 
@@ -121,6 +150,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.config_path and args.config_option:
             parser.error("use either a positional config or --config")
         config_path = Path(args.config_path or args.config_option or "glyde-mm.yaml")
+        if args.command == "live-wizard":
+            from .live_wizard import first_live_session
+
+            return asyncio.run(first_live_session(config_path, run_session=run_with_signals))
         if args.command == "doctor":
             from .doctor import check
 
@@ -171,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     except KeyboardInterrupt:
-        return 1 if args.command == "stop" else 0
+        return 1 if args.command in {"stop", "live-wizard"} else 0
     except (ValueError, OSError, OneApiError, RiskViolation, TimeoutError):
         # Exception bodies can include HTTP headers or local credential paths.
         print(

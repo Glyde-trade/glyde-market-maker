@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .client import OneApiClient, OneApiError, book_from_wire, trades_from_wire
 from .config import Config
+from .dashboard import SnapshotPublisher
 from .models import Book
 from .paper import PaperExchange
 from .preflight import check_live_exposure
@@ -71,11 +72,18 @@ async def run(
     stop_event: asyncio.Event | None = None,
     report: Callable[[str], object] = print,
     allow_existing_exposure: bool = False,
+    log_directory: Path | None = None,
 ) -> None:
     stop = stop_event or asyncio.Event()
-    with RunLog(state_directory / "logs", mode=config.mode, strategy=config.strategy) as journal:
+    with RunLog(
+        log_directory if log_directory is not None else state_directory / "logs",
+        mode=config.mode,
+        strategy=config.strategy,
+    ) as journal:
         report(f"GLYDE-MM {journal.identity['version']} commit={journal.identity['commit']}")
         outcome = "completed"
+        observer = SnapshotPublisher(journal.directory / "dashboard.json", config, journal.run_id)
+        report(f"Dashboard state: {observer.path}")
         try:
             async with RunnerControl(config, state_directory, stop):
                 await _run_session(
@@ -88,6 +96,7 @@ async def run(
                     stop_event=stop,
                     report=report,
                     journal=journal,
+                    observer=observer,
                     allow_existing_exposure=allow_existing_exposure,
                 )
             if stop.is_set():
@@ -104,6 +113,7 @@ async def run(
             )
             raise
         finally:
+            observer.finish(outcome)
             journal.emit("run_ended", outcome=outcome)
 
 
@@ -118,6 +128,7 @@ async def _run_session(
     stop_event: asyncio.Event | None = None,
     report: Callable[[str], object] = print,
     journal: RunLog,
+    observer: SnapshotPublisher,
     allow_existing_exposure: bool = False,
 ) -> None:
     selected = {market.symbol: market for market in config.market_configs()}
@@ -334,6 +345,7 @@ async def _run_session(
                             pending_orders=len(guard.pending),
                             paper_fills=len(raw.fills) if config.mode == "paper" else 0,
                         )
+                        await observer.publish(guard, paper=raw if config.mode == "paper" else None)
                         logged = now
                     if config.mode == "paper" and (reported is None or now - reported >= 2):
                         for market_config in selected.values():
@@ -393,6 +405,7 @@ async def _run_session(
                         await managed.close()
                     finally:
                         if config.mode == "paper":
+                            await observer.publish(guard, paper=raw)
                             reason = risk_stop or guard.halted
                             for market_config in selected.values():
                                 await report_paper_status(

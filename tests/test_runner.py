@@ -142,6 +142,12 @@ async def test_paper_places_real_strategy_quotes_through_risk_without_private_re
     assert await paper.open_orders() == []
     assert paper.cancellations >= 1
     assert list(tmp_path.glob("paper-*.json"))
+    from glyde_mm.dashboard import read_snapshot
+
+    displayed = read_snapshot(next(tmp_path.glob("logs/run-*/dashboard.json")))
+    assert displayed["snapshot"]["status"] == "stopped" and displayed["stale"]
+    assert displayed["snapshot"]["quotes"] == []
+    assert displayed["snapshot"]["inventory"] == {}
     events = [
         json.loads(line)
         for line in next(tmp_path.glob("logs/run-*/events.jsonl")).read_text().splitlines()

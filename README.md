@@ -106,6 +106,10 @@ failures return a nonzero exit code.
 
 ## Go live with small, explicit limits
 
+For a guided current-source first session, see [live-wizard](docs/first-live-session.md):
+doctor → two-minute paper preview → typed confirmation → Conservative live run with a
+30-minute auto-stop and private final report. It currently supports one symbol.
+
 Create/authorize an API wallet for your Glyde trading account using Glyde's account controls. Use its
 **trading key**, not a main wallet seed phrase. Use the exact account and any assigned vault/namespace
 from your account's discovery data. A trading key is not a read credential; provide the separate read
@@ -432,6 +436,20 @@ needs network access, credentials or a private account. This example requires th
 current source checkout; it does not claim that a deployed account can trade.
 
 ![Offline paper replay report: completed, 61 books, 2 simulated fills, zero pending orders](docs/images/paper-session-report.svg)
+
+### Local read-only dashboard
+
+Each running bot prints its private dashboard snapshot path. In another terminal:
+
+```sh
+glyde-mm dashboard --state .glyde-mm/logs/run-<id>/dashboard.json --port 8080
+```
+
+Open `http://127.0.0.1:8080` for quotes, recent simulated fills, inventory,
+simulated PnL and risk state. It binds loopback only and has no trading controls or
+authentication. Finished or old snapshots are visibly stale. Live snapshots show
+tracked intents and daily equity change; live fills remain explicitly unavailable.
+See [dashboard scope and privacy](docs/dashboard.md).
 
 ## Multiple markets, one account
 
