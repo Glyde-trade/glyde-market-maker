@@ -165,3 +165,46 @@ The normalized formula is rewritten from Hummingbot's
 
 [Record and replay public books](replay.md) to compare these strategies over the
 same captured window, using simulated funds and the same risk limits.
+
+## PMM ping-pong and scaled levels
+
+Set `ping_pong_enabled: true` in PMM's `strategy_config` for streaming paper.
+Both sides are initially eligible. Each identified fill on a currently tracked
+order, including a partial fill, switches eligibility to the opposite side.
+An opposite fill switches back; it does not re-enable both sides. Duplicate
+trade/order identities and fills for foreign/canceled orders do not switch it.
+All old quotes must receive definitive cancellation before replacement; unknown
+outcomes freeze quoting. An unidentified/mismatched own fill refuses the session.
+A defensive budget of 4096 distinct fills per active quote cohort also stops on
+overflow instead of forgetting dedupe evidence. The cache clears only after
+confirmed cohort cancellation.
+
+This is a deliberate adaptation of Hummingbot's filled-order balancing: Glyde
+uses identified partial fills to alternate whole sides across all ladder levels.
+It does not size an opposite quote to match the previous fill, force reduce-only,
+flatten inventory or promise round-trip profit. Position/notional/loss/rate caps
+still apply. If a band or inventory skew prohibits the needed side, the strategy
+waits; it never substitutes the wrong side. Streaming paper supplies identified
+local fills. Live currently has no qualified private-fill callback, and book-only
+replay has no trade identities, so both refuse this mode before trading.
+
+`price_floor`/`price_ceiling` preserve Hummingbot's directional convention, using
+the quote-reference midpoint: suppress all asks at/below the floor and all bids
+at/above the ceiling. The other side remains eligible. These are not strict limits
+on every order's absolute price and do not close an existing position. They are
+null/disabled by default. Crossing a boundary cancels wrong-side quotes before
+the refresh timer; returning inside restores both eligible sides promptly.
+
+For zero-based level `i`, PMM's bid/ask distance is
+`max(base_spread + i * order_level_spread, minimum_spread)` and base quantity is
+`order_amount + i * order_level_amount`, before optional inventory skew and
+precision rounding. Amount increments must be nonnegative. Levels are additive,
+not compounded percentages. Risk validates the entire ladder; increasing levels
+or amounts never increases the caps.
+
+PMM's Conservative/Balanced/Active presets now expose `ping_pong_enabled: false`
+and null bands explicitly, retaining their prior sizing and live eligibility.
+Python callers may request `strategy_preset(..., ping_pong_enabled=True)`;
+`examples/ping-pong-paper.yaml` shows the editable paper-only combination. Update
+its fixed bands and size reference for your market instead of copying them into
+live settings.

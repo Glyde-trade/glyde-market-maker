@@ -158,3 +158,9 @@ def test_replay_cli_never_uses_live_runner(tmp_path, monkeypatch, capsys):
         cli.main(["replay", "--config", str(cfg), "--book-file", str(path), "--minutes", "1"]) == 0
     )
     assert "PAPER REPLAY" in capsys.readouterr().out
+
+
+async def test_book_only_replay_refuses_ping_pong_without_identified_fills(tmp_path):
+    selected = replace(config(), strategy_config={"ping_pong_enabled": True})
+    with pytest.raises(ValueError, match="identified tape fills"):
+        await replay(selected, tmp_path / "not-read.jsonl", 1)

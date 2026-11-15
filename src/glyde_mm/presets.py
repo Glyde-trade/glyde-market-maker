@@ -20,7 +20,12 @@ def strategy_preset(
     max_position: Decimal,
     *,
     reference_source: str = "glyde",
+    ping_pong_enabled: bool = False,
 ) -> dict:
+    if type(ping_pong_enabled) is not bool or (
+        ping_pong_enabled and strategy != "pure_market_making"
+    ):
+        raise ValueError("ping-pong is a boolean PMM-only option")
     if strategy not in STRATEGIES or preset not in TRADEOFFS:
         raise ValueError("Choose a listed strategy and preset.")
     if any(
@@ -71,6 +76,9 @@ def strategy_preset(
                 inventory_skew_enabled=True,
                 inventory_range_multiplier="1",
                 hanging_orders_enabled=False,
+                ping_pong_enabled=ping_pong_enabled,
+                price_floor=None,
+                price_ceiling=None,
             )
         else:
             values.update(
