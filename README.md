@@ -11,6 +11,10 @@ Glyde to expose the requested One API capabilities and your exact registered acc
 unit tests do not establish that a deployed account is enabled or that live trading is qualified.
 The bot stops on refused or ambiguous actions rather than falling back to another venue.
 
+Follow [Your first market maker in 10 minutes](docs/first-market-maker.md) for the paper → report →
+small-live workflow. See the [strategy chooser](docs/strategies.md#strategy-chooser) and
+[risk-limit FAQ](docs/risk-limits.md) before changing a config.
+
 ## Start in five minutes
 
 **1. Install.** Once the `v0.1.0` GitHub Release is published, install its wheel with
