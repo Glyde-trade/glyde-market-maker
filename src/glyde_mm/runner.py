@@ -12,6 +12,7 @@ from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
+from .alerts import notify_session
 from .client import OneApiClient, OneApiError, book_from_wire, trades_from_wire
 from .config import Config
 from .dashboard import SnapshotPublisher
@@ -84,6 +85,8 @@ async def run(
     ) as journal:
         report(f"GLYDE-MM {journal.identity['version']} commit={journal.identity['commit']}")
         outcome = "completed"
+        failure: BaseException | None = None
+        risk_reasons: list[str] = []
         observer = SnapshotPublisher(journal.directory / "dashboard.json", config, journal.run_id)
         report(f"Dashboard state: {observer.path}")
         try:
@@ -100,10 +103,12 @@ async def run(
                     journal=journal,
                     observer=observer,
                     allow_existing_exposure=allow_existing_exposure,
+                    risk_reasons=risk_reasons,
                 )
             if stop.is_set():
                 outcome = "stopped"
         except BaseException as error:
+            failure = error
             outcome = (
                 "cancelled"
                 if isinstance(error, (asyncio.CancelledError, KeyboardInterrupt))
@@ -117,6 +122,9 @@ async def run(
         finally:
             observer.finish(outcome)
             journal.emit("run_ended", outcome=outcome)
+            await notify_session(
+                config, journal.run_id, outcome, failure, report=report, risk_reasons=risk_reasons
+            )
 
 
 async def _run_session(
@@ -131,6 +139,7 @@ async def _run_session(
     report: Callable[[str], object] = print,
     journal: RunLog,
     observer: SnapshotPublisher,
+    risk_reasons: list[str],
     allow_existing_exposure: bool = False,
 ) -> None:
     selected = {market.symbol: market for market in config.market_configs()}
@@ -386,8 +395,11 @@ async def _run_session(
                             raise
                     if not stop.is_set():
                         raise OneApiError("strategy task exited unexpectedly")
-        except RiskViolation as error:
-            risk_stop = str(error)
+        except BaseException as error:
+            if isinstance(error, RiskViolation):
+                risk_stop = str(error)
+            if guard.halted is not None:
+                risk_reasons.append(guard.halted)
             raise
         finally:
             for task in tasks:

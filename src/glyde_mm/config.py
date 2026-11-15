@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -70,8 +71,16 @@ class Config:
     strategy: str = "pure_market_making"
     strategy_config: dict[str, Any] = field(default_factory=dict)
     risk: RiskConfig = field(default_factory=RiskConfig)
+    alerts_enabled: bool = False
+    alert_webhook_env: str = "GLYDE_MM_ALERT_WEBHOOK"
 
     def __post_init__(self) -> None:
+        if type(self.alerts_enabled) is not bool:
+            raise ValueError("alerts_enabled must be boolean")
+        if not isinstance(self.alert_webhook_env, str) or not re.fullmatch(
+            r"[A-Z_][A-Z_0-9]{0,127}", self.alert_webhook_env
+        ):
+            raise ValueError("alert_webhook_env must be an environment variable name")
         parsed = urlsplit(self.base_url)
         if (
             parsed.scheme not in {"https", "http"}
