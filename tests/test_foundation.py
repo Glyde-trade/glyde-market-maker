@@ -303,3 +303,34 @@ def test_book_rejects_crossed_and_preserves_decimals():
     raw["levels"][1][0]["px"] = "99"
     with pytest.raises(OneApiError):
         book_from_wire(raw)
+
+
+async def test_websocket_application_heartbeat_is_joined_on_exit():
+    import asyncio
+
+    sent = []
+    pinged = asyncio.Event()
+
+    class Socket:
+        async def send(self, raw):
+            sent.append(json.loads(raw))
+            if sent[-1].get("method") == "ping":
+                pinged.set()
+
+        def __aiter__(self):
+            return self.frames()
+
+        async def frames(self):
+            async with asyncio.timeout(1):
+                await pinged.wait()
+            yield '{"channel":"pong"}'
+
+    @asynccontextmanager
+    async def connect(*args, **kwargs):
+        yield Socket()
+
+    async with OneApiClient(Config(), connect_ws=connect, heartbeat_interval=0.001) as api:
+        assert [row async for row in api.stream([])] == [{"channel": "pong"}]
+    count = len(sent)
+    await asyncio.sleep(0.01)
+    assert len(sent) == count

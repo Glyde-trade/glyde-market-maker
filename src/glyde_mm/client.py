@@ -70,10 +70,14 @@ class OneApiClient:
         *,
         http_client: httpx.AsyncClient | None = None,
         connect_ws: Callable = websockets.connect,
+        heartbeat_interval: float = 20,
     ) -> None:
         self.config = config
         self._http = http_client or httpx.AsyncClient(timeout=10, follow_redirects=False)
         self._owns_http = http_client is None
+        if heartbeat_interval <= 0:
+            raise ValueError("heartbeat interval must be positive")
+        self._heartbeat_interval = heartbeat_interval
         self._connect_ws = connect_ws
         self._wallet = None
         self._assets: dict[str, tuple[int, int]] = {}
@@ -353,13 +357,24 @@ class OneApiClient:
         ) as socket:
             for subscription in subscriptions:
                 await socket.send(json.dumps({"method": "subscribe", "subscription": subscription}))
-            async for raw in socket:
-                if not isinstance(raw, str):
-                    raise OneApiError("unexpected binary WebSocket frame")
+
+            async def heartbeat() -> None:
+                while True:
+                    await asyncio.sleep(self._heartbeat_interval)
+                    await socket.send('{"method":"ping"}')
+
+            async with asyncio.TaskGroup() as tasks:
+                task = tasks.create_task(heartbeat())
                 try:
-                    frame = json.loads(raw)
-                except ValueError:
-                    raise OneApiError("invalid WebSocket JSON") from None
-                if not isinstance(frame, dict) or frame.get("channel") == "error":
-                    raise OneApiError("WebSocket subscription refused")
-                yield frame
+                    async for raw in socket:
+                        if not isinstance(raw, str):
+                            raise OneApiError("unexpected binary WebSocket frame")
+                        try:
+                            frame = json.loads(raw)
+                        except ValueError:
+                            raise OneApiError("invalid WebSocket JSON") from None
+                        if not isinstance(frame, dict) or frame.get("channel") == "error":
+                            raise OneApiError("WebSocket subscription refused")
+                        yield frame
+                finally:
+                    task.cancel()
