@@ -209,6 +209,10 @@ class LiveStateClient:
         results = await self.cancel_orders(requests)
         if any(row.status not in {"cancelled", "already_closed"} for row in results):
             raise OneApiError("live cleanup cancellation unconfirmed")
+        if self._failure is not None:
+            # Every retained ID has a confirmed terminal/cancel receipt. A dead read stream
+            # cannot confirm a new snapshot, and remains latched against reads or new orders.
+            return
         await self._current()
         async with asyncio.timeout(2):
             while any(symbol is None or row.symbol == symbol for row in self._orders):
