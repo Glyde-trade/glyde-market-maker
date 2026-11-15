@@ -1,4 +1,6 @@
 # Set this explicit price band around the current BTC book before starting.
+# Or choose grid in `glyde-mm init` for a cap-budgeted beginner preset.
+# Levels span the whole fixed band; they do not re-center with the market.
 mode: paper
 base_url: https://api.glyde.trade/v1
 symbol: BTC

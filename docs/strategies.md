@@ -4,6 +4,19 @@ Copy an example, then run `glyde-mm paper --config YOUR_COPY.yaml`.
 Amounts are base-asset units; spreads are fractions (`0.002` = 0.2%). Check the
 current price, venue minimum and risk caps before changing to live mode.
 
+## Strategy chooser
+
+| Strategy key | What changes | Paper experiment | Important behavior |
+| --- | --- | --- | --- |
+| `pure_market_making` | Fixed spreads around the moving midpoint; optional linear inventory sizing | Learn quote placement, refresh and cancellation | Extra levels and size skew share the same position cap |
+| `avellaneda_market_making` | Reservation price/spread respond to sampled volatility and inventory | Compare adaptive prices with fixed spreads | Needs consecutive moving-price samples; gaps restart warmup |
+| `inventory_skewed` | Avellaneda prices plus smaller inventory-increasing quotes | Explore reducing new exposure away from a signed target | Shares Avellaneda warmup; never upsizes to chase the target |
+| `grid` | Fixed levels within your chosen price band | Explore a configured range | Quotes retire outside the band; the band does not track the market |
+
+Conservative, Balanced and Active are editable paper **presets**, not additional strategies or
+profit/risk guarantees. Start with the [first-run tutorial](first-market-maker.md) and keep the
+[risk limits](risk-limits.md) explicit. See the [inventory-skewed example](../examples/inventory-skewed-paper.yaml).
+
 ### Pure market making — [paper.yaml](../examples/paper.yaml)
 
 Quotes a bid and ask at fixed distances from the moving midpoint.  

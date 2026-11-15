@@ -6,10 +6,19 @@ Strategy designs are adapted from [Hummingbot](https://github.com/hummingbot/hum
 
 ## Current status
 
-Paper and explicit live commands share the strategy/risk runner. Live connectivity still requires
-Glyde to expose the requested One API capabilities and your exact registered account permissions;
-unit tests do not establish that a deployed account is enabled or that live trading is qualified.
-The bot stops on refused or ambiguous actions rather than falling back to another venue.
+`glyde-mm paper <config>` runs the selected strategy through the risk layer into the paper
+exchange: it places simulated quotes, fills them against subsequent public books and cancels
+remaining quotes on exit. It never sends a trading action or reads signing credentials.
+
+`glyde-mm run <config>` with `mode: live` sends orders and cancellations through the same risk
+boundary to One API, using Hyperliquid-compatible SDK signing and the configured vault namespace.
+Offline CLI tests exercise paper fills, signed live placement/cancellation and risk refusals before
+submission. They do not qualify a deployed account: live use still requires the API capabilities,
+registered account permissions and credentials. Refused or ambiguous actions stop quoting.
+
+Follow [Your first market maker in 10 minutes](docs/first-market-maker.md) for the paper → report →
+small-live workflow. See the [strategy chooser](docs/strategies.md#strategy-chooser) and
+[risk-limit FAQ](docs/risk-limits.md) before changing a config.
 
 ## Start in five minutes
 
@@ -59,12 +68,26 @@ orders go through the same risk boundary; `paper` forces simulation even if the 
 glyde-mm doctor glyde-mm.yaml
 ```
 
-Doctor validates the YAML and strategy settings, reports whether the configured key environment
-variables are present, and makes one public metadata request to `base_url` (by default
-`https://api.glyde.trade/v1/info`). It never prints key values, sends private credentials, opens a
-WebSocket or submits an order. Missing keys are optional in paper mode and fail the check in live
-mode. Invalid config, an unavailable API or an unavailable market also returns a nonzero exit code.
-A passing public check does not verify key validity, account permissions or live execution.
+Doctor validates YAML and strategy settings and checks public metadata plus a fresh
+book. It reports the quantity step and the runner's price tick at the current
+midpoint. The public metadata does not expose minimum order size/notional, so
+those limits are reported as unavailable rather than inferred from precision.
+Missing keys are optional in paper mode and fail the check in live mode.
+
+Ordinary doctor runs never send credentials. To check your configured live
+account's read permissions explicitly:
+
+```sh
+glyde-mm doctor live.yaml --private
+```
+
+This performs only authenticated `clearinghouseState` and `openOrders` reads;
+it prints neither balances nor addresses nor key values. Paper configurations
+refuse `--private` before connecting. Doctor never opens a WebSocket, constructs
+a signing wallet or submits an order. Even a successful private check does not
+prove trading-key authorization or that a live order would be accepted.
+Configuration, connectivity, stale/missing book and requested read-permission
+failures return a nonzero exit code.
 
 ## Go live with small, explicit limits
 
@@ -111,6 +134,27 @@ moves quotes outside the band. Grid uses the same risk limits and cancel-before-
 ```sh
 glyde-mm paper examples/grid-paper.yaml
 ```
+
+For a beginner preset, run `glyde-mm init --output grid.yaml`, choose **grid**,
+then Conservative, Balanced or Active. Enter the current reference price: the
+wizard fixes a band at 90–110% of that value and budgets sizes within your caps.
+The band stays fixed until you edit the YAML; it does not follow a moving market.
+
+| Preset | Fixed levels | Refresh | Trade-off |
+| --- | --- | --- | --- |
+| Conservative | 3 | 60 seconds | Fewer, wider-spaced quotes and lower turnover |
+| Balanced | 5 | 30 seconds | More coverage inside the same band |
+| Active | 7 | 10 seconds | Denser quotes and more cancellation/refresh activity |
+
+`levels` counts the whole band, not levels per side. Midpoint, too-close and
+coarse-tick duplicate levels are skipped. All levels share the position cap;
+adding levels does not grant extra exposure. Try `glyde-mm doctor grid.yaml`,
+then `glyde-mm paper grid.yaml`. No preset enables live trading.
+
+The linear-level design references
+[Hummingbot's grid executor](https://github.com/hummingbot/hummingbot/blob/9af100d6822da7d2d0291a906c730ef172284ee2/hummingbot/strategy_v2/executors/grid_executor/grid_executor.py)
+(Apache-2.0; see NOTICE). This is a simple two-sided quoting grid using Glyde's
+shared lifecycle, without a separate paired take-profit executor or profit guarantee.
 
 ## Inventory-skewed quoting
 

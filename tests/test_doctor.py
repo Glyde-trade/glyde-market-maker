@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import socket
+import time
 
 import httpx
 import pytest
@@ -25,11 +26,21 @@ def install_public_info(monkeypatch, *, payload=None, failure=False):
 
     def handle(request):
         assert request.url.path == "/v1/info"
-        assert json.loads(request.content) == {"type": "meta"}
+        body = json.loads(request.content)
+        assert body["type"] in {"meta", "l2Book"}
         assert "X-Glyde-API-Key" not in request.headers
         calls.append(request)
         if failure:
             raise httpx.ConnectError("never-print-transport-secret", request=request)
+        if body["type"] == "l2Book":
+            return httpx.Response(
+                200,
+                json={
+                    "coin": "BTC",
+                    "time": time.time_ns() // 1_000_000,
+                    "levels": [[{"px": "99999", "sz": "1"}], [{"px": "100001", "sz": "1"}]],
+                },
+            )
         return httpx.Response(
             200,
             json=payload
@@ -71,7 +82,7 @@ def test_paper_doctor_checks_public_info_once_without_keys(configuration, monkey
     assert "Trading key: absent (optional in paper mode)" in output
     assert "Read key: absent (optional in paper mode)" in output
     assert "Public info: OK" in output
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_live_missing_keys_fails_but_still_checks_public_connectivity(
@@ -88,7 +99,7 @@ def test_live_missing_keys_fails_but_still_checks_public_connectivity(
     assert "Trading key: absent (required in live mode)" in output
     assert "Read key: absent (required in live mode)" in output
     assert "Public info: OK" in output
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_key_presence_never_prints_values_or_authorizes_private_calls(
@@ -107,7 +118,7 @@ def test_key_presence_never_prints_values_or_authorizes_private_calls(
     assert "Trading key: present" in output
     assert "Read key: present" in output
     assert "DO-NOT-PRINT" not in output
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 @pytest.mark.parametrize(
@@ -183,7 +194,7 @@ def test_default_config_and_custom_key_names(configuration, monkeypatch, capsys)
     assert "Trading key: present" in output
     assert "Read key: present" in output
     assert "test-value" not in output
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_invalid_url_is_a_safe_public_failure(configuration, monkeypatch, capsys):
@@ -197,3 +208,114 @@ def test_invalid_url_is_a_safe_public_failure(configuration, monkeypatch, capsys
     output = capsys.readouterr().out
     assert "Public info: FAIL" in output
     assert "secret" not in output
+
+
+def test_market_precision_and_tick_are_distinct_from_unavailable_minima(
+    configuration, monkeypatch, capsys
+):
+    install_public_info(monkeypatch)
+    assert main(["doctor", str(configuration)]) == 0
+    output = capsys.readouterr().out
+    assert "Quantity step: 0.00001" in output
+    assert "Runner price tick at current midpoint: 10" in output
+    assert "Venue minimum order size/notional: unavailable" in output
+    assert "Signing/trading permissions and live execution are not verified" in output
+
+
+@pytest.mark.parametrize("refused", [False, True])
+def test_explicit_live_private_check_only_reads_never_signs_or_prints_account(
+    configuration, monkeypatch, capsys, refused
+):
+    from glyde_mm import doctor
+    from glyde_mm.client import EthAccount
+
+    values = yaml.safe_load(configuration.read_text())
+    values.update(mode="live", owner="0x" + "1" * 40, vault_address="0x" + "2" * 40)
+    configuration.write_text(yaml.safe_dump(values))
+    calls = []
+
+    def handle(request):
+        assert request.url.path == "/v1/info"
+        kind = json.loads(request.content)["type"]
+        calls.append(kind)
+        if kind in {"openOrders", "clearinghouseState"}:
+            assert request.headers["X-Glyde-API-Key"] == "private-read-value"
+            if refused:
+                return httpx.Response(403, json={"error": "NEVER_PRINT_ACCOUNT_SECRET"})
+            if kind == "openOrders":
+                return httpx.Response(200, json=[])
+            return httpx.Response(
+                200,
+                json={
+                    "marginSummary": {"accountValue": "987654321.12"},
+                    "withdrawable": "12345678.90",
+                    "assetPositions": [],
+                },
+            )
+        assert "X-Glyde-API-Key" not in request.headers
+        if kind == "meta":
+            return httpx.Response(200, json={"universe": [{"name": "BTC", "szDecimals": 5}]})
+        assert kind == "l2Book"
+        return httpx.Response(
+            200,
+            json={
+                "coin": "BTC",
+                "time": time.time_ns() // 1_000_000,
+                "levels": [[{"px": "99", "sz": "1"}], [{"px": "101", "sz": "1"}]],
+            },
+        )
+
+    class ReadClient(OneApiClient):
+        def __init__(self, config):
+            super().__init__(
+                config, http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle))
+            )
+
+        async def close(self):
+            await self._http.aclose()
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("doctor must never construct a signing wallet")
+
+    monkeypatch.setattr(EthAccount, "from_key", forbidden)
+    monkeypatch.setattr(doctor, "OneApiClient", ReadClient)
+    monkeypatch.setenv("GLYDE_API_PRIVATE_KEY", "not-a-real-signing-key")
+    monkeypatch.setenv("GLYDE_READ_API_KEY", "private-read-value")
+    assert main(["doctor", str(configuration), "--private"]) == int(refused)
+    output = capsys.readouterr().out
+    assert "Private reads: " + ("FAIL" if refused else "OK") in output
+    assert not any(
+        value in output
+        for value in (
+            "not-a-real-signing-key",
+            "private-read-value",
+            "987654321",
+            "12345678",
+            "NEVER_PRINT",
+        )
+    )
+    assert calls == ["meta", "l2Book", "clearinghouseState"] + ([] if refused else ["openOrders"])
+
+
+def test_private_check_refuses_paper_mode_before_any_network(configuration, monkeypatch, capsys):
+    calls = install_public_info(monkeypatch)
+    assert main(["doctor", str(configuration), "--private"]) == 1
+    assert "Configuration: FAIL" in capsys.readouterr().out
+    assert calls == []
+
+
+def test_stale_public_book_fails_without_private_reads(configuration, monkeypatch, capsys):
+    from decimal import Decimal
+
+    from glyde_mm import doctor
+    from glyde_mm.models import Book, Level
+
+    calls = install_public_info(monkeypatch)
+
+    async def old_book(self, symbol):
+        return Book("BTC", (Level(Decimal(99), Decimal(1)),), (Level(Decimal(101), Decimal(1)),), 1)
+
+    monkeypatch.setattr(doctor.OneApiClient, "book", old_book)
+    assert main(["doctor", str(configuration)]) == 1
+    assert "Public info: FAIL" in capsys.readouterr().out
+    assert len(calls) == 1
