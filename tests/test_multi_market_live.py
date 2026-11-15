@@ -101,7 +101,7 @@ async def test_one_live_ws_stale_market_retires_other_keeps_quoting_and_recovers
             max_position=D(1),
             max_order_notional=D(25),
             max_total_notional=D(50),
-            stale_book_seconds=D("0.3"),
+            stale_book_seconds=D(30) if expire_during_pretrade else D("0.3"),
             max_orders_per_minute=600,
         ),
     )
@@ -117,7 +117,8 @@ async def test_one_live_ws_stale_market_retires_other_keeps_quoting_and_recovers
             assert orders[0].symbol == "BTC"
             # Cross the freshness boundary after refresh_markets, before shared-risk validation.
             managed.guard.books["ETH"] = replace(
-                managed.guard.books["ETH"], received_at=time.monotonic() - 1
+                managed.guard.books["ETH"],
+                received_at=time.monotonic() - managed.guard.limits.stale_book_seconds - 1,
             )
             injected = True
         return await original_place(managed, orders)
