@@ -326,12 +326,18 @@ For diagnostic logs, use `glyde-mm report path/to/.glyde-mm/logs`.
 | `read_api_key_env` | Name of a separate private-read credential variable |
 | `strategy_config.ping_pong_enabled` | PMM paper-only boolean, default false: start both sides, then quote only opposite the latest identified fill (partials count) |
 | `strategy_config.price_floor` / `price_ceiling` | Optional quote-reference price bands: pull asks at/below the floor and bids at/above the ceiling; re-enter promptly when permitted |
-| `strategy_config.order_levels` | PMM/Avellaneda levels per side, 1–50 |
+| `strategy_config.order_levels` | PMM/Avellaneda levels per side, 1–50; default 1 (no ladder) |
 | `strategy_config.order_level_spread` | Add this fraction of reference price per level (e.g. `'0.001'` = 0.1% spacing) |
 | `strategy_config.order_level_amount` | Add this nonnegative base quantity per level; every level still shares risk caps |
 | `strategy_config.order_amount` | Quantity per level in base units |
 | `strategy_config.bid_spread` / `ask_spread` | Fractions around the reference price |
 | `strategy_config.order_refresh_time` | Seconds between quote comparisons; default 30 |
+| `strategy_config.inventory_skew_enabled` | PMM sizing skew, default false; enabling it can enlarge one side up to 2x, still subject to shared risk caps |
+| `strategy_config.inventory_target_base_ratio` | Optional PMM target signed position value / account equity, fraction 0–1; `'0.01'` targets 1% long exposure, `'0'` flat; requires inventory skew |
+| `strategy_config.inventory_target_position` | Existing signed base-unit target, default zero; cannot combine a nonzero position target with a ratio target |
+| `strategy_config.inventory_range_multiplier` | Positive skew range multiplier, default 1, times total two-sided ladder quantity; ratio mode caps the range at half equity / quote-reference price |
+| `strategy_config.order_refresh_tolerance_pct` | Optional PMM spelling for refresh tolerance in percentage points (`'0.1'` = 0.1%); default null/off; cannot combine with `refresh_tolerance_pct` |
+| `strategy_config.filled_order_delay` | PMM streaming-paper delay in seconds after an identified own fill (partials count); default 0/off, at most 86400. Cancels remaining quotes and waits before new placement; live refuses this option until private-fill delivery is qualified |
 | `strategy_config.refresh_tolerance_pct` | Keep original IDs when every planned price moves by at most this percentage of its old price (`'0.1'` = 0.1%); `null` default disables tolerance, `'0'` keeps exact matches |
 | `strategy_config.max_order_age` | Retire quotes after this many seconds regardless of tolerance or refresh interval; default 300, maximum 86400 |
 | `risk.max_orders_per_minute` | Integer 1–6000, default 60; rolling count of individual submitted orders across all batches, including venue refusals; exceeding it stops quoting and cancels |
@@ -340,6 +346,15 @@ For diagnostic logs, use `glyde-mm report path/to/.glyde-mm/logs`.
 | `risk.max_daily_loss` | Daily equity-loss kill switch in USDC |
 | `risk.stale_book_seconds` | Maximum book source/arrival age |
 | `risk.account_age_seconds` | Maximum account-observation age |
+
+PMM sizing follows Hummingbot's linear bid/ask adjustment, adapted to signed perpetual
+position value and account equity rather than spot wallet balances. At the target both
+sides keep their configured size; above target bids shrink and asks grow, and below target
+the opposite happens. The range and every configured ladder level affect that sizing.
+No strategy setting raises the account's position, notional, order-rate or loss limits.
+A fill delay is conservative: identified partial fills also pause quoting, duplicate
+prints do not extend it, and stale-source/stop cleanup continues during the pause.
+See the [Hummingbot PMM reference](https://github.com/hummingbot/hummingbot/tree/master/hummingbot/strategy/pure_market_making).
 
 Refresh controls apply to all strategies. Fills, changed quantities, price bands and safety
 checks override tolerance. No hanging-order mode is enabled: every tracked quote must be
