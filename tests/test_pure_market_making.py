@@ -342,3 +342,188 @@ def test_all_strategy_configs_share_refresh_controls(name):
     ):
         with pytest.raises(ValueError):
             create_strategy(name, s.context, {**values, field: value})
+
+
+async def test_ping_pong_partials_alternate_and_duplicate_or_foreign_fills_cannot_turn_it():
+    c, s = setup(ping_pong_enabled=True, order_refresh_time=1000, refresh_tolerance_pct=D(100))
+    await s.on_book(book())
+    await s.on_tick(0)
+    buy = Fill("BTC", "buy", D(".1"), D(99), "1-0", trade_id="buy-one")
+    sell = Fill("BTC", "sell", D(".1"), D(102), "1-1", trade_id="sell-one")
+    await s.on_fill(buy)
+    assert {order.side for order in s.quotes(book(), c.current)} == {"sell"}
+    await s.on_fill(sell)
+    await s.on_fill(buy)  # A duplicate must not override the subsequent opposite-side print.
+    await s.on_fill(replace(buy, symbol="ETH", trade_id="foreign"))
+    assert {order.side for order in s.quotes(book(), c.current)} == {"buy"}
+    await s.on_tick(1)
+    assert [kind for kind, _ in c.calls] == ["place", "cancel", "place"]
+    assert {order.side for order in c.calls[-1][1]} == {"buy"}
+    await s.on_fill(replace(sell, trade_id="late-cancelled-order"))
+    assert {order.side for order in s.quotes(book(), c.current)} == {"buy"}
+    await s.on_fill(Fill("BTC", "buy", D(".1"), D(99), "2-0", trade_id="buy-two"))
+    await s.on_tick(2)
+    assert {order.side for order in c.calls[-1][1]} == {"sell"}
+    await s.on_tick(3)
+    assert len(c.calls) == 5  # No opposite fill: no arbitrary return to two-sided quoting.
+
+
+async def test_ping_pong_unknown_cancel_blocks_opposite_replacement():
+    c, s = setup(ping_pong_enabled=True)
+    await s.on_book(book())
+    await s.on_tick(0)
+    await s.on_fill(Fill("BTC", "buy", D(".1"), D(99), "1-0", trade_id="fill"))
+    c.cancel_outcome = "unknown"
+    with pytest.raises(RuntimeError, match="cancellation not confirmed"):
+        await s.on_tick(1)
+    await s.on_tick(100)
+    assert s.blocked and [kind for kind, _ in c.calls] == ["place", "cancel"]
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"trade_id": None},
+        {"side": "sell"},
+        {"quantity": D(2)},
+        {"price": D(100)},
+        {"client_order_id": "different"},
+    ],
+)
+async def test_ping_pong_unidentified_or_mismatched_own_fill_freezes(patch):
+    c, s = setup(ping_pong_enabled=True)
+    await s.on_book(book())
+    await s.on_tick(0)
+    with pytest.raises(RuntimeError, match="ping_pong_fill_evidence"):
+        await s.on_fill(
+            replace(Fill("BTC", "buy", D(".1"), D(99), "1-0", trade_id="fill"), **patch)
+        )
+    await s.on_tick(1)
+    assert s.blocked and [kind for kind, _ in c.calls] == ["place"]
+    await s.stop()
+    assert c.calls[-1] == ("all", "BTC")
+
+
+async def test_bands_pull_wrong_side_before_timer_and_restore_on_reentry():
+    c, s = setup(
+        price_floor=D(95),
+        price_ceiling=D(105),
+        order_refresh_time=1000,
+        refresh_tolerance_pct=D(100),
+        order_levels=3,
+        order_level_amount=D(1),
+    )
+    await s.on_book(book())
+    await s.on_tick(0)
+    await s.on_book(book("105", 2))
+    await s.on_tick(1)
+    assert [kind for kind, _ in c.calls] == ["place", "cancel", "place"]
+    assert [order.side for order in c.calls[-1][1]] == ["sell"] * 3
+    assert [order.quantity for order in c.calls[-1][1]] == list(map(D, (1, 2, 3)))
+    await s.on_book(book("95", 3))
+    await s.on_tick(2)
+    assert [order.side for order in c.calls[-1][1]] == ["buy"] * 3
+    await s.on_book(book("100", 4))
+    await s.on_tick(3)
+    assert len(c.calls[-1][1]) == 6
+    assert [kind for kind, _ in c.calls] == [
+        "place",
+        "cancel",
+        "place",
+        "cancel",
+        "place",
+        "cancel",
+        "place",
+    ]
+
+
+async def test_ping_pong_never_overrides_a_price_band():
+    c, s = setup(ping_pong_enabled=True, price_ceiling=D(105), order_refresh_time=1000)
+    await s.on_book(book("105"))
+    await s.on_tick(0)
+    assert [order.side for order in c.calls[-1][1]] == ["sell"]
+    await s.on_fill(Fill("BTC", "sell", D(".1"), D("107.1"), "1-0", trade_id="sell"))
+    await s.on_tick(1)
+    assert not s._active  # Opposite bids remain prohibited at the ceiling.
+    assert [kind for kind, _ in c.calls] == ["place", "cancel"]
+    await s.on_book(book("100", 2))
+    await s.on_tick(2)
+    assert [order.side for order in c.calls[-1][1]] == ["buy"]
+
+
+@pytest.mark.parametrize("flag", ["true", 1, None])
+def test_ping_pong_flag_refuses_boolean_coercion(flag):
+    with pytest.raises(ValueError, match="boolean"):
+        PureMarketMakingConfig(ping_pong_enabled=flag)
+
+
+async def managed_paper_strategy(**values):
+    from glyde_mm.paper import PaperExchange
+    from glyde_mm.risk import RiskGuard, RiskLimits, RiskManagedClient
+
+    clock = [1000.0]
+
+    class Simulated(PaperExchange):
+        async def account(self):
+            return replace(await super().account(), received_at=clock[0])
+
+    raw = Simulated(D(1000), clock_ms=lambda: int(clock[0] * 1000))
+    raw.use_trade_tape()
+    observed = replace(book(timestamp=1000000), received_at=1000.0)
+    await raw.on_book(observed)
+    guard = RiskGuard(
+        RiskLimits(max_position=D("2.5"), max_order_notional=D(1000), max_daily_loss=D(100)),
+        clock=lambda: clock[0],
+        wall_clock=lambda: clock[0],
+    )
+    guard.update_book(observed)
+    client = RiskManagedClient(raw, guard, cleanup_symbol="BTC")
+    context = StrategyContext(client, "BTC", D(".01"), D(".001"), clock=lambda: clock[0])
+    selected = PureMarketMakingConfig(
+        order_amount=D(1), bid_spread=D(".01"), ask_spread=D(".02"), **values
+    )
+    strategy = PureMarketMakingStrategy(context, selected)
+    await strategy.on_book(observed)
+    return raw, client, strategy, clock
+
+
+async def test_ping_pong_real_tape_partial_fills_and_risk_boundary_preserve_cash():
+    from glyde_mm.models import Trade
+
+    raw, client, s, clock = await managed_paper_strategy(ping_pong_enabled=True)
+    try:
+        await s.on_tick()
+        assert {order.side for order in await raw.open_orders()} == {"buy", "sell"}
+        clock[0] = 1000.001
+        await raw.on_trade(Trade("BTC", "sell", D(".25"), D(98), 1000001, "first"))
+        await s.on_fill(raw.fills[-1])
+        clock[0] = 1000.25
+        await s.on_tick()
+        assert [order.side for order in await raw.open_orders()] == ["sell"]
+        assert (await raw.account()).positions["BTC"] == D(".25")
+        clock[0] = 1000.251
+        await raw.on_trade(Trade("BTC", "buy", D(".25"), D(103), 1000251, "opposite"))
+        await s.on_fill(raw.fills[-1])
+        clock[0] = 1000.5
+        await s.on_tick()
+        assert [order.side for order in await raw.open_orders()] == ["buy"]
+        assert (await raw.account()).positions["BTC"] == 0
+        assert (await raw.account()).equity == D("1000.75")
+        assert len(raw.fills) == 2 and len(client.guard._order_attempts) == 4
+    finally:
+        await s.stop()
+        await client.close()
+    assert not await raw.open_orders()
+
+
+async def test_scaled_ladder_cannot_escape_shared_position_cap():
+    raw, client, s, _ = await managed_paper_strategy(order_levels=2, order_level_amount=D(1))
+    try:
+        with pytest.raises(RuntimeError, match="max_position"):
+            await s.on_tick()
+        assert not raw.fills and not await raw.open_orders()
+        assert (await raw.account()).equity == 1000
+        assert not client.guard._order_attempts
+    finally:
+        await s.stop()
+        await client.close()

@@ -318,6 +318,11 @@ For diagnostic logs, use `glyde-mm report path/to/.glyde-mm/logs`.
 | `owner` / `vault_address` | Public registered account and assigned namespace, never inferred |
 | `private_key_env` | Name of the signing-key environment variable |
 | `read_api_key_env` | Name of a separate private-read credential variable |
+| `strategy_config.ping_pong_enabled` | PMM paper-only boolean, default false: start both sides, then quote only opposite the latest identified fill (partials count) |
+| `strategy_config.price_floor` / `price_ceiling` | Optional quote-reference price bands: pull asks at/below the floor and bids at/above the ceiling; re-enter promptly when permitted |
+| `strategy_config.order_levels` | PMM/Avellaneda levels per side, 1–50 |
+| `strategy_config.order_level_spread` | Add this fraction of reference price per level (e.g. `'0.001'` = 0.1% spacing) |
+| `strategy_config.order_level_amount` | Add this nonnegative base quantity per level; every level still shares risk caps |
 | `strategy_config.order_amount` | Quantity per level in base units |
 | `strategy_config.bid_spread` / `ask_spread` | Fractions around the reference price |
 | `strategy_config.order_refresh_time` | Seconds between quote comparisons; default 30 |
@@ -559,6 +564,19 @@ trade snapshots/updates and subscription acknowledgements. It forbids sockets,
 credential reads and private requests. See the [fixture provenance](tests/fixtures/one-api-public/README.md):
 the initial recording is synthetic, so these checks catch client wire regressions
 without claiming the production service is reachable or qualified.
+
+### PMM ping-pong, bands and ladders
+
+```sh
+glyde-mm paper examples/ping-pong-paper.yaml
+```
+
+The example combines three scaled levels, optional fixed price bands and paper
+ping-pong. A partial fill switches to the opposite side only after confirmed
+cancellation of the old quotes. Bands and risk caps still apply, even if that
+leaves no eligible side. This is direction alternation, not a guarantee of flat
+inventory or a paired profit exit. Live mode and book-only replay refuse ping-pong
+until identified own-fill delivery is available. See [strategy details](docs/strategies.md).
 
 ## Paper versus live execution report
 

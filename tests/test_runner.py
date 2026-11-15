@@ -392,3 +392,17 @@ async def test_invalid_public_tape_stops_and_cancels_paper_quotes(tmp_path, data
         )
     assert len(paper.submissions) == 2 and source.live_orders == []
     assert not paper.fills and not await paper.open_orders()
+
+
+async def test_live_ping_pong_refuses_before_client_or_cleanup_authority(tmp_path):
+    selected = config("live")
+    selected = replace(
+        selected, strategy_config={**selected.strategy_config, "ping_pong_enabled": True}
+    )
+    with pytest.raises(ValueError, match="requires paper tape"):
+        await run(
+            selected,
+            state_directory=tmp_path,
+            client_factory=lambda _: pytest.fail("no live client for unqualified fill mode"),
+            report=lambda _: None,
+        )
