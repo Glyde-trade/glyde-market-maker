@@ -277,7 +277,7 @@ def test_config_init_is_exclusive_private_paper_and_has_no_key(tmp_path):
     assert main(["config", "init", "--output", str(tmp_path / "cli.yaml")]) == 0
 
 
-def test_live_cli_blocked_until_risk_integration(tmp_path, capsys):
+def test_live_cli_refuses_missing_registration_before_network(tmp_path, capsys):
     path = tmp_path / "config.yaml"
     path.write_text("mode: live\n")
     assert main(["run", "--config", str(path)]) == 1
@@ -400,6 +400,35 @@ async def test_paper_duplicate_cut_cannot_replay_consumed_liquidity():
     assert sum(row.quantity for row in paper.fills) == D("0.25")
 
 
+async def test_stream_can_be_closed_after_one_frame_without_exception_group():
+    import asyncio
+
+    closed = asyncio.Event()
+
+    class Socket:
+        async def send(self, raw):
+            pass
+
+        def __aiter__(self):
+            return self.frames()
+
+        async def frames(self):
+            yield '{"channel":"trades","data":[]}'
+            await asyncio.Event().wait()
+
+    @asynccontextmanager
+    async def connect(*args, **kwargs):
+        try:
+            yield Socket()
+        finally:
+            closed.set()
+
+    async with OneApiClient(Config(), connect_ws=connect) as api:
+        stream = api.stream([{"type": "trades", "coin": "BTC"}])
+        assert (await anext(stream))["channel"] == "trades"
+        await stream.aclose()
+        assert closed.is_set()
+
 async def test_paper_terminal_cancellation_requires_retained_own_proof():
     paper = PaperExchange()
     await paper.on_book(book())
@@ -429,3 +458,4 @@ async def test_paper_repeated_cancel_has_bounded_terminal_proof():
         paper._remember_terminal(f"synthetic-{index}", OrderRequest("BTC", "buy", D(1), D(99)))
     assert len(paper._terminal) == 4096
     assert (await paper.cancel_orders([request]))[0].status == "rejected"
+

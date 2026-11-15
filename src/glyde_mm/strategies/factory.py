@@ -6,6 +6,8 @@ from dataclasses import fields
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from .avellaneda_market_making import AvellanedaConfig, AvellanedaMarketMakingStrategy
+from .grid import GridConfig, GridStrategy
 from .pure_market_making import (
     PureMarketMakingConfig,
     PureMarketMakingStrategy,
@@ -20,7 +22,13 @@ def parse_config(cls: type, values: dict[str, Any]):
     converted = dict(values)
     for key, value in values.items():
         default = definitions[key].default
-        if isinstance(default, Decimal) or key in {"price_floor", "price_ceiling"}:
+        if isinstance(default, Decimal) or key in {
+            "price_floor",
+            "price_ceiling",
+            "lower_price",
+            "upper_price",
+            "order_amount",
+        }:
             if value is None and default is None:
                 continue
             try:
@@ -35,6 +43,10 @@ def parse_config(cls: type, values: dict[str, Any]):
 
 
 def create_strategy(name: str, context: StrategyContext, values: dict[str, Any]):
+    if name == "avellaneda_market_making":
+        return AvellanedaMarketMakingStrategy(context, parse_config(AvellanedaConfig, values))
+    if name == "grid":
+        return GridStrategy(context, parse_config(GridConfig, values))
     if name != "pure_market_making":
         raise ValueError(f"unsupported strategy: {name}")
     return PureMarketMakingStrategy(context, parse_config(PureMarketMakingConfig, values))

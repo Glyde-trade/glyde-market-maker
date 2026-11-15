@@ -220,11 +220,18 @@ class RiskGuard:
 class RiskManagedClient:
     """The sole strategy write boundary; unknown outcomes never trigger a resend."""
 
-    def __init__(self, client: TradingClient, guard: RiskGuard) -> None:
+    def __init__(
+        self, client: TradingClient, guard: RiskGuard, *, stop_event: asyncio.Event | None = None
+    ) -> None:
         self.client, self.guard = client, guard
         self._lock = asyncio.Lock()
         self._order_ids: dict[str, str] = {}
         self._closed = False
+        self._stop_event = stop_event
+
+    def _ensure_running(self) -> None:
+        if self._closed or (self._stop_event is not None and self._stop_event.is_set()):
+            raise RiskViolation("client_closed")
 
     async def _cancel_and_halt(self, reason: str) -> None:
         self.guard.halted = self.guard.halted or reason
@@ -233,8 +240,7 @@ class RiskManagedClient:
 
     async def place_orders(self, orders: Sequence[OrderRequest]) -> list[OrderResult]:
         async with self._lock:
-            if self._closed:
-                raise RiskViolation("client_closed")
+            self._ensure_running()
             if not orders:
                 return []
             reserved: list[str] = []
@@ -247,6 +253,7 @@ class RiskManagedClient:
             try:
                 self.guard.update_account(await self.client.account())
                 self.guard.set_open_orders(await self.client.open_orders())
+                self._ensure_running()
                 for order in prepared:
                     self.guard.reserve(order)
                     reserved.append(order.client_order_id)
@@ -282,7 +289,9 @@ class RiskManagedClient:
         async with self._lock:
             try:
                 results = await self.client.cancel_orders(orders)
-                if len(results) != len(orders) or any(r.status != "cancelled" for r in results):
+                if len(results) != len(orders) or any(
+                    r.status not in ("cancelled", "already_closed") for r in results
+                ):
                     raise RiskViolation("cancel_outcome_unknown")
                 for request, result in zip(orders, results, strict=True):
                     if getattr(result, "order_id", None) not in (None, request.order_id) or getattr(
@@ -316,7 +325,10 @@ class RiskManagedClient:
             ]
 
     async def account(self) -> Account:
-        return await self.client.account()
+        self._ensure_running()
+        account = await self.client.account()
+        self._ensure_running()
+        return account
 
     async def open_orders(self) -> list[OpenOrder]:
         return await self.client.open_orders()

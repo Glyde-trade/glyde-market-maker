@@ -4,25 +4,31 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import signal
 import sys
+from pathlib import Path
 
-from .client import OneApiClient, OneApiError, book_from_wire
+from .client import OneApiError
 from .config import load_config, write_config
-from .paper import PaperExchange
+from .risk import RiskViolation
+from .runner import run as run_strategy
 
 
-async def watch_paper(config, *, client_factory=OneApiClient) -> None:
-    paper = PaperExchange(config.paper_balance)
-    async with client_factory(config) as client:
-        # This foundation command observes/simulates live book state. Strategy
-        # orchestration is supplied by the strategies/safety follow-up.
-        async for frame in client.stream([{"type": "l2Book", "coin": config.symbol}]):
-            if frame.get("channel") == "l2Book":
-                book = book_from_wire(frame["data"])
-                await paper.on_book(book)
-                print(
-                    f"PAPER {book.symbol} mid={book.mid} local_fills={len(paper.fills)}", flush=True
-                )
+async def run_with_signals(selected, state_directory: Path) -> None:
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    previous = {}
+
+    def request_stop(*_: object) -> None:
+        loop.call_soon_threadsafe(stop.set)
+
+    try:
+        for kind in (signal.SIGINT, signal.SIGTERM):
+            previous[kind] = signal.signal(kind, request_stop)
+        await run_strategy(selected, state_directory=state_directory, stop_event=stop)
+    finally:
+        for kind, handler in previous.items():
+            signal.signal(kind, handler)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -57,13 +63,12 @@ def main(argv: list[str] | None = None) -> int:
             from dataclasses import replace
 
             selected = replace(selected, mode="paper")
-        if selected.mode != "paper":
-            raise ValueError("live runner requires strategy/risk integration; use paper")
-        asyncio.run(watch_paper(selected))
+        config_path = Path(args.config_path or args.config_option or "glyde-mm.yaml")
+        asyncio.run(run_with_signals(selected, config_path.parent / ".glyde-mm"))
         return 0
     except KeyboardInterrupt:
         return 0
-    except (ValueError, OSError, OneApiError):
+    except (ValueError, OSError, OneApiError, RiskViolation, TimeoutError):
         # Exception bodies can include HTTP headers or local credential paths.
         print(
             "Unable to run: check configuration, credentials and One API availability.",
