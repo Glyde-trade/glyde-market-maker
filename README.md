@@ -437,6 +437,21 @@ current source checkout; it does not claim that a deployed account can trade.
 
 ![Offline paper replay report: completed, 61 books, 2 simulated fills, zero pending orders](docs/images/paper-session-report.svg)
 
+### Compare paper strategies offline
+
+Record one public tape, then compare PMM, inventory-skewed, grid and HL-reference
+quotes under the same balance and risk caps:
+
+```sh
+glyde-mm record-tape --config examples/paper.yaml --minutes 5 --include-hl --tape-file tape.jsonl
+glyde-mm compare --config examples/paper.yaml --tape-file tape.jsonl --preset balanced
+```
+
+The table shows fill fragments, inventory range, marked PnL, maximum drawdown,
+two-sided quote uptime and risk stops. Missing recorded HL data is unavailable,
+never a fallback. Comparison is offline/paper-only, including with a live YAML.
+See [comparison assumptions and tape format](docs/compare-strategies.md).
+
 ### Local read-only dashboard
 
 Each running bot prints its private dashboard snapshot path. In another terminal:
