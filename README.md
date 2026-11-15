@@ -52,11 +52,11 @@ before replacing an existing installation.
 
 ## Start in five minutes
 
-**1. Install.** Once the `v0.6.0` GitHub Release is published, install its wheel with
+**1. Install.** Install the `v0.6.1` GitHub Release wheel with
 [pipx](https://pipx.pypa.io/stable/installation/) (Python 3.11+):
 
 ```sh
-pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.6.0/glyde_market_maker-0.6.0-py3-none-any.whl'
+pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.6.1/glyde_market_maker-0.6.1-py3-none-any.whl'
 glyde-mm --version
 ```
 
