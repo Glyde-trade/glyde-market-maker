@@ -274,3 +274,22 @@ def test_daily_loss_cancels_existing_quotes_before_new_dispatch():
         assert len(raw.placed) == 1 and raw.all_cancels == 1
 
     asyncio.run(scenario())
+
+
+def test_stop_during_pretrade_read_prevents_dispatch():
+    async def scenario():
+        stop = asyncio.Event()
+        g, _ = guard()
+
+        class StoppingClient(FakeClient):
+            async def account(self):
+                stop.set()
+                return await super().account()
+
+        raw = StoppingClient()
+        client = RiskManagedClient(raw, g, stop_event=stop)
+        with pytest.raises(RiskViolation, match="client_closed"):
+            await client.place_orders([Order()])
+        assert raw.placed == [] and not g.pending
+
+    asyncio.run(scenario())
