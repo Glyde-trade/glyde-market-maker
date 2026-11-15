@@ -1,0 +1,22 @@
+# PAPER: one fixed-spread quote per side around the current midpoint.
+# At a hypothetical 100000 USDC/BTC, 0.0001 BTC is about 10 USDC per order.
+# Values are illustrative; prices move and all pending orders count toward risk caps.
+base_url: https://api.glyde.trade/v1
+mode: paper
+paper_balance: '1000'
+risk:
+  account_age_seconds: '10'
+  max_daily_loss: '5'
+  max_order_notional: '25'
+  max_position: '0.001'
+  stale_book_seconds: '5'
+strategy: pure_market_making
+strategy_config:
+  ask_spread: '0.002'
+  bid_spread: '0.002'
+  hanging_orders_enabled: false
+  minimum_spread: '0.001'
+  order_amount: '0.0001'
+  order_levels: 1
+  order_refresh_time: 30
+symbol: BTC
