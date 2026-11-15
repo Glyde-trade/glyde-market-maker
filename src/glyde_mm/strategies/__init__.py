@@ -2,6 +2,7 @@
 
 from .avellaneda_market_making import AvellanedaConfig, AvellanedaMarketMakingStrategy
 from .factory import create_strategy
+from .inventory_skewed import InventorySkewedConfig, InventorySkewedStrategy
 from .pure_market_making import (
     PureMarketMakingConfig,
     PureMarketMakingStrategy,
@@ -9,6 +10,8 @@ from .pure_market_making import (
 )
 
 __all__ = [
+    "InventorySkewedConfig",
+    "InventorySkewedStrategy",
     "AvellanedaConfig",
     "AvellanedaMarketMakingStrategy",
     "PureMarketMakingConfig",

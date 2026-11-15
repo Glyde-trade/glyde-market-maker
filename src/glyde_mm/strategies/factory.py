@@ -8,6 +8,7 @@ from typing import Any
 
 from .avellaneda_market_making import AvellanedaConfig, AvellanedaMarketMakingStrategy
 from .grid import GridConfig, GridStrategy
+from .inventory_skewed import InventorySkewedConfig, InventorySkewedStrategy
 from .pure_market_making import (
     PureMarketMakingConfig,
     PureMarketMakingStrategy,
@@ -43,6 +44,7 @@ def parse_config(cls: type, values: dict[str, Any]):
 
 
 _STRATEGIES = {
+    "inventory_skewed": (InventorySkewedStrategy, InventorySkewedConfig),
     "avellaneda_market_making": (AvellanedaMarketMakingStrategy, AvellanedaConfig),
     "grid": (GridStrategy, GridConfig),
     "pure_market_making": (PureMarketMakingStrategy, PureMarketMakingConfig),
