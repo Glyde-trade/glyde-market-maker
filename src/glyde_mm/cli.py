@@ -86,7 +86,14 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 from .replay import replay
 
-                result = asyncio.run(replay(selected, args.book_file, args.minutes))
+                result = asyncio.run(
+                    replay(
+                        selected,
+                        args.book_file,
+                        args.minutes,
+                        state_directory=Path(args.config_option).parent / ".glyde-mm",
+                    )
+                )
                 print(
                     f"PAPER REPLAY | inventory={result.inventory:f}"
                     f" | simulated_pnl={result.pnl:+f} USDC | fills={result.fills}"
