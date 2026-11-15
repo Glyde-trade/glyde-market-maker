@@ -35,6 +35,7 @@ For `path/to/bot.yaml`, ordinary CLI commands use `path/to/.glyde-mm/`:
 
 | Path | Purpose |
 | --- | --- |
+| `preflight-<hash>.json` | Five-minute public-check PASS bound to the complete effective config; never private/trading authority. |
 | `paper-<hash>.json` / `live-<hash>.json` | Daily equity baseline/loss latch, rolling placement budget and unresolved original execution intent. Hash binds mode, endpoint, owner and vault. |
 | `control-<hash>.operation` / `.run` / `.stop` | Local lock/stop coordination; control identity also includes configured symbols. |
 | `logs/run-<id>/events*.jsonl` | Bounded, private diagnostic segments with version/commit, event sequence and outcome. |

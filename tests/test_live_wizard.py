@@ -25,6 +25,8 @@ def offline(monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", refused)
     monkeypatch.setattr(socket.socket, "connect_ex", refused)
+    monkeypatch.setenv("GLYDE_API_PRIVATE_KEY", "fixture-key")
+    monkeypatch.setenv("GLYDE_READ_API_KEY", "fixture-read")
 
 
 class Public:
@@ -38,7 +40,7 @@ class Public:
 
     async def meta(self):
         self.reads.append("meta")
-        return {"universe": [{"name": "BTC", "szDecimals": 4}]}
+        return {"universe": [{"name": "BTC", "szDecimals": 4, "minOrderSize": "0.0001"}]}
 
     async def book(self, symbol):
         self.reads.append("book")
@@ -324,6 +326,10 @@ async def test_real_fake_client_paper_then_signed_live_and_timer_cleanup(tmp_pat
                 envelope = json.loads(request.content)
                 assert envelope["signature"] and envelope["vaultAddress"] == selected.vault_address
                 actions.append(envelope["action"]["type"])
+            if json.loads(request.content).get("type") == "meta":
+                metadata = fake.info({"type": "meta"})
+                metadata["universe"][0]["minOrderSize"] = "0.00001"
+                return httpx.Response(200, json=metadata)
             if selected.mode == "live":
                 return sequenced.http(request)
             return await transport.handle_async_request(request)

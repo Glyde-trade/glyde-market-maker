@@ -7,8 +7,9 @@ from dataclasses import replace
 from decimal import Decimal as D
 
 import pytest
+from market_receipt import approved_market
 
-from glyde_mm.config import Config, RiskConfig
+from glyde_mm.config import Config, RiskConfig, load_config
 from glyde_mm.models import Account, CancelResult, OrderResult
 from glyde_mm.paper import PaperExchange
 from glyde_mm.risk import RiskViolation
@@ -183,6 +184,7 @@ async def scenario(
         stop=stop,
         stop_on_place=not disconnected and stale == "5",
     )
+    approved_market(selected, tmp_path)
     task = run(
         selected,
         state_directory=tmp_path,
@@ -270,6 +272,7 @@ def test_cli_paper_forces_simulation_and_run_uses_explicit_config(tmp_path, monk
     path = tmp_path / "bot.yaml"
     path.write_text("mode: live\n")
     assert cli.main(["paper", str(path)]) == 0
+    approved_market(load_config(path), tmp_path / ".glyde-mm")
     assert cli.main(["run", str(path)]) == 0
     assert seen == [("paper", tmp_path / ".glyde-mm"), ("live", tmp_path / ".glyde-mm")]
 

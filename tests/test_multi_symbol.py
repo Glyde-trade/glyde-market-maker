@@ -4,6 +4,7 @@ from dataclasses import replace
 from decimal import Decimal as D
 
 import pytest
+from market_receipt import approved_market
 
 from glyde_mm.config import Config, MarketConfig, RiskConfig, load_config
 from glyde_mm.models import Account, Book, Level, OpenOrder, OrderRequest
@@ -438,6 +439,7 @@ risk: {max_total_notional: '50'}
     monkeypatch.setattr("builtins.input", lambda _: "BTC")
     assert cli.main(["run", str(path)]) == 1 and not calls
     monkeypatch.setattr("builtins.input", lambda _: "BTC,ETH")
+    approved_market(load_config(path), tmp_path / ".glyde-mm")
     assert cli.main(["run", str(path)]) == 0
     assert calls == [("BTC", "ETH")]
     assert "max_total_notional=50" in capsys.readouterr().out

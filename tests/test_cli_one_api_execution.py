@@ -13,10 +13,11 @@ import yaml
 from eth_account import Account as EthAccount
 from hyperliquid.utils.signing import recover_agent_or_user_from_l1_action
 from live_fake import SequencedFake
+from market_receipt import approved_market
 
 from glyde_mm import cli
 from glyde_mm.client import OneApiClient
-from glyde_mm.config import Config
+from glyde_mm.config import Config, load_config
 from glyde_mm.paper import PaperExchange
 from glyde_mm.runner import run
 
@@ -183,6 +184,8 @@ def exercise_cli(
                 allow_existing_exposure=allow_existing_exposure,
             )
 
+    if command == "run":
+        approved_market(load_config(path), tmp_path / ".glyde-mm")
     monkeypatch.setattr(cli, "run_strategy", controlled_run)
     result = cli.main([command, str(path)] + (["--i-understand"] if understand else []))
     assert not fake._connections
