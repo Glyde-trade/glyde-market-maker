@@ -40,11 +40,11 @@ before replacing an existing installation.
 
 ## Start in five minutes
 
-**1. Install.** Once the `v0.4.0` GitHub Release is published, install its wheel with
+**1. Install.** Once the `v0.5.0` GitHub Release is published, install its wheel with
 [pipx](https://pipx.pypa.io/stable/installation/) (Python 3.11+):
 
 ```sh
-pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.4.0/glyde_market_maker-0.4.0-py3-none-any.whl'
+pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.5.0/glyde_market_maker-0.5.0-py3-none-any.whl'
 glyde-mm --version
 ```
 
@@ -401,7 +401,7 @@ a fixed warning without the URL; they never change the trading outcome or trigge
 Alerts are best effort, may duplicate after a lost response, and can be absent during a
 network/process failure. They are not a safety controller or proof that cancellation
 succeeded. Check local reports and the venue. Nothing is sent merely by adding an env var
-while `alerts_enabled` is false. This feature requires current source after v0.4.0.
+while `alerts_enabled` is false. This feature is included in v0.5.0.
 
 ## Package releases
 
