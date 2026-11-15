@@ -6,7 +6,8 @@ from decimal import Decimal as D
 
 import pytest
 
-from glyde_mm.models import Account, Book, Level, OrderResult
+from glyde_mm.models import Account, Book, Level, OpenOrder, OrderResult
+from glyde_mm.risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
 from glyde_mm.strategies.grid import GridConfig, GridStrategy
 from glyde_mm.strategies.pure_market_making import StrategyContext
 
@@ -112,3 +113,63 @@ def test_quantization_never_escapes_an_unaligned_configured_range():
     strategy.context = replace(strategy.context, price_tick=D("10"))
     quotes = strategy.quotes(book, Account(D("1000")))
     assert all(D("91") <= order.price <= D("109") for order in quotes)
+
+
+@pytest.mark.parametrize("existing_buy", [D(0), D("0.1")])
+async def test_grid_cannot_bypass_whole_batch_position_cap(existing_buy):
+    class ManagedFake(FakeClient):
+        async def account(self):
+            return Account(D(1000), received_at=2)
+
+        async def open_orders(self):
+            if existing_buy:
+                return [OpenOrder("external", "BTC", "buy", existing_buy, D(90))]
+            return []
+
+    strategy, _, source = setup()
+    source = replace(source, timestamp_ms=2000, received_at=2)
+    client = ManagedFake()
+    cap = D("0.25") if existing_buy else D("0.15")
+    guard = RiskGuard(
+        RiskLimits(max_position=cap, max_order_notional=D(25)),
+        clock=lambda: 2,
+        wall_clock=lambda: 2,
+    )
+    guard.update_book(source)
+    strategy.context = replace(strategy.context, client=RiskManagedClient(client, guard))
+    await strategy.on_book(source)
+    with pytest.raises(RiskViolation, match="max_position"):
+        await strategy.on_tick(2)
+    assert not any(name == "place" for name, _ in client.calls)
+    assert not guard.pending
+
+
+async def test_grid_places_exact_levels_through_risk_managed_fake_and_stops():
+    class ManagedFake(FakeClient):
+        async def account(self):
+            return Account(D(1000), received_at=2)
+
+        async def open_orders(self):
+            return []
+
+    strategy, _, source = setup()
+    source = replace(source, timestamp_ms=2000, received_at=2)
+    client = ManagedFake()
+    guard = RiskGuard(
+        RiskLimits(max_position=D("0.25"), max_order_notional=D(25)),
+        clock=lambda: 2,
+        wall_clock=lambda: 2,
+    )
+    guard.update_book(source)
+    strategy.context = replace(strategy.context, client=RiskManagedClient(client, guard))
+    await strategy.on_book(source)
+    await strategy.on_tick(2)
+    assert [(row.side, row.price) for row in client.calls[0][1]] == [
+        ("buy", D(90)),
+        ("buy", D(95)),
+        ("sell", D(105)),
+        ("sell", D(110)),
+    ]
+    assert all(row.client_order_id and row.time_in_force == "Alo" for row in client.calls[0][1])
+    await strategy.stop()
+    assert not guard.pending

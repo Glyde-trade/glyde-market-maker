@@ -8,3 +8,9 @@ Inventory-skewed quoting adapts the normalized reservation-price and exponential
 order-amount (eta) designs from Hummingbot's avellaneda_market_making strategy,
 revision 9af100d6822da7d2d0291a906c730ef172284ee2, under Apache License 2.0.
 Glyde uses signed perpetual position relative to equity instead of spot balances.
+
+The fixed-range grid references Hummingbot's linearly distributed grid-level
+design in strategy_v2/executors/grid_executor, revision
+9af100d6822da7d2d0291a906c730ef172284ee2, under Apache License 2.0.
+Glyde's simple two-sided grid is rewritten around its shared PMM lifecycle; it
+does not include Hummingbot's separate executor or paired take-profit logic.
