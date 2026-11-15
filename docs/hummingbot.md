@@ -94,7 +94,7 @@ keys registered to that local stack, never real trading credentials. These setti
 are **necessary, not a working full-bot recipe**. Do not enable trading merely
 because a public book appears.
 
-The remaining adapter must:
+An adapter for these stock incompatibilities must:
 
 1. Supply a separately provisioned read credential for private REST/WS and honor
    its owner, expiry and revocation. Signing a trading action does not authorize
@@ -112,5 +112,103 @@ The remaining adapter must:
 HIP-3 discovery, builder-fee approval, order-status/history, leverage and funding
 stream behavior remain unqualified here. Stock startup can invoke more than the
 seven calls above; the isolated order successes do not waive those dependencies.
-Until an adapter and full local process test exist, use Glyde MM's own paper
-runner rather than instructions claiming stock Hummingbot is ready for live Glyde.
+Use Glyde MM's own paper runner until the included adapter has a full local
+process qualification; stock Hummingbot is not ready for live Glyde by URL override.
+
+## Included `glyde_perpetual` adapter
+
+The source adapter is now in `connectors/hummingbot/glyde_perpetual/`. It subclasses
+that pinned upstream connector; it does not patch `hyperliquid_perpetual` globally
+or install Hummingbot as a Glyde MM dependency. Use Glyde MM's paper runner first.
+This adapter's offline tests qualify its wire boundary, not an entire Hummingbot
+process or permission to send live orders.
+
+In a trusted development checkout of the pinned Hummingbot revision, copy the
+adapter directory into the derivative connector directory before starting the
+framework:
+
+```sh
+cp -R connectors/hummingbot/glyde_perpetual \
+  /path/to/hummingbot/hummingbot/connector/derivative/glyde_perpetual
+```
+
+The source path above is relative to this repository. Follow the pinned
+Hummingbot checkout's own build instructions; compiled framework extensions are
+not included here. The adapter discovery name is `glyde_perpetual` and its pair
+format is `BTC-USD`. Its connect configuration has **four separate secure fields**:
+
+| Field | Meaning |
+| --- | --- |
+| `glyde_perpetual_owner` | Registered owner address used by private `/info` and WS subscriptions. |
+| `glyde_perpetual_vault_address` | Assigned Glyde signing namespace; never substituted for the owner or inferred from it. |
+| `glyde_perpetual_private_key` | Trading wallet key already authorized by the Glyde owner. Never use a custody/main key. |
+| `glyde_perpetual_read_credential` | Separately issued owner read credential, sent as `X-Glyde-API-Key` on private REST and every private WS handshake. |
+
+Let Hummingbot's secure connect workflow store credentials; do not put them into
+example YAML, source control, logs or public issue reports. A trading signature
+is not a read credential. Missing read credentials or owner/vault configuration
+refuse construction, and the server still verifies read permissions and every
+signed action. The adapter does not issue credentials or approve an agent.
+
+Constructor defaults are `glyde_perpetual_base_url="https://api.glyde.trade/v1"`
+and `glyde_perpetual_mainnet=True` (HL L1 source `a`). A disposable local test
+runtime can explicitly supply an HTTP loopback `/v1` URL and its actual signature
+realm; HTTPS is required for other hosts. The WS URL derives from that same URL.
+The realm is explicit and does not change because a URL looks like testnet.
+Never reuse a synthetic fixture owner or vault for a registered account.
+
+The adapter provides:
+
+- Canonical signed `order` and `cancelByCloid` wire with Decimal strings, the
+  explicit assigned vault and monotonic nonces. No Hyperliquid builder fields.
+- Owner-bound private reads with the separate header; public metadata/book
+  requests omit it. Endpoint overrides cannot redirect the authenticated request.
+- Authenticated `orderUpdates` and `userFills` subscriptions. Fill snapshots and
+  live updates share bounded `(oid, tid)` deduplication; conflicting evidence
+  suspends trading. Only the internal framework queue uses the stock `user`
+  fill-processing name; no `user` subscription is sent on the wire.
+- `meta` size precision and stable asset-array indexes, including delisted slots.
+  Price quantization uses Decimal and the five-significant-figure / `6-szDecimals`
+  rule (integer prices remain exact); integer `markPx` strings are accepted.
+- Permanent suspension after private read failure, private stream interruption,
+  malformed/conflicting private evidence or an unknown exchange outcome. A
+  reconnect sends the read credential again but **does not resume quoting**.
+  Reconcile and restart explicitly. The original signed envelope remains in
+  memory as `unresolved_exchange_envelope`, retained across cleanup cancels;
+  do not print it or generate
+  a replacement nonce to resolve an unknown result. Explicit cleanup cancels
+  remain possible, and unconfirmed cancellations never become success.
+
+The static Hummingbot budget defaults are a 10 USD minimum notional and a 0.025%
+maker/taker fee estimate; these are conservative connector budgeting settings,
+**not qualified Glyde venue minima or actual fee schedules**. Verify owner fees,
+market rules and permission limits before considering a live session. This
+connector inherits Hummingbot's framework risk/order tracker and periodic REST
+reconciliation; it is separate from Glyde MM's no-polling strategy runner and its
+RiskManagedClient limits.
+
+Funding requires actual `oraclePx`, `markPx` and `funding` context. The adapter
+refuses missing context rather than inventing zeros. HIP-3, full startup/funding
+readiness, order-status/history coverage, leverage and fee reconciliation remain
+unqualified against a real service. Unsupported providers must remain unavailable;
+these offline successes do not waive those prerequisites for live trading.
+
+### Adapter offline tests
+
+```sh
+python -m pytest -q tests/test_hummingbot_connector.py
+```
+
+These tests import the **actual adapter modules** with small framework service
+and `bidict` doubles because Hummingbot's compiled runtime is not a dependency.
+They pass actual signed requests through httpx's in-process transport into
+`FakeOneApiServer`, independently recover signatures using the official HL SDK,
+and deliver the matching fixture's real order/fill messages through a fake WS
+assistant. Explicitly modeled credential/owner checks surround the auth-free
+matching fixture; they do not claim a deployed backend authorized the requests.
+Socket connections are forbidden. Positive cases and refusals cover missing or
+revoked read credentials, foreign owner/endpoint, wrong signing realm/vault,
+integer/decimal metadata, fill duplication/conflict, reconnect authentication and
+lost-response suspension without retry. Full framework startup, throttling,
+compiled order tracking and real venue permissions still require separate local
+qualification.
