@@ -71,3 +71,32 @@ Wire references: [HL info](https://hyperliquid.gitbook.io/hyperliquid-docs/for-d
 [exchange](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint),
 and [subscriptions](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/subscriptions).
 No upstream strategy or SDK code is copied into this implementation.
+
+## Deterministic fault soak
+
+```sh
+python -m pytest -q -s -m offline_soak tests/test_offline_soak.py
+```
+
+CI runs this in a separate two-minute job with a 90-second test deadline. Each
+profile advances 600 one-second source-time ticks without wall-clock sleeping:
+three-level PMM and Avellaneda use the real signed client, synthetic sequenced
+WS framing, live cache, risk boundary and matching ledger. Seeded fault times
+inject three disconnects, three sequence gaps and three stale-book episodes per
+profile, plus partial fills and definite order refusals. An independent ledger
+checks unique identities, no untracked live orders, worst-case position and gross
+notional, per-order size, loss and rolling order-rate limits; cleanup must leave
+zero live orders. Socket connections are forbidden.
+
+A third streaming-paper profile consumes actual fake public book/trade frames
+through the client and samples Avellaneda's combined volatility for ten simulated
+minutes. Thirty missing trade intervals must retire quotes before the ordinary
+refresh deadline; quoting needs a complete new sampling window. It also checks
+partial fills, exposure and final cancellation.
+
+Gap/disconnect recovery is **explicit session reconstruction**, not automatic
+runner restart: the failed cache stays latched, delta-only recovery is refused,
+and each replacement needs a complete owner/book snapshot. These component
+profiles use fresh in-memory session guards; they do not clear or qualify
+recovery from a persisted unknown-outcome halt. The existing actual-runner stop
+regression is run in the same CI job to check its cancellation lifecycle.
