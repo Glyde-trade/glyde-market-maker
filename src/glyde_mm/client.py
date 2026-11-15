@@ -9,6 +9,7 @@ import time
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import suppress
 from decimal import Decimal
+from email.utils import parsedate_to_datetime
 from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -154,6 +155,7 @@ class OneApiClient:
         self._assets: dict[str, tuple[int, int]] = {}
         self._last_nonce = 0
         self._sign_lock = asyncio.Lock()
+        self.public_clock: tuple[float, float, float] | None = None
 
     async def __aenter__(self) -> OneApiClient:
         return self
@@ -171,6 +173,7 @@ class OneApiClient:
         headers = (
             {"X-Glyde-API-Key": self.config.secret(self.config.read_api_key_env)} if private else {}
         )
+        sent_at = time.time()
         try:
             response = await self._http.post(
                 self.config.base_url.rstrip("/") + path, json=body, headers=headers
@@ -181,6 +184,14 @@ class OneApiClient:
                     "exchange transport failed; reconcile the original request"
                 ) from None
             raise OneApiError("One API transport failed") from None
+        if not private and not action:
+            self.public_clock = None
+            try:
+                date = parsedate_to_datetime(response.headers["Date"])
+                if date.tzinfo is not None:
+                    self.public_clock = sent_at, time.time(), date.timestamp()
+            except (KeyError, ValueError, TypeError, OverflowError, OSError):
+                pass
         if response.status_code >= 500 and action:
             raise OutcomeUnknown("exchange outcome unknown; reconcile the original request")
         if response.status_code != 200:

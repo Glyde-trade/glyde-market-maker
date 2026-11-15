@@ -395,6 +395,7 @@ risk: {max_total_notional: '50'}
             calls.append("orders")
             return []
 
+    Source.public_clock = None
     monkeypatch.setattr(doctor, "OneApiClient", Source)
     assert await doctor.check(path, private=True, report=lines.append) == 0
     assert calls == ["meta", "BTC", "ETH", "account", "orders"]

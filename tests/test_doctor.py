@@ -19,7 +19,9 @@ def configuration(tmp_path):
     return path
 
 
-def install_public_info(monkeypatch, *, payload=None, failure=False, status=200, at="meta"):
+def install_public_info(
+    monkeypatch, *, payload=None, failure=False, status=200, at="meta", date=None
+):
     from glyde_mm import doctor
 
     calls = []
@@ -37,6 +39,7 @@ def install_public_info(monkeypatch, *, payload=None, failure=False, status=200,
         if body["type"] == "l2Book":
             return httpx.Response(
                 200,
+                headers={"Date": date} if date is not None else {},
                 json={
                     "coin": "BTC",
                     "time": time.time_ns() // 1_000_000,
@@ -130,6 +133,8 @@ def test_key_presence_never_prints_values_or_authorizes_private_calls(
         {"strategy_config": {"order_amount": "-1"}},
         {"strategy_config": {"hanging_orders_enabled": True}},
         {"risk": {"max_position": "-1"}},
+        {"risk": {"stale_book_seconds": "3601"}},
+        {"risk": {"account_age_seconds": "3601"}},
         {"mode": "live", "owner": "invalid-owner-secret"},
     ],
 )
@@ -195,8 +200,46 @@ def test_default_config_and_custom_key_names(configuration, monkeypatch, capsys)
     output = capsys.readouterr().out
     assert "Trading key: present" in output
     assert "Read key: present" in output
+    assert "[variable: CUSTOM_TRADING_KEY]" in output
+    assert "[variable: CUSTOM_READ_KEY]" in output
     assert "test-value" not in output
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("offset,failed", [(0, False), (15, True), (-15, True)])
+def test_public_http_date_detects_clock_skew_without_extra_or_private_requests(
+    configuration, monkeypatch, capsys, offset, failed
+):
+    from email.utils import formatdate
+
+    calls = install_public_info(monkeypatch, date=formatdate(time.time() + offset, usegmt=True))
+    assert main(["doctor", str(configuration)]) == int(failed)
+    output = capsys.readouterr().out
+    assert "Clock skew: " + ("FAIL" if failed else "no detected skew") in output
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("date", [None, "invalid-private-value"])
+def test_missing_invalid_clock_header_is_explicitly_unavailable(
+    configuration, monkeypatch, capsys, date
+):
+    calls = install_public_info(monkeypatch, date=date)
+    assert main(["doctor", str(configuration)]) == 0
+    output = capsys.readouterr().out
+    assert "Clock skew: unavailable" in output
+    assert "invalid-private-value" not in output
+    assert len(calls) == 2
+
+
+def test_clock_bounds_include_request_latency_and_second_rounding():
+    from glyde_mm.doctor import check_clock
+
+    lines = []
+    assert check_clock((100, 103, 101), lines.append)
+    assert not check_clock((103, 100, 101), lines.append)
+    assert "local wall clock changed" in lines[-1]
+    assert not check_clock((float("nan"), 100, 101), lines.append)
+    assert "invalid clock observation" in lines[-1]
 
 
 def test_invalid_url_is_a_safe_public_failure(configuration, monkeypatch, capsys):

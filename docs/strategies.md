@@ -232,3 +232,157 @@ Python callers may request `strategy_preset(..., ping_pong_enabled=True)`;
 `examples/ping-pong-paper.yaml` shows the editable paper-only combination. Update
 its fixed bands and size reference for your market instead of copying them into
 live settings.
+
+## Complete YAML key reference
+
+Unknown keys refuse. Quote decimal values in YAML; quantities and position targets
+are base-asset units, spread fractions use `0.001 = 0.1%`, and refresh tolerance
+uses percentage points (`0.1 = 0.1%`). Defaults are not reviewed trading sizes.
+
+### Session keys
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `mode` | `paper` | `paper` or explicit `live`; the `paper` command always simulates. |
+| `symbol` | `BTC` | Exact metadata symbol for one market; do not combine with `markets`. |
+| `markets` | empty | 1–16 unique market mappings; requires gross total-notional cap. |
+| `base_url` | `https://api.glyde.trade/v1` | One API root; HTTPS, or HTTP on loopback for fixtures only. |
+| `owner` | empty | Registered private-read owner; required for live. |
+| `vault_address` | null | Discovered signed trading namespace; required for live, distinct from owner. |
+| `mainnet` | true | Signing source/network selection; not permission or account discovery. |
+| `private_key_env` | `GLYDE_API_PRIVATE_KEY` | Trading-key environment variable name, never its value. |
+| `read_api_key_env` | `GLYDE_READ_API_KEY` | Private-read environment variable name, never its value. |
+| `paper_balance` | `10000` | Positive simulated starting equity, in USDC. |
+| `risk_state_path` | `.glyde-mm/risk-state.json` | Retained legacy config field; streaming CLI derives a hashed state filename beside the config instead. Do not use this to relocate state. |
+| `strategy` | `pure_market_making` | A chooser key above, or a trusted [plugin](plugins.md). |
+| `strategy_config` | empty | The selected strategy's keys below. |
+| `risk` | defaults below | Shared admission limits; never raised by strategy settings. |
+| `alerts_enabled` | false | Best-effort after-cleanup chat notifications; not a safety controller. |
+| `alert_webhook_env` | `GLYDE_MM_ALERT_WEBHOOK` | Optional webhook variable name; never put its URL in YAML. |
+
+Each entry in `markets` has these keys:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `symbol` | required | Unique exact metadata symbol. |
+| `max_position` | required | Positive base-unit cap for this market. |
+| `strategy_config` | empty | Overrides merged into the session's strategy settings for this market. |
+
+### Shared risk keys
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `max_position` | `0.01` | Worst possible signed position including pending/open quotes; multi-market entries supply their own cap. |
+| `max_order_notional` | `10` | Positive per-order USDC bound, using a conservative price reference. |
+| `max_daily_loss` | `5` | Equity fall from the persisted UTC-day baseline; includes unrealized changes and transfers. |
+| `stale_book_seconds` | `5` | Positive source/arrival freshness limit, at most 3600 seconds at runtime. |
+| `account_age_seconds` | `10` | Positive account-observation age limit, at most 3600 seconds at runtime. |
+| `max_orders_per_minute` | 60 | Rolling individual placement-attempt budget, integer 1–6000, shared by all markets. |
+| `max_total_notional` | null | Optional positive gross position-plus-orders bound across markets; mandatory with `markets`. No cross-asset netting. |
+
+### Execution keys accepted by all four built-in strategies
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `order_amount` | `0.001`; grid requires it | Positive base quantity; all levels still consume risk capacity. |
+| `order_refresh_time` | 30 | Positive finite seconds between comparisons, not permission to retain unsafe quotes. |
+| `refresh_tolerance_pct` | null | Optional 0–100 percentage-point price tolerance; null disables retention. Sizes/fills/safety/max-age override it. |
+| `max_order_age` | 300 | Positive finite maximum quote age in seconds, at most 86400. |
+| `minimum_spread` | PMM/grid `0`; adaptive `0.001` | Nonnegative fraction below 1; minimum distance per side from midpoint. |
+
+### PMM-only keys
+
+Together with the five execution keys, this is every `PureMarketMakingConfig` key:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `bid_spread` | `0.001` | Nonnegative bid fraction below 1. |
+| `ask_spread` | `0.001` | Nonnegative ask fraction below 1. |
+| `order_refresh_tolerance_pct` | null | Alias in the same units; configuring both tolerance names refuses. |
+| `filled_order_delay` | 0 | Finite 0–86400-second pause after identified own paper fills, including partials; nonzero live setting refuses. |
+| `order_levels` | 1 | Integer 1–50 per side; one means no extra ladder. |
+| `order_level_spread` | `0.001` | Nonnegative additive price fraction per level, below 1. |
+| `order_level_amount` | `0` | Nonnegative additive base quantity per level. |
+| `inventory_skew_enabled` | false | Enable linear sizing toward target; multipliers stay between 0 and 2. |
+| `inventory_target_position` | `0` | Finite signed base-position target. |
+| `inventory_target_base_ratio` | null | Optional 0–1 signed-position-value/equity target; only effective with skew; cannot combine with a nonzero position target. |
+| `inventory_range_multiplier` | `1` | Positive multiplier on two-sided ladder quantity; ratio mode also caps range at half equity/reference price. |
+| `price_ceiling` | null | Positive quote-reference ceiling; suppress bids at/above it. |
+| `price_floor` | null | Positive quote-reference floor; suppress asks at/below it; must be below ceiling. |
+| `ping_pong_enabled` | false | Streaming paper only: alternate the eligible side on identified tracked fills; live/book-only replay refuse. |
+| `hanging_orders_enabled` | false | Only false is supported; true refuses. |
+| `reference_source` | `glyde` | `glyde` midpoint or explicit public `hyperliquid` reference for Glyde execution. |
+| `reference_skew_bps` | `0` | Signed −1000..1000 basis-point adjustment, only with external reference. |
+| `max_reference_deviation_bps` | `50` | Positive maximum reference/Glyde divergence, at most 1000 bps. |
+| `reference_stale_seconds` | `3` | Positive external-reference age limit, at most 60 seconds. |
+
+### Avellaneda–Stoikov keys
+
+`avellaneda_market_making` accepts the five execution keys plus exactly these keys.
+PMM-specific sizing, external-reference and post-fill options are not accepted.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `order_levels` | 1 | Integer 1–50 per side. |
+| `order_level_spread` | `0.001` | Nonnegative additive level spacing fraction below 1. |
+| `order_level_amount` | `0` | Nonnegative additive level quantity. |
+| `inventory_target_position` | `0` | Finite signed base-position target; no spot-wallet ratio. |
+| `risk_factor` | `1` | Positive risk-aversion parameter in the normalized formula above. |
+| `liquidity_kappa` | `1` | Positive configured inverse-price depth calibration; not automatically fitted. |
+| `time_left_fraction` | `1` | Positive normalized model horizon, at most 1; not an automatic session stop. |
+| `volatility_samples` | 30 | Integer 2–4096 changes; warmup needs one more consecutive sample. |
+| `sample_interval_ms` | 1000 | Integer source-time interval size, 1–60000 milliseconds. |
+| `volatility_source` | `book` | `book` or opt-in streaming-paper `book_and_trades`; see sampling contract above. |
+| `price_ceiling` | null | Positive midpoint ceiling; suppress bids at/above it. |
+| `price_floor` | null | Positive midpoint floor; suppress asks at/below it; ordered below ceiling. |
+
+### Inventory-skewed-only keys
+
+`inventory_skewed` accepts every Avellaneda key plus:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `order_amount_shape_factor` | `1` | Decimal 0–100; exponentially reduces only inventory-increasing quantities as normalized distance from the target grows. Zero disables that extra shaping. |
+
+### Grid-only keys
+
+Grid accepts the five execution keys plus exactly these three keys:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `lower_price` | required | Positive lower fixed-band price. |
+| `upper_price` | required | Positive upper price, strictly above lower. |
+| `levels` | 5 | Integer 2–50 across the entire band, not per side. |
+
+Grid quotes eligible levels below/above midpoint as bids/asks, skips midpoint and
+crossing/below-minimum levels, and retires everything outside its fixed band.
+
+## Bounded paper examples
+
+These complete examples use simulated equity, no keys, and explicit small risk
+caps. Copy one before editing, inspect current metadata/price and run doctor. A
+size that violates current venue rules or caps must refuse; do not increase caps
+automatically to make an example start.
+
+| Strategy | Complete paper config | Experiment |
+| --- | --- | --- |
+| PMM | [paper.yaml](../examples/paper.yaml) | One bid/ask around the current midpoint. |
+| Inventory skew | [inventory-skewed-paper.yaml](../examples/inventory-skewed-paper.yaml) | Avellaneda prices with reduced inventory-increasing size after warmup. |
+| Avellaneda–Stoikov | [avellaneda-paper.yaml](../examples/avellaneda-paper.yaml) | Volatility/inventory adaptive pricing; [combined trade input](../examples/avellaneda-trades-paper.yaml) is an optional stricter experiment. |
+| Grid/levels | [grid-paper.yaml](../examples/grid-paper.yaml) | Set a reviewed band around the current book; every level shares the caps. |
+
+```sh
+cp examples/avellaneda-paper.yaml ./my-paper.yaml
+glyde-mm doctor ./my-paper.yaml
+glyde-mm paper ./my-paper.yaml
+```
+
+For PMM sizing skew instead of adaptive-price `inventory_skewed`, copy
+`examples/paper.yaml` and set `inventory_skew_enabled: true` with a reviewed signed
+target. It can increase one side up to twice its configured quantity, so budget all
+levels. Cancel-before-replace releases capacity only after confirmed outcomes.
+
+All strategies share account loss/rate state, per-order bounds and pending-order
+reservations. More levels do not grant extra risk capacity. Loss caps are not
+guaranteed maximum losses; stop does not flatten positions. See
+[operations](operations.md) before restarting or interpreting a clean report.
