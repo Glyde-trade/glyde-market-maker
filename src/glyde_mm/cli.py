@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import signal
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import TypedDict
 from .client import OneApiError
 from .config import Config, load_config, write_config
 from .market_preflight import MarketPreflightRequired
+from .paper_result import PaperResult
 from .preflight import LivePreflightRefused, summary
 from .risk import RiskViolation
 from .runner import run as run_strategy
@@ -21,6 +23,7 @@ from .version import build_identity
 
 class _LogOptions(TypedDict, total=False):
     log_directory: Path
+    paper_result: PaperResult
 
 
 async def run_with_signals(
@@ -30,13 +33,20 @@ async def run_with_signals(
     allow_existing_exposure: bool = False,
     duration_seconds: float | None = None,
     log_directory: Path | None = None,
+    report_path: Path | None = None,
 ) -> bool:
+    if duration_seconds is not None and not 0 < duration_seconds <= (
+        86400 if selected.mode == "paper" else 1800
+    ):
+        raise ValueError("session duration exceeds its allowed bound")
+    result = PaperResult(report_path, selected) if report_path is not None else None
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     previous = {}
     timer = None
     automatic = False
     interrupted = False
+    failed = False
 
     def automatic_stop() -> None:
         nonlocal automatic
@@ -52,10 +62,10 @@ async def run_with_signals(
         for kind in (signal.SIGINT, signal.SIGTERM):
             previous[kind] = signal.signal(kind, request_stop)
         if duration_seconds is not None:
-            if not 0 < duration_seconds <= 1800:
-                raise ValueError("session duration must be in 0..1800 seconds")
             timer = loop.call_later(duration_seconds, automatic_stop)
         options: _LogOptions = {"log_directory": log_directory} if log_directory is not None else {}
+        if result is not None:
+            options["paper_result"] = result
         await run_strategy(
             selected,
             state_directory=state_directory,
@@ -64,11 +74,48 @@ async def run_with_signals(
             **options,
         )
         return duration_seconds is None or (automatic and not interrupted)
+    except BaseException:
+        failed = True
+        raise
     finally:
         if timer is not None:
             timer.cancel()
         for kind, handler in previous.items():
             signal.signal(kind, handler)
+        if result is not None:
+            try:
+                row = result.write(
+                    "error"
+                    if failed
+                    else "signal"
+                    if interrupted
+                    else "duration_elapsed"
+                    if automatic
+                    else "completed"
+                )
+                print(
+                    f"PAPER RESULT | outcome={row['outcome']} | termination={row['termination']}"
+                    f" | uptime={row['uptime_seconds']}s"
+                    f" | quotes={row['quotes'].get('placed', 0)}"
+                    f" | fills={row['fills']}"
+                    f" | realized_pnl={row['realized_pnl_usdc']}"
+                    f" | unrealized_pnl={row['unrealized_pnl_usdc']}"
+                    f" | max_drawdown={row['max_drawdown_usdc']} | report={result.path}"
+                )
+            except OSError:
+                if not failed:
+                    raise
+                print("Paper result could not be written; session failed.", file=sys.stderr)
+
+
+def duration(value: str) -> float:
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)(s|m|h)?", value)
+    if match is None:
+        raise argparse.ArgumentTypeError("use positive seconds, minutes or hours (20s, 10m, 1h)")
+    seconds = float(match[1]) * {None: 1, "s": 1, "m": 60, "h": 3600}[match[2]]
+    if not 0 < seconds <= 86400:
+        raise argparse.ArgumentTypeError("paper duration must be positive and at most 24h")
+    return seconds
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -87,6 +134,13 @@ def main(argv: list[str] | None = None) -> int:
         run = commands.add_parser(name)
         run.add_argument("config_path", nargs="?")
         run.add_argument("--config", dest="config_option")
+        if name == "paper":
+            run.add_argument(
+                "--duration", type=duration, help="stop cleanly after e.g. 20s, 10m or 1h (max 24h)"
+            )
+            run.add_argument(
+                "--report", type=Path, help="write a new private JSON paper-session result"
+            )
         if name == "run":
             run.add_argument(
                 "--i-understand",
@@ -260,6 +314,18 @@ def main(argv: list[str] | None = None) -> int:
                 selected,
                 config_path.parent / ".glyde-mm",
                 allow_existing_exposure=getattr(args, "i_understand", False),
+                **(
+                    {
+                        key: value
+                        for key, value in {
+                            "duration_seconds": args.duration,
+                            "report_path": args.report,
+                        }.items()
+                        if value is not None
+                    }
+                    if args.command == "paper"
+                    else {}
+                ),
             )
         )
         return 0

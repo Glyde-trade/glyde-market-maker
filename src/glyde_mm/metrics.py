@@ -44,8 +44,10 @@ class Metrics:
         *,
         clock: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
+        collect: bool = False,
     ) -> None:
-        self.enabled = config.metrics_enabled
+        self.enabled = config.metrics_enabled or collect
+        self._listen = config.metrics_enabled
         self.port = config.metrics_port
         self._symbols = {symbol: str(i) for i, symbol in enumerate(config.symbols)}
         self._clock, self._wall = clock, wall_clock
@@ -217,8 +219,19 @@ class Metrics:
                 )
             return ("\n".join(rows) + "\n").encode()
 
+    def result_counts(self) -> dict[str, object]:
+        with self._lock:
+            return {
+                "placed": self._counts["quotes_placed"],
+                "cancelled": self._counts["quotes_cancelled"],
+                "refused_by_reason": {
+                    key: value for key, value in sorted(self._refused.items()) if value
+                },
+                "fills": sum(self._fills.values()),
+            }
+
     def __enter__(self) -> Metrics:
-        if not self.enabled:
+        if not self._listen:
             return self
         metrics = self
 
