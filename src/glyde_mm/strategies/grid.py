@@ -85,7 +85,11 @@ class GridStrategy(PureMarketMakingStrategy):
                 continue
             side = "buy" if price < mid else "sell"
             order = quantized_order(self.context, side, price, self.grid.order_amount)
-            if order is None or (side, order.price) in used:
+            if (
+                order is None
+                or (side, order.price) in used
+                or not self.grid.lower_price <= order.price <= self.grid.upper_price
+            ):
                 continue
             if (side == "buy" and order.price >= book.asks[0].price) or (
                 side == "sell" and order.price <= book.bids[0].price

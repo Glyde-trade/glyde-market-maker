@@ -104,3 +104,11 @@ def test_lifecycle_cancels_before_replacement_and_blocks_after_unknown_cancel():
         assert client.calls[-1] == ("cancel_all", "BTC")
 
     asyncio.run(scenario())
+
+
+def test_quantization_never_escapes_an_unaligned_configured_range():
+    strategy, _, book = setup()
+    strategy.grid = replace(strategy.grid, lower_price=D("91"), upper_price=D("109"))
+    strategy.context = replace(strategy.context, price_tick=D("10"))
+    quotes = strategy.quotes(book, Account(D("1000")))
+    assert all(D("91") <= order.price <= D("109") for order in quotes)
