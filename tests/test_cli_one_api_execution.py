@@ -43,6 +43,7 @@ def exercise_cli(
     existing_position=False,
     existing_order=False,
     understand=False,
+    paper_fill_sides=("buy",),
 ):
     fake = FakeOneApiServer(user=OWNER, timestamp_ms=time.time_ns() // 1_000_000)
     fake.set_book("BTC", bids=[("99", "2")], asks=[("101", "2")])
@@ -97,7 +98,7 @@ def exercise_cli(
             }
         )
     )
-    actions, reports, papers = [], [], []
+    actions, reports, papers, paper_quotes = [], [], [], []
     secret = Config.secret
 
     def observed_secret(config, name):
@@ -116,19 +117,23 @@ def exercise_cli(
         class ObservedPaper(PaperExchange):
             async def place_orders(self, orders):
                 result = await super().place_orders(orders)
-                assert len(await self.open_orders()) == 2
-                fake.advance_time(max(1, time.time_ns() // 1_000_000 - fake.now_ms + 1))
-                fake.market_order("BTC", buy=False, size="0.1")
+                resting = await self.open_orders()
+                assert len(resting) == 2
+                paper_quotes.extend(resting)
+                for side in paper_fill_sides:
+                    fake.advance_time(max(1, time.time_ns() // 1_000_000 - fake.now_ms + 1))
+                    fake.market_order("BTC", buy=side == "sell", size="0.1")
                 return result
 
             async def on_trade(self, trade):
                 await super().on_trade(trade)
-                if self.fills:
+                if len(self.fills) == len(paper_fill_sides):
                     stop_event.set()
 
         def paper_factory(balance):
             paper = ObservedPaper(balance)
             papers.append(paper)
+            paper.observed_quotes = paper_quotes
             return paper
 
         @asynccontextmanager
@@ -192,6 +197,43 @@ def test_paper_cli_quotes_fill_real_simulator_and_cancel_on_exit(monkeypatch, tm
     assert account.equity == D("10000.02")
     assert any("PAPER SUMMARY" in line and "fills=1 | open_quotes=0" in line for line in reports)
     assert fake.info({"type": "openOrders", "user": OWNER}) == []
+
+
+def test_paper_cli_both_quotes_fill_through_public_tape_without_keys(monkeypatch, tmp_path):
+    result, fake, actions, reports, papers = exercise_cli(
+        monkeypatch, tmp_path, command="paper", paper_fill_sides=("buy", "sell")
+    )
+    paper = papers[0]
+    assert result == 0 and actions == []
+    assert [(row.side, row.quantity, row.price) for row in paper.observed_quotes] == [
+        ("buy", D("0.1"), D("99.8")),
+        ("sell", D("0.1"), D("100.2")),
+    ]
+    assert [(row.side, row.quantity, row.price) for row in paper.fills] == [
+        ("buy", D("0.1"), D("99.8")),
+        ("sell", D("0.1"), D("100.2")),
+    ]
+    account = asyncio.run(paper.account())
+    assert account.positions.get("BTC", D(0)) == 0
+    assert account.equity == D("10000.04")
+    assert asyncio.run(paper.open_orders()) == []
+    assert any("PAPER SUMMARY" in row and "fills=2 | open_quotes=0" in row for row in reports)
+    assert all(row["body"]["type"] == "meta" for row in fake.requests)
+    assert fake.info({"type": "openOrders", "user": OWNER}) == []
+
+
+@pytest.mark.parametrize("risk", [{"max_position": "0.05"}, {"max_order_notional": "1"}])
+def test_paper_cli_risk_refusal_never_places_simulated_or_real_orders(monkeypatch, tmp_path, risk):
+    result, fake, actions, reports, papers = exercise_cli(
+        monkeypatch, tmp_path, command="paper", risk=risk
+    )
+    paper = papers[0]
+    assert result == 1 and actions == []
+    assert paper.observed_quotes == [] and paper.fills == []
+    assert asyncio.run(paper.open_orders()) == []
+    assert (asyncio.run(paper.account())).equity == D("10000")
+    assert any("PAPER SUMMARY" in row and "fills=0 | open_quotes=0" in row for row in reports)
+    assert all(row["body"]["type"] == "meta" for row in fake.requests)
 
 
 def test_live_cli_signs_places_and_cancels_through_actual_one_api(monkeypatch, tmp_path):
