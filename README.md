@@ -21,6 +21,9 @@ python3 -m venv .venv
 python -m pip install 'git+https://github.com/Glyde-trade/glyde-market-maker.git'
 ```
 
+If environment creation reports that `ensurepip` is unavailable on Debian/Ubuntu, install the
+matching `python3-venv` package before continuing.
+
 **2. Create a paper config.** The wizard asks for a market, order size and limits. It never asks for
 or stores a private key, never enables live mode, and refuses to overwrite an existing file.
 
@@ -41,6 +44,19 @@ glyde-mm paper glyde-mm.yaml
 
 Stop with Ctrl-C. Review simulated fills and inventory before considering live mode. Paper and live
 orders go through the same risk boundary; `paper` forces simulation even if the YAML says `live`.
+
+## Check your setup
+
+```sh
+glyde-mm doctor glyde-mm.yaml
+```
+
+Doctor validates the YAML and strategy settings, reports whether the configured key environment
+variables are present, and makes one public metadata request to `base_url` (by default
+`https://api.glyde.trade/v1/info`). It never prints key values, sends private credentials, opens a
+WebSocket or submits an order. Missing keys are optional in paper mode and fail the check in live
+mode. Invalid config, an unavailable API or an unavailable market also returns a nonzero exit code.
+A passing public check does not verify key validity, account permissions or live execution.
 
 ## Go live with small, explicit limits
 

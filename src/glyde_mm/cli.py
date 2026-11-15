@@ -41,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = config.add_subparsers(dest="config_command", required=True)
     create = sub.add_parser("init")
     create.add_argument("--output", default="glyde-mm.yaml")
-    for name in ("paper", "run"):
+    for name in ("paper", "run", "doctor"):
         run = commands.add_parser(name)
         run.add_argument("config_path", nargs="?")
         run.add_argument("--config", dest="config_option")
@@ -58,12 +58,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.config_path and args.config_option:
             parser.error("use either a positional config or --config")
-        selected = load_config(args.config_path or args.config_option or "glyde-mm.yaml")
+        config_path = Path(args.config_path or args.config_option or "glyde-mm.yaml")
+        if args.command == "doctor":
+            from .doctor import check
+
+            return asyncio.run(check(config_path))
+        selected = load_config(config_path)
         if args.command == "paper":
             from dataclasses import replace
 
             selected = replace(selected, mode="paper")
-        config_path = Path(args.config_path or args.config_option or "glyde-mm.yaml")
         asyncio.run(run_with_signals(selected, config_path.parent / ".glyde-mm"))
         return 0
     except KeyboardInterrupt:

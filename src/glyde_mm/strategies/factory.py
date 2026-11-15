@@ -42,11 +42,22 @@ def parse_config(cls: type, values: dict[str, Any]):
     return cls(**converted)
 
 
+_STRATEGIES = {
+    "avellaneda_market_making": (AvellanedaMarketMakingStrategy, AvellanedaConfig),
+    "grid": (GridStrategy, GridConfig),
+    "pure_market_making": (PureMarketMakingStrategy, PureMarketMakingConfig),
+}
+
+
+def validate_strategy_config(name: str, values: dict[str, Any]):
+    try:
+        _, config_type = _STRATEGIES[name]
+    except KeyError:
+        raise ValueError("unsupported strategy") from None
+    return parse_config(config_type, values)
+
+
 def create_strategy(name: str, context: StrategyContext, values: dict[str, Any]):
-    if name == "avellaneda_market_making":
-        return AvellanedaMarketMakingStrategy(context, parse_config(AvellanedaConfig, values))
-    if name == "grid":
-        return GridStrategy(context, parse_config(GridConfig, values))
-    if name != "pure_market_making":
-        raise ValueError(f"unsupported strategy: {name}")
-    return PureMarketMakingStrategy(context, parse_config(PureMarketMakingConfig, values))
+    selected = validate_strategy_config(name, values)
+    strategy_type, _ = _STRATEGIES[name]
+    return strategy_type(context, selected)
