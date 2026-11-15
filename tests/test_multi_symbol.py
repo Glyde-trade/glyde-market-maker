@@ -26,10 +26,7 @@ markets:
     btc, eth = config.market_configs()
     assert config.symbols == ("BTC", "ETH")
     assert btc.risk.max_position == D(".1") and eth.risk.max_position == D("1")
-    assert (
-        btc.strategy_config["order_amount"] == ".01"
-        or btc.strategy_config["order_amount"] == "0.01"
-    )
+    assert btc.strategy_config["order_amount"] == "0.01"
     assert eth.strategy_config == {"order_amount": "0.2", "bid_spread": "0.02"}
     assert btc.risk.max_orders_per_minute == eth.risk.max_orders_per_minute == 7
 
@@ -40,10 +37,12 @@ markets:
         "markets: []",
         "markets: [{symbol: BTC, max_position: 1}]",
         "symbol: ETH\nmarkets: [{symbol: BTC, max_position: 1}]\nrisk: {max_total_notional: 50}",
-        "markets: [{symbol: BTC, max_position: 1}, {symbol: BTC, max_position: 2}]\nrisk: {max_total_notional: 50}",
+        "markets: [{symbol: BTC, max_position: 1}, {symbol: BTC, max_position: 2}]"
+        "\nrisk: {max_total_notional: 50}",
         "markets: [{symbol: BTC}]\nrisk: {max_total_notional: 50}",
         "markets: [{symbol: BTC, max_position: 0}]\nrisk: {max_total_notional: 50}",
-        "markets: [{symbol: BTC, max_position: 1, strategy_config: false}]\nrisk: {max_total_notional: 50}",
+        "markets: [{symbol: BTC, max_position: 1, strategy_config: false}]"
+        "\nrisk: {max_total_notional: 50}",
         "markets: [{symbol: BTC, max_position: 1}]\nrisk: {max_total_notional: -1}",
     ],
 )
@@ -133,3 +132,220 @@ def test_single_config_keeps_existing_default():
     assert config.symbols == ("BTC",)
     with pytest.raises(ValueError, match="max_total_notional"):
         Config(markets=(MarketConfig("ETH", D(1)),), risk=RiskConfig())
+
+
+async def paper_session(tmp_path, *, aggregate="50", rate=60, stale=False):
+    import asyncio
+    import time
+
+    from glyde_mm.paper import PaperExchange
+    from glyde_mm.runner import run
+    from glyde_mm.strategies import create_strategy
+
+    stop, placed = asyncio.Event(), asyncio.Event()
+    wire_time = time.time_ns() // 1_000_000
+    selected = Config(
+        markets=(
+            MarketConfig("BTC", D(".1")),
+            MarketConfig("ETH", D("1"), {"order_amount": "0.1"}),
+        ),
+        strategy_config={"order_amount": "0.01", "bid_spread": "0.02", "ask_spread": "0.02"},
+        risk=RiskConfig(
+            max_order_notional=D(25), max_total_notional=D(aggregate), max_orders_per_minute=rate
+        ),
+    )
+    instances, clients, lines = {}, [], []
+
+    class Source:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def meta(self):
+            return {"universe": [{"name": s, "szDecimals": 2} for s in selected.symbols]}
+
+        async def account(self):
+            pytest.fail("paper cannot read a private account")
+
+        async def stream(self, subscriptions):
+            assert subscriptions == [
+                {"type": "l2Book", "coin": "BTC"},
+                {"type": "l2Book", "coin": "ETH"},
+                {"type": "trades", "coin": "BTC"},
+                {"type": "trades", "coin": "ETH"},
+            ]
+            for symbol, bid, ask in [("ETH", "9", "11"), ("BTC", "99", "101")]:
+                yield {
+                    "channel": "l2Book",
+                    "data": {
+                        "coin": symbol,
+                        "time": wire_time - (60000 if stale and symbol == "ETH" else 0),
+                        "levels": [[{"px": bid, "sz": "2"}], [{"px": ask, "sz": "2"}]],
+                    },
+                }
+            await placed.wait()
+            yield {
+                "channel": "trades",
+                "data": [
+                    {
+                        "coin": "ETH",
+                        "side": "A",
+                        "px": "9",
+                        "sz": "0.1",
+                        "time": wire_time + 1,
+                        "tid": 1,
+                    }
+                ],
+            }
+            await asyncio.Event().wait()
+
+    class Paper(PaperExchange):
+        def __init__(self):
+            super().__init__(selected.paper_balance, clock_ms=lambda: wire_time)
+            self.batches = []
+            self.cancelled = []
+
+        async def place_orders(self, orders):
+            self.batches.append(list(orders))
+            results = await super().place_orders(orders)
+            if len(self.batches) == 2:
+                placed.set()
+            return results
+
+        async def cancel_all(self, symbol=None):
+            self.cancelled.append(symbol)
+            await super().cancel_all(symbol)
+
+    paper = Paper()
+
+    def factory(name, context, values):
+        instance = create_strategy(name, context, values)
+        original = instance.on_fill
+        instance.observed_fills = []
+
+        async def on_fill(fill):
+            instance.observed_fills.append(fill)
+            await original(fill)
+            stop.set()
+
+        instance.on_fill = on_fill
+        instances[context.symbol] = instance
+        clients.append(context.client)
+        return instance
+
+    error = None
+    try:
+        await asyncio.wait_for(
+            run(
+                selected,
+                state_directory=tmp_path,
+                client_factory=lambda _: Source(),
+                paper_factory=lambda _: paper,
+                strategy_factory=factory,
+                stop_event=stop,
+                report=lines.append,
+            ),
+            2,
+        )
+    except RiskViolation as caught:
+        error = caught
+    return selected, paper, instances, clients, lines, error
+
+
+async def test_real_paper_two_strategies_one_account_tape_fill_and_scoped_cleanup(tmp_path):
+    import json
+
+    from glyde_mm.runner import risk_state_path
+
+    selected, paper, instances, clients, lines, error = await paper_session(tmp_path)
+    assert error is None
+    assert set(instances) == {"BTC", "ETH"} and instances["BTC"] is not instances["ETH"]
+    assert clients[0] is clients[1]
+    assert [[o.symbol for o in batch] for batch in paper.batches] == [["BTC"] * 2, ["ETH"] * 2]
+    assert not instances["BTC"].observed_fills
+    assert len(instances["ETH"].observed_fills) == 1
+    assert (await paper.account()).positions == {"ETH": D(".1")}
+    assert not await paper.open_orders()
+    assert set(paper.cancelled) == {"BTC", "ETH"} and None not in paper.cancelled
+    state = json.loads(risk_state_path(selected, tmp_path).read_text())
+    assert state["equity_start"] == "10000" and len(state["order_attempts"]) == 4
+    assert len([line for line in lines if line.startswith("PAPER SUMMARY")]) == 2
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "reason", "batches"),
+    [
+        ({"aggregate": "1.5"}, "max_total_notional", 1),
+        ({"rate": 3}, "order_rate_limit", 1),
+        ({"stale": True}, "stale_book_source", 0),
+    ],
+)
+async def test_shared_risk_stops_all_markets_before_other_market_dispatch(
+    tmp_path, kwargs, reason, batches
+):
+    _, paper, _, _, _, error = await paper_session(tmp_path, **kwargs)
+    assert str(error) == reason
+    assert len(paper.batches) == batches
+    assert not await paper.open_orders()
+    assert set(paper.cancelled) == {"BTC", "ETH"}
+
+
+async def test_multi_preflight_checks_second_market_without_cancel(tmp_path):
+    from glyde_mm.preflight import LivePreflightRefused, check_live_exposure
+
+    class Source:
+        async def account(self):
+            return Account(D(1000), {"ETH": D(1)})
+
+        async def open_orders(self):
+            return []
+
+    with pytest.raises(LivePreflightRefused):
+        await check_live_exposure(Source(), ("BTC", "ETH"))
+    await check_live_exposure(Source(), ("BTC", "ETH"), allow_existing_exposure=True)
+
+
+async def test_stop_sweeps_all_selected_symbols_not_unrelated_market(tmp_path):
+    from glyde_mm.shutdown import stop_bot
+
+    selected = Config(
+        mode="live",
+        markets=(MarketConfig("BTC", D(1)), MarketConfig("ETH", D(1))),
+        risk=RiskConfig(max_total_notional=D(100)),
+    )
+
+    class Source:
+        def __init__(self):
+            self.cancelled = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def cancel_all(self, symbol):
+            self.cancelled.append(symbol)
+
+        async def open_orders(self):
+            return [OpenOrder("1", "SOL", "buy", D(1), D(10))]
+
+    source = Source()
+    result, _ = await stop_bot(selected, tmp_path, client_factory=lambda _: source)
+    assert result["outcome"] == "stopped"
+    assert source.cancelled == ["BTC", "ETH"]
+
+
+async def test_record_replay_refuse_multi_before_any_io(tmp_path):
+    from glyde_mm.book_history import record_books
+    from glyde_mm.replay import replay
+
+    selected = Config(
+        markets=(MarketConfig("ETH", D(1)),), risk=RiskConfig(max_total_notional=D(100))
+    )
+    with pytest.raises(ValueError, match="single-symbol"):
+        await record_books(selected, tmp_path / "missing", 1)
+    with pytest.raises(ValueError, match="single-symbol"):
+        await replay(selected, tmp_path / "missing", 1)

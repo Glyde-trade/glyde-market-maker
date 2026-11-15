@@ -120,15 +120,17 @@ async def _run_session(
     journal: RunLog,
     allow_existing_exposure: bool = False,
 ) -> None:
-    policy = validate_strategy_config(config.strategy, config.strategy_config)
-    reference = None
-    if getattr(policy, "reference_source", "glyde") == "hyperliquid":
-        reference = ExternalReference(
-            config.symbol,
-            max_deviation_bps=policy.max_reference_deviation_bps,
-            skew_bps=policy.reference_skew_bps,
-            stale_seconds=policy.reference_stale_seconds,
-        )
+    selected = {market.symbol: market for market in config.market_configs()}
+    references = {}
+    for symbol, market_config in selected.items():
+        policy = validate_strategy_config(market_config.strategy, market_config.strategy_config)
+        if getattr(policy, "reference_source", "glyde") == "hyperliquid":
+            references[symbol] = ExternalReference(
+                symbol,
+                max_deviation_bps=policy.max_reference_deviation_bps,
+                skew_bps=policy.reference_skew_bps,
+                stale_seconds=policy.reference_stale_seconds,
+            )
     if config.mode == "live":
         if not all(
             re.fullmatch(r"0x[0-9a-fA-F]{40}", value or "")
@@ -140,34 +142,41 @@ async def _run_session(
     limits = RiskLimits(
         max_position=config.risk.max_position,
         max_order_notional=config.risk.max_order_notional,
+        max_total_notional=config.risk.max_total_notional,
         max_daily_loss=config.risk.max_daily_loss,
         max_orders_per_minute=config.risk.max_orders_per_minute,
         stale_book_seconds=float(config.risk.stale_book_seconds),
         account_age_seconds=float(config.risk.account_age_seconds),
     )
+
+    def check_reference(book):
+        if book.symbol in references:
+            return references[book.symbol].center(book)
+        return book.mid
+
     guard = RiskGuard(
         limits,
         state_path=risk_state_path(config, state_directory),
-        reference_check=reference.center if reference else None,
+        position_limits={s: c.risk.max_position for s, c in selected.items()},
+        reference_check=check_reference if references else None,
     )
     stop = stop_event or asyncio.Event()
     async with client_factory(config) as source:
         if config.mode == "live":
             if stop.is_set():
                 return
-            # Refusal must not enter managed cleanup, which can cancel existing orders.
+            # All selected markets must pass before cleanup gains cancellation authority.
             await check_live_exposure(
-                source, config.symbol, allow_existing_exposure=allow_existing_exposure
+                source, config.symbols, allow_existing_exposure=allow_existing_exposure
             )
             if stop.is_set():
                 return
         raw = paper_factory(config.paper_balance) if config.mode == "paper" else source
         if config.mode == "paper":
             raw.use_trade_tape()
-        managed = RiskManagedClient(raw, guard, stop_event=stop, cleanup_symbol=config.symbol)
-        strategy = None
-        stream = None
-        reference_stream = None
+        managed = RiskManagedClient(raw, guard, stop_event=stop, cleanup_symbols=config.symbols)
+        strategies = {}
+        stream = reference_stream = None
         resources = AsyncExitStack()
         tasks: list[asyncio.Task] = []
         risk_stop = None
@@ -177,32 +186,33 @@ async def _run_session(
             metadata = await source.meta()
             if stop.is_set():
                 return
-            market = next(
-                (row for row in metadata["universe"] if row["name"] == config.symbol), None
-            )
-            if (
-                market is None
-                or type(market["szDecimals"]) is not int
-                or not 0 <= market["szDecimals"] <= 6
-            ):
-                raise ValueError("market size precision is unavailable")
-            size_decimals = market["szDecimals"]
-            subscriptions = [{"type": "l2Book", "coin": config.symbol}]
+            precision = {}
+            for symbol in selected:
+                market = next((row for row in metadata["universe"] if row["name"] == symbol), None)
+                if (
+                    market is None
+                    or type(market["szDecimals"]) is not int
+                    or not 0 <= market["szDecimals"] <= 6
+                ):
+                    raise ValueError("market size precision is unavailable")
+                precision[symbol] = market["szDecimals"]
+            subscriptions = [{"type": "l2Book", "coin": symbol} for symbol in selected]
             if config.mode == "paper":
-                subscriptions.append({"type": "trades", "coin": config.symbol})
+                subscriptions += [{"type": "trades", "coin": symbol} for symbol in selected]
             stream = source.stream(subscriptions)
             resources.push_async_callback(stream.aclose)
+            initial_books = {}
             async with asyncio.timeout(10):
-                while True:
+                while initial_books.keys() != selected.keys():
                     frame = await anext(stream)
                     if stop.is_set():
                         return
                     if frame.get("channel") == "l2Book":
-                        initial = book_from_wire(frame["data"])
-                        if initial.symbol != config.symbol:
+                        book = book_from_wire(frame["data"])
+                        if book.symbol not in selected:
                             raise OneApiError("book market mismatch")
-                        break
-            if reference is not None:
+                        initial_books[book.symbol] = book
+            if references:
                 public_config = replace(
                     config,
                     mode="paper",
@@ -213,95 +223,110 @@ async def _run_session(
                 reference_client = reference_factory(public_config)
                 resources.push_async_callback(reference_client.close)
                 reference_stream = reference_client.stream(
-                    [{"type": "l2Book", "coin": config.symbol}]
+                    [{"type": "l2Book", "coin": symbol} for symbol in references]
                 )
                 resources.push_async_callback(reference_stream.aclose)
+                received = set()
                 async with asyncio.timeout(10):
                     try:
-                        while True:
+                        while received != references.keys():
                             frame = await anext(reference_stream)
                             if stop.is_set():
                                 return
                             if frame.get("channel") == "l2Book":
-                                reference.update(book_from_wire(frame["data"]))
-                                break
+                                book = book_from_wire(frame["data"])
+                                if book.symbol not in references:
+                                    raise RiskViolation("reference_market_mismatch")
+                                references[book.symbol].update(book)
+                                received.add(book.symbol)
                     except StopAsyncIteration:
                         raise RiskViolation("reference_disconnected") from None
-            guard.update_book(initial)
-            if config.mode == "paper":
-                await raw.on_book(initial)
+            for book in initial_books.values():
+                guard.update_book(book)
+                if config.mode == "paper":
+                    await raw.on_book(book)
             guard.update_account(await raw.account())
             if stop.is_set():
                 return
-            guard.check_fresh(config.symbol)
-            context = StrategyContext(
-                managed,
-                config.symbol,
-                _price_tick(initial, size_decimals),
-                Decimal(1).scaleb(-size_decimals),
-                quote_center=reference.center if reference else None,
-            )
-            strategy = strategy_factory(config.strategy, context, config.strategy_config)
-            await strategy.on_book(initial)
-            report(f"{config.mode.upper()} {config.symbol}: strategy started with risk limits")
-            journal.emit("strategy_started")
+            for symbol, market_config in selected.items():
+                initial = guard.check_fresh(symbol)
+                context = StrategyContext(
+                    managed,
+                    symbol,
+                    _price_tick(initial, precision[symbol]),
+                    Decimal(1).scaleb(-precision[symbol]),
+                    quote_center=references[symbol].center if symbol in references else None,
+                )
+                strategy = strategy_factory(config.strategy, context, market_config.strategy_config)
+                strategies[symbol] = strategy
+                await strategy.on_book(initial)
+                report(
+                    f"{config.mode.upper()} {symbol}: strategy started "
+                    "with shared account risk limits"
+                )
+                journal.emit("strategy_started")
             fill_index = 0
-            book_messages = 1
+            book_messages = len(initial_books)
+
+            async def deliver_fills():
+                nonlocal fill_index
+                for fill in raw.fills[fill_index:]:
+                    await strategies[fill.symbol].on_fill(fill)
+                fill_index = len(raw.fills)
 
             async def receive_books() -> None:
-                nonlocal fill_index, book_messages
+                nonlocal book_messages
                 async for frame in stream:
                     if config.mode == "paper" and frame.get("channel") == "trades":
                         trades = trades_from_wire(frame["data"])
-                        if any(trade.symbol != config.symbol for trade in trades):
+                        if any(trade.symbol not in selected for trade in trades):
                             raise OneApiError("trade market mismatch")
                         for trade in trades:
                             await raw.on_trade(trade)
-                        for fill in raw.fills[fill_index:]:
-                            await strategy.on_fill(fill)
-                        fill_index = len(raw.fills)
+                        await deliver_fills()
                         guard.update_account(await raw.account())
                         continue
                     if frame.get("channel") != "l2Book":
                         continue
                     book = book_from_wire(frame["data"])
-                    if book.symbol != config.symbol:
+                    if book.symbol not in selected:
                         raise OneApiError("book market mismatch")
                     guard.update_book(book)
-                    if reference is not None:
-                        guard.check_fresh(config.symbol)
+                    if book.symbol in references:
+                        guard.check_fresh(book.symbol)
                     book_messages += 1
                     if config.mode == "paper":
                         await raw.on_book(book)
-                        for fill in raw.fills[fill_index:]:
-                            await strategy.on_fill(fill)
-                        fill_index = len(raw.fills)
+                        await deliver_fills()
+                    strategy = strategies[book.symbol]
                     strategy.context = replace(
-                        strategy.context, price_tick=_price_tick(book, size_decimals)
+                        strategy.context, price_tick=_price_tick(book, precision[book.symbol])
                     )
                     await strategy.on_book(book)
                 raise OneApiError("book stream disconnected")
 
             async def receive_reference() -> None:
-                assert reference_stream is not None and reference is not None
                 async for frame in reference_stream:
                     if frame.get("channel") == "l2Book":
-                        reference.update(book_from_wire(frame["data"]))
-                        guard.check_fresh(config.symbol)
+                        book = book_from_wire(frame["data"])
+                        if book.symbol not in references:
+                            raise RiskViolation("reference_market_mismatch")
+                        references[book.symbol].update(book)
+                        guard.check_fresh(book.symbol)
                 raise RiskViolation("reference_disconnected")
 
             async def drive() -> None:
                 refreshed = 0.0
-                reported = None
-                logged = None
+                reported = logged = None
                 while not stop.is_set():
                     now = time.monotonic()
                     if now - refreshed >= min(2.0, limits.account_age_seconds / 2):
                         guard.update_account(await raw.account())
                         refreshed = now
-                    if stop.is_set():
-                        return
-                    await strategy.on_tick()
+                    for strategy in strategies.values():
+                        if stop.is_set():
+                            return
+                        await strategy.on_tick()
                     if logged is None or now - logged >= 2:
                         journal.emit(
                             "progress",
@@ -311,14 +336,17 @@ async def _run_session(
                         )
                         logged = now
                     if config.mode == "paper" and (reported is None or now - reported >= 2):
-                        await report_paper_status(raw, config, report, risk_stop=guard.halted)
+                        for market_config in selected.values():
+                            await report_paper_status(
+                                raw, market_config, report, risk_stop=guard.halted
+                            )
                         reported = now
                     await asyncio.sleep(0.25)
 
             async def watchdog() -> None:
                 while True:
-                    if reference is not None:
-                        guard.check_fresh(config.symbol)
+                    for symbol in selected:
+                        guard.check_fresh(symbol)
                     await managed.check_liveness()
                     await asyncio.sleep(0.25)
 
@@ -328,7 +356,7 @@ async def _run_session(
                 asyncio.create_task(watchdog()),
                 asyncio.create_task(stop.wait()),
             ]
-            if reference is not None:
+            if references:
                 tasks.insert(0, asyncio.create_task(receive_reference()))
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
@@ -352,18 +380,25 @@ async def _run_session(
                 await resources.aclose()
             finally:
                 try:
-                    if strategy is not None:
-                        await strategy.stop()
+                    failure = None
+                    for strategy in strategies.values():
+                        try:
+                            await strategy.stop()
+                        except Exception as error:
+                            failure = failure or error
+                    if failure is not None:
+                        raise failure
                 finally:
                     try:
                         await managed.close()
                     finally:
                         if config.mode == "paper":
                             reason = risk_stop or guard.halted
-                            await report_paper_status(
-                                raw,
-                                config,
-                                report,
-                                summary=True,
-                                risk_stop=None if reason == "closed" else reason,
-                            )
+                            for market_config in selected.values():
+                                await report_paper_status(
+                                    raw,
+                                    market_config,
+                                    report,
+                                    summary=True,
+                                    risk_stop=None if reason == "closed" else reason,
+                                )

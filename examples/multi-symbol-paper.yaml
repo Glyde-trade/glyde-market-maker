@@ -1,0 +1,27 @@
+# One paper account, independent PMM instances and one shared risk boundary.
+mode: paper
+strategy: pure_market_making
+paper_balance: '10000'
+strategy_config:
+  bid_spread: '0.01'
+  ask_spread: '0.01'
+  order_refresh_time: 30
+  max_order_age: 300
+  refresh_tolerance_pct: '0.1'
+markets:
+  - symbol: BTC
+    max_position: '0.001'
+    strategy_config:
+      order_amount: '0.0001'
+  - symbol: ETH
+    max_position: '0.02'
+    strategy_config:
+      order_amount: '0.002'
+risk:
+  # Gross worst-case USDC exposure across positions + open + pending orders.
+  max_total_notional: '150'
+  max_order_notional: '25'
+  max_daily_loss: '5'
+  max_orders_per_minute: 60
+  stale_book_seconds: '5'
+  account_age_seconds: '10'

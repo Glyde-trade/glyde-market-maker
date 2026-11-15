@@ -19,7 +19,13 @@ from .risk import RiskGuard, RiskViolation
 
 
 def _paths(config: Config, directory: Path) -> tuple[Path, Path, Path]:
-    identity = (config.mode, config.base_url, config.owner, config.vault_address, config.symbol)
+    identity = (
+        config.mode,
+        config.base_url,
+        config.owner,
+        config.vault_address,
+        sorted(config.symbols),
+    )
     digest = hashlib.sha256(json.dumps(identity).encode()).hexdigest()[:24]
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     return tuple(directory / f"control-{digest}.{kind}" for kind in ("operation", "run", "stop"))
@@ -95,7 +101,7 @@ def _originals(config: Config, directory: Path) -> list[CancelRequest]:
             client_order_id=None if row["order_id"] else row["client_order_id"],
         )
         for row in record["originals"]
-        if row["symbol"] == config.symbol
+        if row["symbol"] in config.symbols
     ]
 
 
@@ -118,7 +124,7 @@ async def stop_bot(
     result = {
         "time": datetime.now(UTC).isoformat(),
         "mode": config.mode,
-        "symbol": config.symbol,
+        "symbol": ",".join(config.symbols),
         "outcome": "failed",
         "remaining_orders": None,
         "positions_closed": False,
@@ -157,10 +163,14 @@ async def stop_bot(
                                         failure = error
                             except Exception as error:
                                 failure = error
-                            await client.cancel_all(config.symbol)
+                            for symbol in config.symbols:
+                                try:
+                                    await client.cancel_all(symbol)
+                                except Exception as error:
+                                    failure = failure or error
                             remaining = await client.open_orders()
                             result["remaining_orders"] = sum(
-                                row.symbol == config.symbol for row in remaining
+                                row.symbol in config.symbols for row in remaining
                             )
                             if failure is not None or result["remaining_orders"]:
                                 raise RiskViolation("cancel_outcome_unknown")

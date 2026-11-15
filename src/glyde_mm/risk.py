@@ -389,13 +389,14 @@ class RiskManagedClient:
         *,
         stop_event: asyncio.Event | None = None,
         cleanup_symbol: str | None = None,
+        cleanup_symbols: tuple[str, ...] | None = None,
     ) -> None:
         self.client, self.guard = client, guard
         self._lock = asyncio.Lock()
         self._order_ids: dict[str, str] = {}
         self._closed = False
         self._stop_event = stop_event
-        self._cleanup_symbol = cleanup_symbol
+        self._cleanup_symbols = cleanup_symbols or (cleanup_symbol,)
 
     def _ensure_running(self) -> None:
         if self._closed or (self._stop_event is not None and self._stop_event.is_set()):
@@ -455,7 +456,14 @@ class RiskManagedClient:
     async def _cancel_and_halt(self, reason: str) -> None:
         self.guard.halted = self.guard.halted or reason
         # Reservations clear only after known cancels and discovery both succeed.
-        await self._cancel_before_discovery(self._cleanup_symbol)
+        failure = None
+        for symbol in self._cleanup_symbols:
+            try:
+                await self._cancel_before_discovery(symbol)
+            except Exception as error:
+                failure = failure or error
+        if failure is not None:
+            raise failure
 
     async def place_orders(self, orders: Sequence[OrderRequest]) -> list[OrderResult]:
         async with self._lock:
