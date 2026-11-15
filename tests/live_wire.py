@@ -36,7 +36,7 @@ def batch(
         "schemaVersion": "1",
         "riskVersion": "1",
         "feeVersion": "1",
-        "batch": {"id": f"{group}-{sequence}", "kind": kind, "parts": parts},
+        "batch": {"id": f"{group}-{sequence}", "kind": kind, "parts": parts, "index": None},
     }
     frames = []
     for i, (channel, value) in enumerate(data.items()):

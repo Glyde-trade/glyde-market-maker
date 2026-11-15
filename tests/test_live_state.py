@@ -455,3 +455,19 @@ async def test_cancel_ack_waits_for_push_before_reusing_account_and_orders(monke
         assert [row.get("type") for row in fake.requests if "type" in row] == ["meta"]
     finally:
         await finish(http, state, stream)
+
+
+@pytest.mark.parametrize("invalid", ["absent", 0, True])
+async def test_real_server_null_end_index_required_and_bad_end_never_commits(invalid):
+    state = LiveStateClient(None, config())
+    frames = batch("mm-owner", owner_roots(OWNER), owner=OWNER)
+    assert frames[-1]["glyde"]["batch"]["index"] is None
+    for frame in frames[:-1]:
+        state.consume(frame)
+    if invalid == "absent":
+        del frames[-1]["glyde"]["batch"]["index"]
+    else:
+        frames[-1]["glyde"]["batch"]["index"] = invalid
+    with pytest.raises(OneApiError):
+        state.consume(frames[-1])
+    assert state._account is None

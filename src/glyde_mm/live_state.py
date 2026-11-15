@@ -287,7 +287,9 @@ class LiveStateClient:
             or not isinstance(batch["id"], str)
             or not 0 < len(batch["id"]) <= 256
             or any(
-                d["index"] != i or not isinstance(d["subscriptionId"], str)
+                type(d["index"]) is not int
+                or d["index"] != i
+                or not isinstance(d["subscriptionId"], str)
                 for i, d in enumerate(declarations)
             )
             or len({d["subscriptionId"] for d in declarations}) != len(declarations)
@@ -342,7 +344,7 @@ class LiveStateClient:
             raise OneApiError("mixed live batch cut")
         parts = pending[1]
         if channel == "glydeBatchEnd":
-            if "index" in batch or len(parts) != len(declarations):
+            if batch.get("index", -1) is not None or len(parts) != len(declarations):
                 raise OneApiError("incomplete live batch")
             if owner_group and {d["channel"] for d in declarations} == expected:
                 self._commit_owner(parts, initial=self._account is None)
@@ -356,7 +358,11 @@ class LiveStateClient:
             del self._pending[group]
             self._changed.set()
         else:
-            if batch["index"] != len(parts) or channel != declarations[len(parts)]["channel"]:
+            if (
+                type(batch["index"]) is not int
+                or batch["index"] != len(parts)
+                or channel != declarations[len(parts)]["channel"]
+            ):
                 raise OneApiError("duplicate or reordered live batch part")
             parts.append(frame)
 
