@@ -8,11 +8,16 @@ import re
 import stat
 import tempfile
 import time
+from collections.abc import Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from .config import Config
+from .models import OpenOrder, OrderRequest
+from .paper import PaperExchange
+from .risk import RiskGuard
 
 _STATUSES = {
     "starting",
@@ -45,10 +50,10 @@ _FIELDS = {
 
 
 class SnapshotPublisher:
-    def __init__(self, path: Path, config: Config, run_id: str):
+    def __init__(self, path: Path, config: Config, run_id: str) -> None:
         self.path = path
         self.balance = config.paper_balance
-        self.state = {
+        self.state: dict[str, Any] = {
             "schema": 1,
             "run_id": run_id,
             "mode": config.mode,
@@ -70,7 +75,7 @@ class SnapshotPublisher:
         }
         self._write()
 
-    def _write(self):
+    def _write(self) -> None:
         self.state["updated_at_ms"] = time.time_ns() // 1_000_000
         descriptor, temporary = tempfile.mkstemp(prefix=".dashboard-", dir=self.path.parent)
         try:
@@ -81,9 +86,9 @@ class SnapshotPublisher:
         finally:
             Path(temporary).unlink(missing_ok=True)
 
-    async def publish(self, guard, *, paper=None):
+    async def publish(self, guard: RiskGuard, *, paper: PaperExchange | None = None) -> None:
         account = guard.account_state
-        orders = list(guard.pending.values())
+        orders: Sequence[OrderRequest | OpenOrder] = list(guard.pending.values())
         baseline = guard._equity_start
         if paper is not None:
             account = await paper.account()
@@ -120,26 +125,26 @@ class SnapshotPublisher:
         )
         self._write()
 
-    def finish(self, outcome: str):
+    def finish(self, outcome: str) -> None:
         self.state["status"] = outcome
         self._write()
 
 
-def _text(value, *, limit=128):
+def _text(value: object, *, limit: int = 128) -> str:
     if not isinstance(value, str) or not 1 <= len(value) <= limit:
         raise ValueError("invalid dashboard state")
     return value
 
 
-def _number(value):
+def _number(value: object) -> str | None:
     if value is None:
         return None
     if not re.fullmatch(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", _text(value)):
         raise ValueError("invalid dashboard number")
-    return value
+    return _text(value)
 
 
-def _rows(value):
+def _rows(value: Any) -> list[dict[str, Any]] | None:
     if value is None:
         return None
     if not isinstance(value, list) or len(value) > 200:
@@ -159,7 +164,7 @@ def _rows(value):
     return result
 
 
-def read_snapshot(path: Path, *, now_ms: int | None = None) -> dict:
+def read_snapshot(path: Path, *, now_ms: int | None = None) -> dict[str, Any]:
     """Read only an owned private snapshot, never expose arbitrary JSON fields."""
     try:
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -222,15 +227,15 @@ def read_snapshot(path: Path, *, now_ms: int | None = None) -> dict:
 _PAGE = Path(__file__).with_name("dashboard.html").read_bytes()
 
 
-def make_server(path: Path, port: int = 8080):
+def make_server(path: Path, port: int = 8080) -> ThreadingHTTPServer:
     if type(port) is not int or not 0 <= port <= 65535:
         raise ValueError("invalid dashboard port")
 
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
+        def do_GET(self) -> None:
             expected = {
-                f"127.0.0.1:{self.server.server_port}",
-                f"localhost:{self.server.server_port}",
+                f"127.0.0.1:{cast(ThreadingHTTPServer, self.server).server_port}",
+                f"localhost:{cast(ThreadingHTTPServer, self.server).server_port}",
             }
             host = self.headers.get("Host", "")
             origin = self.headers.get("Origin")
@@ -258,13 +263,13 @@ def make_server(path: Path, port: int = 8080):
             self.end_headers()
             self.wfile.write(body)
 
-        def log_message(self, *_):
+        def log_message(self, format: str, *args: Any) -> None:
             pass
 
     return ThreadingHTTPServer(("127.0.0.1", port), Handler)
 
 
-def serve(path: Path, port: int = 8080):
+def serve(path: Path, port: int = 8080) -> None:
     with make_server(path, port) as server:
         print(f"Read-only dashboard: http://127.0.0.1:{server.server_port}", flush=True)
         server.serve_forever()

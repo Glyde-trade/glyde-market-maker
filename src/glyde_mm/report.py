@@ -9,6 +9,7 @@ import stat
 from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
+from typing import Any
 
 from .runlog import _FIELDS, _OUTCOMES, _STRATEGIES
 
@@ -25,7 +26,7 @@ def _directory(path: Path) -> None:
         raise ValueError("Report input must be a real log directory.")
 
 
-def _validate(row: object, run_id: str) -> dict:
+def _validate(row: object, run_id: str) -> dict[str, Any]:
     if not isinstance(row, dict):
         raise ValueError("Invalid diagnostic record.")
     event = row.get("event")
@@ -67,7 +68,7 @@ def _validate(row: object, run_id: str) -> dict:
     return row
 
 
-def _read_run(path: Path, budget: list[int]) -> dict:
+def _read_run(path: Path, budget: list[int]) -> dict[str, Any]:
     _directory(path)
     match = _RUN.fullmatch(path.name)
     if match is None:
@@ -120,6 +121,7 @@ def _read_run(path: Path, budget: list[int]) -> dict:
         raise ValueError("Diagnostic sequence has a gap or duplicate.")
     if any(row["event"] == "run_ended" for row in rows[:-1]):
         raise ValueError("Diagnostic records follow an exit event.")
+    assert identity is not None
     progress = next((row for row in reversed(rows) if row["event"] == "progress"), None)
     return {
         "run_id": run_id,
@@ -133,7 +135,7 @@ def _read_run(path: Path, budget: list[int]) -> dict:
     }
 
 
-def summarize(directory: Path) -> dict:
+def summarize(directory: Path) -> dict[str, Any]:
     """Return safe metadata only; never access the network, config or credential store."""
     _directory(directory)
     if _RUN.fullmatch(directory.name):

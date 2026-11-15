@@ -6,10 +6,10 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import suppress
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -30,6 +30,7 @@ from .models import (
     OrderResult,
     Trade,
 )
+from .transport import WebSocketFactory
 
 
 class OneApiError(RuntimeError):
@@ -109,7 +110,7 @@ class OneApiClient:
         config: Config,
         *,
         http_client: httpx.AsyncClient | None = None,
-        connect_ws: Callable = websockets.connect,
+        connect_ws: WebSocketFactory = websockets.connect,
         heartbeat_interval: float = 20,
     ) -> None:
         self.config = config
@@ -135,7 +136,7 @@ class OneApiClient:
             await self._http.aclose()
 
     async def _post(
-        self, path: str, body: dict, *, private: bool = False, action: bool = False
+        self, path: str, body: dict[str, Any], *, private: bool = False, action: bool = False
     ) -> Any:
         headers = (
             {"X-Glyde-API-Key": self.config.secret(self.config.read_api_key_env)} if private else {}
@@ -162,18 +163,18 @@ class OneApiClient:
             raise OneApiError("One API returned invalid JSON") from None
         return result
 
-    async def info(self, body: dict) -> Any:
+    async def info(self, body: dict[str, Any]) -> Any:
         return await self._post(
             "/info", body, private=body.get("type") in {"clearinghouseState", "openOrders"}
         )
 
-    async def meta(self) -> dict:
+    async def meta(self) -> dict[str, Any]:
         result = await self.info({"type": "meta"})
         self._assets = {
             asset["name"]: (index, int(asset["szDecimals"]))
             for index, asset in enumerate(result["universe"])
         }
-        return result
+        return cast(dict[str, Any], result)
 
     async def book(self, symbol: str) -> Book:
         return book_from_wire(await self.info({"type": "l2Book", "coin": symbol}))
@@ -220,7 +221,7 @@ class OneApiClient:
             raise ValueError("symbol is absent from exchange metadata")
         return self._assets[symbol]
 
-    async def _order_wire(self, request: OrderRequest) -> dict:
+    async def _order_wire(self, request: OrderRequest) -> dict[str, Any]:
         asset, size_decimals = await self._asset(request.symbol)
         price, quantity = wire_decimal(request.price), wire_decimal(request.quantity)
         if request.side not in {"buy", "sell"} or request.time_in_force not in {
@@ -245,7 +246,7 @@ class OneApiClient:
             wire["c"] = request.client_order_id
         return wire
 
-    async def exchange(self, action: dict) -> dict:
+    async def exchange(self, action: dict[str, Any]) -> dict[str, Any]:
         if self.config.mode != "live":
             raise OneApiError("paper mode cannot submit exchange actions")
         if not self.config.owner or not self.config.vault_address:
@@ -286,7 +287,7 @@ class OneApiClient:
         return self._order_results(await self.exchange(action), orders)
 
     @staticmethod
-    def _statuses(result: dict, count: int) -> list:
+    def _statuses(result: dict[str, Any], count: int) -> list[Any]:
         if result.get("status") != "ok":
             raise OneApiError("exchange refused the action")
         try:
@@ -306,7 +307,9 @@ class OneApiClient:
             raise OutcomeUnknown("invalid order receipt identity")
         return text
 
-    def _order_results(self, result: dict, orders: Sequence[OrderRequest]) -> list[OrderResult]:
+    def _order_results(
+        self, result: dict[str, Any], orders: Sequence[OrderRequest]
+    ) -> list[OrderResult]:
         responses = []
         for request, status in zip(orders, self._statuses(result, len(orders)), strict=True):
             if not isinstance(status, dict) or len(status) != 1:
@@ -398,7 +401,9 @@ class OneApiClient:
         if any(symbol is None or row.symbol == symbol for row in remaining):
             raise OneApiError("cancel-all could not confirm an empty open-order snapshot")
 
-    async def stream(self, subscriptions: Sequence[dict]) -> AsyncIterator[dict]:
+    async def stream(
+        self, subscriptions: Sequence[dict[str, Any]]
+    ) -> AsyncGenerator[dict[str, Any], None]:
         parsed = urlsplit(self.config.base_url)
         url = urlunsplit(
             (

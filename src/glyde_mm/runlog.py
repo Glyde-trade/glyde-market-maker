@@ -7,6 +7,7 @@ import os
 import stat
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, TextIO
 from uuid import uuid4
 
 from .version import build_identity
@@ -52,11 +53,11 @@ class RunLog:
         self._file = self._open()
         self._write("run_header", self.header)
 
-    def _open(self):
+    def _open(self) -> TextIO:
         descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         return os.fdopen(descriptor, "w", encoding="utf-8")
 
-    def _write(self, event: str, fields: dict) -> None:
+    def _write(self, event: str, fields: dict[str, Any]) -> None:
         self.sequence += 1
         row = {
             "schema": 1,

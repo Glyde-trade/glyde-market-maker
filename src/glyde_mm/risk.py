@@ -14,8 +14,9 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from .config import RiskConfig
 from .models import CancelRequest
 
 if TYPE_CHECKING:
@@ -60,6 +61,18 @@ class RiskLimits:
             if not isinstance(value, (int, float)) or not 0 < value <= 3600:
                 raise ValueError("freshness limits must be positive and at most 3600 seconds")
 
+    @classmethod
+    def from_config(cls, config: RiskConfig) -> RiskLimits:
+        return cls(
+            max_position=config.max_position,
+            max_order_notional=config.max_order_notional,
+            max_daily_loss=config.max_daily_loss,
+            max_total_notional=config.max_total_notional,
+            max_orders_per_minute=config.max_orders_per_minute,
+            stale_book_seconds=float(config.stale_book_seconds),
+            account_age_seconds=float(config.account_age_seconds),
+        )
+
 
 def _positive(value: Decimal) -> bool:
     return isinstance(value, Decimal) and value.is_finite() and value > 0
@@ -93,7 +106,7 @@ class RiskGuard:
         self.halted: str | None = None
         self._day: str | None = None
         self._equity_start: Decimal | None = None
-        self._execution: dict | None = None
+        self._execution: dict[str, Any] | None = None
         self._order_attempts: list[float] = []
         self._last_rate_clock: float | None = None
         self._rate_monotonic: list[float] = []
@@ -121,9 +134,9 @@ class RiskGuard:
                     or (self._order_attempts and self._order_attempts[-1] > self.wall_clock())
                 ):
                     raise ValueError("invalid order rate state")
-                wall, clock = self.wall_clock(), self.clock()
+                wall, monotonic_now = self.wall_clock(), self.clock()
                 self._rate_monotonic = [
-                    clock - min(60, wall - stamp) for stamp in self._order_attempts
+                    monotonic_now - min(60, wall - stamp) for stamp in self._order_attempts
                 ]
                 self._execution = data.get("execution")
                 if self._execution is not None:
@@ -135,7 +148,7 @@ class RiskGuard:
                 raise RiskViolation("risk_state_unavailable") from exc
 
     @staticmethod
-    def _validate_execution(record: dict) -> None:
+    def _validate_execution(record: dict[str, Any]) -> None:
         if (
             not isinstance(record, dict)
             or set(record) != {"reason", "originals"}
@@ -186,7 +199,9 @@ class RiskGuard:
         self._rate_monotonic.extend([clock] * count)
         self._persist()
 
-    def begin_execution(self, reason: str, originals: Sequence) -> bool:
+    def begin_execution(
+        self, reason: str, originals: Sequence[OrderRequest | CancelRequest]
+    ) -> bool:
         if self._execution is not None:
             return False
         record = {
@@ -323,7 +338,8 @@ class RiskGuard:
         if self.position_limits and symbol not in self.position_limits:
             raise RiskViolation("unconfigured_market")
         position_cap = self.position_limits.get(symbol, self.limits.max_position)
-        position = self.account_state.positions.get(symbol, Decimal("0"))  # type: ignore[union-attr]
+        assert self.account_state is not None
+        position = self.account_state.positions.get(symbol, Decimal("0"))
         pending_ids = set(self.pending)
         outstanding = list(self.pending.values()) + [
             order for order in self.open_orders if order.client_order_id not in pending_ids
@@ -345,7 +361,15 @@ class RiskGuard:
         if self.limits.max_total_notional is not None:
             self._check_total_notional(outstanding, symbol, side, quantity, price)
 
-    def _check_total_notional(self, outstanding, symbol, side, quantity, price) -> None:
+    def _check_total_notional(
+        self,
+        outstanding: Sequence[OpenOrder | OrderRequest],
+        symbol: str,
+        side: str,
+        quantity: Decimal,
+        price: Decimal,
+    ) -> None:
+        assert self.account_state is not None and self.limits.max_total_notional is not None
         exposures = {
             key: [Decimal(0), Decimal(0), Decimal(0)]
             for key, value in self.account_state.positions.items()
@@ -483,6 +507,7 @@ class RiskManagedClient:
                 self._ensure_running()
                 for order in prepared:
                     self.guard.reserve(order)
+                    assert order.client_order_id is not None
                     reserved.append(order.client_order_id)
                 self.guard.consume_order_rate(len(prepared))
             except BaseException as error:
@@ -499,6 +524,7 @@ class RiskManagedClient:
                 ):
                     raise RiskViolation("order_outcome_unknown")
                 for order, result in zip(prepared, results, strict=True):
+                    assert order.client_order_id is not None
                     key = order.client_order_id
                     if result.client_order_id not in (None, key):
                         raise RiskViolation("order_identity_mismatch")

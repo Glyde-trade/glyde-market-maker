@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 import yaml
@@ -38,7 +39,7 @@ class RiskConfig:
 class MarketConfig:
     symbol: str
     max_position: Decimal
-    strategy_config: dict = field(default_factory=dict)
+    strategy_config: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.symbol, str) or not self.symbol or len(self.symbol) > 64:
@@ -67,7 +68,7 @@ class Config:
     paper_balance: Decimal = Decimal("10000")
     risk_state_path: str = ".glyde-mm/risk-state.json"
     strategy: str = "pure_market_making"
-    strategy_config: dict = field(default_factory=dict)
+    strategy_config: dict[str, Any] = field(default_factory=dict)
     risk: RiskConfig = field(default_factory=RiskConfig)
 
     def __post_init__(self) -> None:
@@ -169,12 +170,11 @@ def load_config(path: str | Path) -> Config:
     risk = raw.pop("risk", {})
     if not isinstance(risk, dict) or set(risk) - set(RiskConfig.__dataclass_fields__):
         raise ValueError("invalid risk configuration")
-    raw["risk"] = RiskConfig(
-        **{
-            key: value if key == "max_orders_per_minute" else decimal(value)
-            for key, value in risk.items()
-        }
-    )
+    risk_values: dict[str, Any] = {
+        key: value if key == "max_orders_per_minute" else decimal(value)
+        for key, value in risk.items()
+    }
+    raw["risk"] = RiskConfig(**risk_values)
     if "paper_balance" in raw:
         raw["paper_balance"] = decimal(raw["paper_balance"])
     if "mainnet" in raw and not isinstance(raw["mainnet"], bool):

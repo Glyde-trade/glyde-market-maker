@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any, Protocol
 from uuid import uuid4
 
 import yaml
@@ -20,13 +22,33 @@ from .preflight import summary
 from .presets import strategy_preset
 from .report import summarize
 from .strategies.factory import validate_strategy_config
+from .transport import ClientFactory
 from .version import build_identity
+
+
+class SessionRunner(Protocol):
+    def __call__(
+        self,
+        selected: Config,
+        state_directory: Path,
+        *,
+        duration_seconds: float | None = None,
+        log_directory: Path | None = None,
+        allow_existing_exposure: bool = False,
+    ) -> Awaitable[bool]: ...
+
+
+class DoctorCheck(Protocol):
+    def __call__(
+        self, path: Path, *, private: bool = False, report: Callable[[str], object] = print
+    ) -> Awaitable[int]: ...
+
 
 PREVIEW_SECONDS = 120
 LIVE_SECONDS = 1800
 
 
-def _public_values(value):
+def _public_values(value: Any) -> Any:
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, dict):
@@ -43,7 +65,9 @@ def _write_private(path: Path, text: str) -> None:
         os.fsync(handle.fileno())
 
 
-async def conservative_config(source: Config, *, client_factory=OneApiClient) -> Config:
+async def conservative_config(
+    source: Config, *, client_factory: ClientFactory = OneApiClient
+) -> Config:
     if source.mode != "live" or source.markets:
         raise ValueError("live-wizard requires an explicit single-symbol live config")
     policy = validate_strategy_config(source.strategy, source.strategy_config)
@@ -98,11 +122,11 @@ async def conservative_config(source: Config, *, client_factory=OneApiClient) ->
 async def first_live_session(
     path: Path,
     *,
-    run_session,
-    input_fn=None,
-    report=print,
-    client_factory=OneApiClient,
-    doctor_fn=check,
+    run_session: SessionRunner,
+    input_fn: Callable[[str], str] | None = None,
+    report: Callable[[str], object] = print,
+    client_factory: ClientFactory = OneApiClient,
+    doctor_fn: DoctorCheck = check,
 ) -> int:
     state = path.parent / ".glyde-mm"
     directory = state / "live-wizard" / f"session-{uuid4().hex}"
