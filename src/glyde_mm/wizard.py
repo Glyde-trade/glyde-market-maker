@@ -109,6 +109,7 @@ def run_wizard(
             "max_position": maximum_position,
             "max_order_notional": maximum_order,
             "max_daily_loss": maximum_loss,
+            "max_orders_per_minute": 60,
             "stale_book_seconds": "5",
             "account_age_seconds": "10",
         },

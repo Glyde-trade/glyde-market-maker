@@ -459,3 +459,17 @@ async def test_paper_repeated_cancel_has_bounded_terminal_proof():
         paper._remember_terminal(f"synthetic-{index}", OrderRequest("BTC", "buy", D(1), D(99)))
     assert len(paper._terminal) == 4096
     assert (await paper.cancel_orders([request]))[0].status == "rejected"
+
+
+def test_order_rate_config_roundtrip_uses_integer_and_refuses_coercion(tmp_path):
+    path = tmp_path / "bot.yaml"
+    write_config(path)
+    text = path.read_text()
+    assert "max_orders_per_minute: 60" in text
+    assert load_config(path).risk.max_orders_per_minute == 60
+    for invalid in ("true", "0", "1.5", "'60'", "6001"):
+        path.write_text(
+            text.replace("max_orders_per_minute: 60", f"max_orders_per_minute: {invalid}")
+        )
+        with pytest.raises(ValueError, match="max_orders_per_minute"):
+            load_config(path)

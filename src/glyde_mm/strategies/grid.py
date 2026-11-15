@@ -15,6 +15,7 @@ from .pure_market_making import (
     StrategyContext,
     quantized_order,
     valid_book,
+    validate_refresh_settings,
 )
 
 
@@ -25,9 +26,12 @@ class GridConfig:
     order_amount: Decimal
     levels: int = 5
     order_refresh_time: float = 30.0
+    refresh_tolerance_pct: Decimal | None = None
+    max_order_age: float = 300.0
     minimum_spread: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
+        validate_refresh_settings(self.refresh_tolerance_pct, self.max_order_age)
         for name in ("lower_price", "upper_price", "order_amount"):
             value = getattr(self, name)
             if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
@@ -56,6 +60,8 @@ class GridStrategy(PureMarketMakingStrategy):
             PureMarketMakingConfig(
                 order_amount=config.order_amount,
                 order_refresh_time=config.order_refresh_time,
+                refresh_tolerance_pct=config.refresh_tolerance_pct,
+                max_order_age=config.max_order_age,
                 minimum_spread=config.minimum_spread,
                 price_floor=config.lower_price,
                 price_ceiling=config.upper_price,
