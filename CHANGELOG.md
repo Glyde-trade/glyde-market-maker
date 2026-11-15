@@ -4,6 +4,25 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 ## [Unreleased]
 
+## [0.6.1]
+
+- Fix cancellation after uncertain order outcomes and restarts: cleanup retains
+  durable originals alongside pending and previously observed IDs, even when
+  discovery lags. Successful cancellation never clears an earlier unknown halt
+  or replaces its reason. Generated offline histories cover three strategies. (#70)
+- Live mode now consumes sequenced account/order/fill snapshots through the WS
+  cache instead of periodic private HTTP reads. Gaps, stale inputs and unsafe
+  publications latch the session; a restart requires a complete fresh snapshot
+  and does not bypass persisted uncertainty. (#64)
+- Doctor checks public HTTP Date bounds without another endpoint, reports key
+  presence by environment-variable name only, and validates risk freshness limits.
+  Strategy/configuration and operations references cover restart/stop semantics. (#67)
+- Add an external SDK quickstart and accurately scoped stock Hummingbot probe.
+  Offline compatibility is not native/private/deployment qualification. (#63, #66)
+- Update live CLI and wizard offline fixtures for sequenced owner baselines.
+  Public GHCR pulls still require an org-owner visibility change; build locally
+  until that is completed. (#68, #69)
+
 ## [0.6.0]
 
 - Tag releases publish version/full-SHA GHCR images for amd64 and arm64, using
