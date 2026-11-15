@@ -106,6 +106,13 @@ def trades_from_wire(data: object) -> tuple[Trade, ...]:
 
 
 def account_from_wire(state: dict[str, Any]) -> Account:
+    try:
+        unrealized = sum(
+            (decimal(row["position"]["unrealizedPnl"]) for row in state["assetPositions"]),
+            Decimal(0),
+        )
+    except (KeyError, ValueError, TypeError):
+        unrealized = None
     return Account(
         decimal(state["marginSummary"]["accountValue"]),
         {
@@ -113,6 +120,7 @@ def account_from_wire(state: dict[str, Any]) -> Account:
             for row in state["assetPositions"]
         },
         decimal(state["withdrawable"]),
+        unrealized_pnl=unrealized,
     )
 
 

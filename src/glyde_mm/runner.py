@@ -17,6 +17,7 @@ from .client import OneApiClient, OneApiError, book_from_wire, trades_from_wire
 from .config import Config
 from .dashboard import SnapshotPublisher
 from .live_state import LiveStateClient
+from .metrics import Metrics
 from .models import Book
 from .paper import PaperExchange
 from .preflight import check_live_exposure
@@ -80,11 +81,14 @@ async def run(
     log_directory: Path | None = None,
 ) -> None:
     stop = stop_event or asyncio.Event()
-    with RunLog(
-        log_directory if log_directory is not None else state_directory / "logs",
-        mode=config.mode,
-        strategy=config.strategy,
-    ) as journal:
+    with (
+        RunLog(
+            log_directory if log_directory is not None else state_directory / "logs",
+            mode=config.mode,
+            strategy=config.strategy,
+        ) as journal,
+        Metrics(config) as metrics,
+    ):
         report(f"GLYDE-MM {journal.identity['version']} commit={journal.identity['commit']}")
         outcome = "completed"
         failure: BaseException | None = None
@@ -106,6 +110,7 @@ async def run(
                     observer=observer,
                     allow_existing_exposure=allow_existing_exposure,
                     risk_reasons=risk_reasons,
+                    metrics=metrics,
                 )
             if stop.is_set():
                 outcome = "stopped"
@@ -142,6 +147,7 @@ async def _run_session(
     journal: RunLog,
     observer: SnapshotPublisher,
     risk_reasons: list[str],
+    metrics: Metrics,
     allow_existing_exposure: bool = False,
 ) -> None:
     selected = {market.symbol: market for market in config.market_configs()}
@@ -209,13 +215,15 @@ async def _run_session(
             if stop.is_set():
                 return
         paper = paper_factory(config.paper_balance) if config.mode == "paper" else None
-        live = LiveStateClient(source, config) if paper is None else None
+        live = LiveStateClient(source, config, metrics=metrics) if paper is None else None
         raw = paper if paper is not None else live
         assert raw is not None
         cleanup_allowed = paper is not None
         if paper is not None:
             paper.use_trade_tape()
-        managed = RiskManagedClient(raw, guard, stop_event=stop, cleanup_symbols=config.symbols)
+        managed = RiskManagedClient(
+            raw, guard, stop_event=stop, cleanup_symbols=config.symbols, metrics=metrics
+        )
         strategies: dict[str, Strategy] = {}
         stream = reference_stream = None
         resources = AsyncExitStack()
@@ -253,6 +261,7 @@ async def _run_session(
                         if book.symbol not in selected:
                             raise OneApiError("book market mismatch")
                         initial_books[book.symbol] = book
+            metrics.connected()
             if references:
                 public_config = replace(
                     config,
@@ -284,6 +293,7 @@ async def _run_session(
                         raise RiskViolation("reference_disconnected") from None
             for book in initial_books.values():
                 guard.update_book(book)
+                metrics.book(guard.books[book.symbol])
                 if paper is not None:
                     await paper.on_book(book)
             if live is not None:
@@ -320,6 +330,7 @@ async def _run_session(
                 for fill in paper.fills[fill_index:]:
                     await strategies[fill.symbol].on_fill(fill)
                 fill_index = len(paper.fills)
+                metrics.paper_fills(paper)
 
             async def receive_books() -> None:
                 nonlocal book_messages
@@ -328,6 +339,7 @@ async def _run_session(
                         guard.update_account(await live.account())
                         guard.set_open_orders(await live.open_orders())
                         for fill in frame["fills"]:
+                            metrics.fill(fill.symbol)
                             await strategies[fill.symbol].on_fill(fill)
                         continue
                     if paper is not None and frame.get("channel") == "trades":
@@ -348,6 +360,7 @@ async def _run_session(
                     if book.symbol not in selected:
                         raise OneApiError("book market mismatch")
                     guard.update_book(book)
+                    metrics.book(guard.books[book.symbol])
                     if book.symbol in references:
                         guard.check_fresh(book.symbol)
                     book_messages += 1
@@ -386,6 +399,8 @@ async def _run_session(
                         if stop.is_set():
                             return
                         await strategy.on_tick()
+                        if paper is not None:
+                            metrics.paper_fills(paper)
                     if logged is None or now - logged >= 2:
                         journal.emit(
                             "progress",
@@ -394,6 +409,13 @@ async def _run_session(
                             paper_fills=len(paper.fills) if paper is not None else 0,
                         )
                         await observer.publish(guard, paper=paper)
+                        metrics.snapshot(
+                            guard.account_state,
+                            guard._equity_start,
+                            limits.max_daily_loss,
+                            paper=paper,
+                            initial_balance=config.paper_balance,
+                        )
                         logged = now
                     if paper is not None and (reported is None or now - reported >= 2):
                         for market_config in selected.values():
