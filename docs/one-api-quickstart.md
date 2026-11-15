@@ -42,9 +42,9 @@ from hyperliquid.info import Info
 base = os.environ.get("GLYDE_ONE_API_BASE", "https://api.glyde.trade/v1")
 info = Info(base, skip_ws=True, timeout=5)
 try:
-    print(info.meta())                 # universe and size precision
-    print(info.l2_snapshot("BTC"))     # complete current book
-    print(info.all_mids())             # decimal-string midpoints
+    print(info.meta())  # universe and size precision
+    print(info.l2_snapshot("BTC"))  # complete current book
+    print(info.all_mids())  # decimal-string midpoints
 finally:
     info.session.close()
 ```
@@ -141,7 +141,7 @@ from hyperliquid.info import Info
 info = Info(base, skip_ws=True, timeout=5)
 info.session.headers["X-Glyde-API-Key"] = read_credential
 try:
-    account = info.user_state(owner)             # clearinghouseState
+    account = info.user_state(owner)  # clearinghouseState
     orders = info.open_orders(owner)
     frontend = info.frontend_open_orders(owner)
     fills = info.user_fills(owner)
@@ -168,16 +168,27 @@ from urllib.parse import urlsplit, urlunsplit
 import websocket
 
 url = urlsplit(base)
-ws_url = urlunsplit(("wss" if url.scheme == "https" else "ws",
-                    url.netloc, url.path + "/ws", "", ""))
+ws_url = urlunsplit(
+    ("wss" if url.scheme == "https" else "ws", url.netloc, url.path + "/ws", "", "")
+)
 errors = []
+
 
 def on_open(ws):
     for channel in ("clearinghouseState", "openOrders", "orderUpdates", "userFills"):
-        ws.send(json.dumps({"method": "subscribe", "subscription": {
-            "type": channel, "user": owner,
-            "glyde": {"version": 1, "delivery": "sequenced", "group": "owner"},
-        }}))
+        ws.send(
+            json.dumps(
+                {
+                    "method": "subscribe",
+                    "subscription": {
+                        "type": channel,
+                        "user": owner,
+                        "glyde": {"version": 1, "delivery": "sequenced", "group": "owner"},
+                    },
+                }
+            )
+        )
+
 
 def on_message(ws, raw):
     frame = json.loads(raw)
@@ -187,9 +198,14 @@ def on_message(ws, raw):
         return
     print(frame.get("channel"))  # No credential or financial payload logging.
 
-app = websocket.WebSocketApp(ws_url, header={"X-Glyde-API-Key": read_credential},
-    on_open=on_open, on_message=on_message,
-    on_error=lambda ws, error: errors.append(type(error).__name__))
+
+app = websocket.WebSocketApp(
+    ws_url,
+    header={"X-Glyde-API-Key": read_credential},
+    on_open=on_open,
+    on_message=on_message,
+    on_error=lambda ws, error: errors.append(type(error).__name__),
+)
 timer = threading.Timer(20, app.close)
 timer.start()
 try:
@@ -246,26 +262,56 @@ from eth_account import Account
 from hyperliquid.exchange import Exchange
 from hyperliquid.utils.types import Cloid
 
-exchange = Exchange(Account.from_key(os.environ["GLYDE_API_PRIVATE_KEY"]),
-    base_url=base, account_address=owner, vault_address=vault, timeout=10)
+exchange = Exchange(
+    Account.from_key(os.environ["GLYDE_API_PRIVATE_KEY"]),
+    base_url=base,
+    account_address=owner,
+    vault_address=vault,
+    timeout=10,
+)
+
 
 def place_limit(tif, quantity, limit_price):
     cloid = Cloid.from_str("0x" + uuid.uuid4().hex)
-    reply = exchange.order("BTC", True, quantity, limit_price,
-                           {"limit": {"tif": tif}}, cloid=cloid)
+    reply = exchange.order("BTC", True, quantity, limit_price, {"limit": {"tif": tif}}, cloid=cloid)
     return cloid, reply
 
+
 def place_bracket(quantity, entry, tp_trigger, tp_limit, sl_trigger, sl_limit):
-    return exchange.bulk_orders([
-        {"coin": "BTC", "is_buy": True, "sz": quantity, "limit_px": entry,
-         "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False},
-        {"coin": "BTC", "is_buy": False, "sz": quantity, "limit_px": tp_limit,
-         "order_type": {"trigger": {"isMarket": False, "triggerPx": tp_trigger,
-                                    "tpsl": "tp"}}, "reduce_only": True},
-        {"coin": "BTC", "is_buy": False, "sz": quantity, "limit_px": sl_limit,
-         "order_type": {"trigger": {"isMarket": False, "triggerPx": sl_trigger,
-                                    "tpsl": "sl"}}, "reduce_only": True},
-    ], grouping="normalTpsl")
+    return exchange.bulk_orders(
+        [
+            {
+                "coin": "BTC",
+                "is_buy": True,
+                "sz": quantity,
+                "limit_px": entry,
+                "order_type": {"limit": {"tif": "Gtc"}},
+                "reduce_only": False,
+            },
+            {
+                "coin": "BTC",
+                "is_buy": False,
+                "sz": quantity,
+                "limit_px": tp_limit,
+                "order_type": {
+                    "trigger": {"isMarket": False, "triggerPx": tp_trigger, "tpsl": "tp"}
+                },
+                "reduce_only": True,
+            },
+            {
+                "coin": "BTC",
+                "is_buy": False,
+                "sz": quantity,
+                "limit_px": sl_limit,
+                "order_type": {
+                    "trigger": {"isMarket": False, "triggerPx": sl_trigger, "tpsl": "sl"}
+                },
+                "reduce_only": True,
+            },
+        ],
+        grouping="normalTpsl",
+    )
+
 
 # Choose ONE reviewed action in an owned test environment, then inspect its receipt:
 # cloid, reply = place_limit("Alo", quantity, limit_price)  # also "Gtc" or "Ioc"
