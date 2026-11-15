@@ -257,7 +257,7 @@ async def probe(root):
     results["order_book"] = "PASS stock l2Book request against fake"
     oid = "0x" + "a" * 32
     exchange_id, _ = await connector._place_order(
-        oid, "BTC-USD", Decimal("0.1"), TradeType.BUY, OrderType.LIMIT_MAKER, Decimal("98")
+        oid, "BTC-USD", Decimal("0.2"), TradeType.BUY, OrderType.LIMIT_MAKER, Decimal("98")
     )
     assert str(fake.info({"type": "openOrders", "user": OWNER})[0]["oid"]) == exchange_id
     results["place"] = (
