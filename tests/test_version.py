@@ -11,7 +11,7 @@ def test_version_without_config_credentials_or_network(monkeypatch, capsys):
 
     monkeypatch.setattr(cli, "load_config", forbidden)
     monkeypatch.setattr(cli, "run_with_signals", forbidden)
-    monkeypatch.setattr(cli, "version", lambda _: "2.3.4")
+    monkeypatch.setattr(cli, "build_identity", lambda: {"version": "2.3.4", "commit": "unknown"})
     with pytest.raises(SystemExit) as result:
         cli.main(["--version"])
     assert result.value.code == 0
@@ -19,11 +19,13 @@ def test_version_without_config_credentials_or_network(monkeypatch, capsys):
 
 
 def test_source_checkout_version_fallback(monkeypatch, capsys):
-    def not_installed(_):
-        raise cli.PackageNotFoundError("glyde-market-maker")
+    from glyde_mm import version
 
-    monkeypatch.setattr(cli, "version", not_installed)
+    def not_installed(_):
+        raise version.metadata.PackageNotFoundError("glyde-market-maker")
+
+    monkeypatch.setattr(version.metadata, "distribution", not_installed)
     with pytest.raises(SystemExit) as result:
         cli.main(["--version"])
     assert result.value.code == 0
-    assert capsys.readouterr().out == f"glyde-mm {cli.__version__}\n"
+    assert capsys.readouterr().out == f"glyde-mm {version.__version__}\n"
