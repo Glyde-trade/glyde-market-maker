@@ -1,0 +1,5 @@
+{"coin":"BTC","side":"A","px":"99","sz":"0.6","time":1001,"tid":1}
+{"coin":"BTC","side":"A","px":"99","sz":"0.6","time":1002,"tid":2}
+{"coin":"BTC","side":"B","px":"101","sz":"1.25","time":1003,"tid":3}
+{"coin":"BTC","side":"A","px":"98","sz":"0.6","time":1004,"tid":4}
+{"coin":"BTC","side":"B","px":"102","sz":"0.25","time":1005,"tid":5}

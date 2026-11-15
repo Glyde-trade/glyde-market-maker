@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from decimal import Decimal
+from time import time_ns
 
 from .client import wire_decimal
 from .models import (
@@ -17,17 +18,20 @@ from .models import (
     OpenOrder,
     OrderRequest,
     OrderResult,
+    Trade,
 )
 
 
 class PaperExchange:
-    """Fills resting limits only when a later observed book crosses their price.
+    """Local fills from books, or opt-in public tape with a displayed-depth queue.
 
-    Queue priority, liquidation, funding and fees are not simulated. Paper results
-    are not forecasts of live execution.
+    Tape mode is used by streaming paper sessions; book-only replay retains its
+    existing depth-cross model. Neither model forecasts real execution.
     """
 
-    def __init__(self, balance: Decimal = Decimal("10000")) -> None:
+    def __init__(
+        self, balance: Decimal = Decimal("10000"), *, clock_ms: Callable[[], int] | None = None
+    ) -> None:
         if not balance.is_finite() or balance <= 0:
             raise ValueError("paper balance must be finite and positive")
         self._cash = balance
@@ -38,6 +42,18 @@ class PaperExchange:
         self._terminal: OrderedDict[str, OrderRequest] = OrderedDict()
         self._next_id = 0
         self.fills: list[Fill] = []
+        self._clock_ms = clock_ms or (lambda: time_ns() // 1_000_000)
+        self._trade_tape = False
+        self._trade_after: dict[str, int] = {}
+        self._queue_ahead: dict[tuple[str, str, Decimal], Decimal] = {}
+        self._trade_cut: dict[str, int] = {}
+        self._trade_ids: dict[str, set[str]] = {}
+
+    def use_trade_tape(self) -> None:
+        """Select tape fills before placing orders; never mix book and tape budgets."""
+        if self._orders or self.fills:
+            raise ValueError("select paper fill model before trading")
+        self._trade_tape = True
 
     async def on_book(self, book: Book) -> None:
         old = self._books.get(book.symbol)
@@ -46,6 +62,8 @@ class PaperExchange:
         if old is not None and book.timestamp_ms == old.timestamp_ms:
             return
         self._books[book.symbol] = book
+        if self._trade_tape:
+            return
         # One observed depth budget is shared across all local orders.
         bids = [[level.price, level.quantity] for level in book.bids]
         asks = [[level.price, level.quantity] for level in book.asks]
@@ -58,6 +76,82 @@ class PaperExchange:
                 del self._orders[oid]
             else:
                 self._orders[oid] = replace(request, quantity=remaining)
+
+    def _rest(self, oid: str, order: OrderRequest) -> None:
+        self._orders[oid] = order
+        if not self._trade_tape:
+            return
+        book = self._books[order.symbol]
+        self._trade_after[oid] = max(
+            self._clock_ms(), book.timestamp_ms, self._trade_cut.get(order.symbol, 0)
+        )
+        key = (order.symbol, order.side, order.price)
+        if key not in self._queue_ahead:
+            levels = book.bids if order.side == "buy" else book.asks
+            self._queue_ahead[key] = sum(
+                (row.quantity for row in levels if row.price == order.price), Decimal(0)
+            )
+
+    def _remove(self, oid: str) -> OrderRequest:
+        order = self._orders.pop(oid)
+        self._trade_after.pop(oid, None)
+        key = (order.symbol, order.side, order.price)
+        if not any((row.symbol, row.side, row.price) == key for row in self._orders.values()):
+            self._queue_ahead.pop(key, None)
+        return order
+
+    async def on_trade(self, trade: Trade) -> None:
+        if not self._trade_tape:
+            raise ValueError("paper trade tape is not enabled")
+        previous = self._trade_cut.get(trade.symbol, -1)
+        if trade.timestamp_ms < previous:
+            return
+        if trade.timestamp_ms > previous:
+            self._trade_ids[trade.symbol] = set()
+            self._trade_cut[trade.symbol] = trade.timestamp_ms
+        seen = self._trade_ids[trade.symbol]
+        if trade.trade_id in seen:
+            return
+        if len(seen) >= 4096:
+            raise ValueError("paper trade identity budget exceeded at one timestamp")
+        seen.add(trade.trade_id)
+        side = "buy" if trade.side == "sell" else "sell"
+        candidates = sorted(
+            (
+                (oid, row)
+                for oid, row in self._orders.items()
+                if row.symbol == trade.symbol and row.side == side
+            ),
+            key=lambda pair: -pair[1].price if side == "buy" else pair[1].price,
+        )
+        budget = trade.quantity
+        for oid, order in candidates:
+            if budget <= 0:
+                break
+            if trade.timestamp_ms <= self._trade_after[oid]:
+                continue
+            if (side == "buy" and trade.price > order.price) or (
+                side == "sell" and trade.price < order.price
+            ):
+                continue
+            key = (order.symbol, side, order.price)
+            ahead = self._queue_ahead[key] if trade.price == order.price else Decimal(0)
+            consumed = min(budget, ahead)
+            budget -= consumed
+            self._queue_ahead[key] = ahead - consumed
+            quantity = min(budget, order.quantity)
+            if order.reduce_only:
+                position = self._positions.get(order.symbol, Decimal(0))
+                quantity = min(quantity, max(Decimal(0), -position if side == "buy" else position))
+            if quantity <= 0:
+                continue
+            self._fill(oid, order, quantity, order.price, f"{trade.trade_id}:{oid}")
+            budget -= quantity
+            remaining = order.quantity - quantity
+            if remaining:
+                self._orders[oid] = replace(order, quantity=remaining)
+            else:
+                self._remember_terminal(oid, self._remove(oid))
 
     def _remember_terminal(self, oid: str, request: OrderRequest) -> None:
         self._terminal[oid] = request
@@ -88,7 +182,14 @@ class PaperExchange:
                 break
         return remaining
 
-    def _fill(self, oid: str, order: OrderRequest, quantity: Decimal, price: Decimal) -> None:
+    def _fill(
+        self,
+        oid: str,
+        order: OrderRequest,
+        quantity: Decimal,
+        price: Decimal,
+        trade_id: str | None = None,
+    ) -> None:
         previous = self._positions.get(order.symbol, Decimal(0))
         entry = self._entries.get(order.symbol, price)
         delta = quantity if order.side == "buy" else -quantity
@@ -109,6 +210,7 @@ class PaperExchange:
                 price,
                 oid,
                 client_order_id=order.client_order_id,
+                trade_id=trade_id,
             )
         )
 
@@ -167,7 +269,7 @@ class PaperExchange:
                 ]
             remaining = self._match(oid, order, budgets[key]) if crosses else order.quantity
             if remaining and order.time_in_force != "Ioc":
-                self._orders[oid] = replace(order, quantity=remaining)
+                self._rest(oid, replace(order, quantity=remaining))
                 status = "resting"
             elif remaining == order.quantity:
                 self._remember_terminal(oid, order)
@@ -199,7 +301,7 @@ class PaperExchange:
                 )
             found = oid in self._orders and self._orders[oid].symbol == request.symbol
             if found:
-                self._remember_terminal(oid, self._orders.pop(oid))
+                self._remember_terminal(oid, self._remove(oid))
                 status = "cancelled"
             else:
                 if oid is None:
@@ -231,7 +333,7 @@ class PaperExchange:
     async def cancel_all(self, symbol: str | None = None) -> None:
         for oid, request in list(self._orders.items()):
             if symbol is None or request.symbol == symbol:
-                self._remember_terminal(oid, self._orders.pop(oid))
+                self._remember_terminal(oid, self._remove(oid))
 
     async def open_orders(self) -> list[OpenOrder]:
         return [

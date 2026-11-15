@@ -28,6 +28,7 @@ from .models import (
     OpenOrder,
     OrderRequest,
     OrderResult,
+    Trade,
 )
 
 
@@ -71,6 +72,35 @@ def book_from_wire(data: dict[str, Any]) -> Book:
     ):
         raise OneApiError("unordered or crossed book")
     return Book(str(data["coin"]), sides[0], sides[1], int(data["time"]))
+
+
+def trades_from_wire(data: object) -> tuple[Trade, ...]:
+    try:
+        if not isinstance(data, list) or len(data) > 4096:
+            raise ValueError
+        result = []
+        for row in data:
+            tid = row["tid"]
+            if (
+                (type(tid) is not int and not isinstance(tid, str))
+                or not str(tid).isascii()
+                or not str(tid).isdigit()
+                or row["side"] not in {"B", "A"}
+            ):
+                raise ValueError
+            result.append(
+                Trade(
+                    row["coin"],
+                    "buy" if row["side"] == "B" else "sell",
+                    decimal(row["sz"]),
+                    decimal(row["px"]),
+                    row["time"],
+                    str(tid),
+                )
+            )
+        return tuple(result)
+    except (KeyError, TypeError, ValueError, AttributeError):
+        raise OneApiError("invalid public trades") from None
 
 
 class OneApiClient:

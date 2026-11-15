@@ -12,7 +12,7 @@ from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
-from .client import OneApiClient, OneApiError, book_from_wire
+from .client import OneApiClient, OneApiError, book_from_wire, trades_from_wire
 from .config import Config
 from .models import Book
 from .paper import PaperExchange
@@ -145,6 +145,8 @@ async def _run_session(
     stop = stop_event or asyncio.Event()
     async with client_factory(config) as source:
         raw = paper_factory(config.paper_balance) if config.mode == "paper" else source
+        if config.mode == "paper":
+            raw.use_trade_tape()
         managed = RiskManagedClient(raw, guard, stop_event=stop)
         strategy = None
         stream = None
@@ -168,7 +170,10 @@ async def _run_session(
             ):
                 raise ValueError("market size precision is unavailable")
             size_decimals = market["szDecimals"]
-            stream = source.stream([{"type": "l2Book", "coin": config.symbol}])
+            subscriptions = [{"type": "l2Book", "coin": config.symbol}]
+            if config.mode == "paper":
+                subscriptions.append({"type": "trades", "coin": config.symbol})
+            stream = source.stream(subscriptions)
             resources.push_async_callback(stream.aclose)
             async with asyncio.timeout(10):
                 while True:
@@ -229,6 +234,17 @@ async def _run_session(
             async def receive_books() -> None:
                 nonlocal fill_index, book_messages
                 async for frame in stream:
+                    if config.mode == "paper" and frame.get("channel") == "trades":
+                        trades = trades_from_wire(frame["data"])
+                        if any(trade.symbol != config.symbol for trade in trades):
+                            raise OneApiError("trade market mismatch")
+                        for trade in trades:
+                            await raw.on_trade(trade)
+                        for fill in raw.fills[fill_index:]:
+                            await strategy.on_fill(fill)
+                        fill_index = len(raw.fills)
+                        guard.update_account(await raw.account())
+                        continue
                     if frame.get("channel") != "l2Book":
                         continue
                     book = book_from_wire(frame["data"])
