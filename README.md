@@ -247,6 +247,33 @@ coin name on both venues; there is no symbol inference or FX conversion. Doctor
 checks the Glyde feed, not reference availability. Single-source book replay has
 no HL history and stops with `reference_unavailable` rather than inventing it.
 
+## If something goes wrong
+
+From another terminal on the same machine, with the same config and credentials:
+
+```sh
+glyde-mm stop configs/live.yaml
+```
+
+This requests a local runner stop, waits for its cleanup to finish, then cancels and
+verifies all open orders on the configured account **and symbol**, including orders
+placed manually on that symbol. Use a dedicated account. Positions are **not** closed;
+other symbols are not canceled. A paper config stops only its local paper runner and
+does not load keys or contact the exchange.
+
+The config must use the same `.glyde-mm` directory beside the config file as the running
+bot. The command also works after a crash: it tries persisted unresolved original IDs
+before open-order discovery. It writes a private JSON report under `.glyde-mm/stops/`
+and exits nonzero unless cancellation is confirmed. A disconnected venue, unavailable
+read credentials, another stop in progress, or a runner that cannot exit within 15 seconds
+produces **failed**, never a successful stop claim. This coordinates only updated runners
+on this machine using that state directory; it cannot stop another machine or an older bot.
+
+Keep the report and risk state. Do not delete an unknown-outcome record to force a restart;
+reconcile the original order IDs with the venue. A new explicit `run` after a successful stop
+can start quoting again and still requires its live confirmation and usual risk checks.
+For diagnostic logs, use `glyde-mm report path/to/.glyde-mm/logs`.
+
 ## Known limitations
 
 - Streaming paper fills approximate queue position from displayed depth and public
