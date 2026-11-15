@@ -321,3 +321,20 @@ async def test_failed_public_capture_retains_partial_file_and_closes_source(tmp_
     with pytest.raises(ValueError, match="ended before coverage"):
         await record_tape(config(), path, 1, client_factory=Failed)
     assert path.exists() and Failed.closed
+
+
+async def test_multi_market_config_is_refused_without_silently_choosing_one_asset(tmp_path):
+    from glyde_mm.config import MarketConfig
+
+    selected = Config(
+        markets=(MarketConfig("ETH", D(1)),), risk=RiskConfig(max_total_notional=D(100))
+    )
+    with pytest.raises(ValueError, match="single-symbol"):
+        await compare_strategies(selected, tape(tmp_path, market_events()))
+    with pytest.raises(ValueError, match="single-symbol"):
+        await record_tape(
+            selected,
+            tmp_path / "capture.jsonl",
+            1,
+            client_factory=lambda _: pytest.fail("must not construct a client"),
+        )

@@ -62,6 +62,8 @@ def format_comparison(result: Comparison) -> str:
 async def compare_strategies(
     config: Config, tape_path: Path, *, preset: str = "balanced"
 ) -> Comparison:
+    if config.markets:
+        raise ValueError("comparison requires a single-symbol config")
     size, events = read_tape(tape_path, config.symbol)
     glyde_index = next(
         i for i, event in enumerate(events) if event.source == "glyde" and event.book
@@ -134,7 +136,7 @@ async def _simulate(config, size, events, baseline, name, strategy_name, preset,
         wall_clock=lambda: now / 1000,
         reference_check=reference.center if reference else None,
     )
-    managed = RiskManagedClient(paper, guard)
+    managed = RiskManagedClient(paper, guard, cleanup_symbol=config.symbol)
     # Pre-roll seeds original source/arrival cuts and trade dedupe, without placing quotes.
     for event in events[: baseline + 1]:
         if event.book:

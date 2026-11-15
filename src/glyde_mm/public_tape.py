@@ -131,6 +131,8 @@ async def record_tape(
     client_factory=OneApiClient,
 ) -> int:
     check_minutes(minutes)
+    if config.markets:
+        raise ValueError("tape recording requires a single-symbol config")
     queue: asyncio.Queue = asyncio.Queue(maxsize=128)
     tasks = []
     streams = []
