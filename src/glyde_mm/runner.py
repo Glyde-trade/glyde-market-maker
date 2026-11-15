@@ -32,6 +32,27 @@ def _price_tick(book: Book, size_decimals: int) -> Decimal:
     return max(Decimal(1).scaleb(mid.adjusted() - 4), Decimal(1).scaleb(-max(0, 6 - size_decimals)))
 
 
+async def report_paper_status(
+    paper: PaperExchange,
+    config: Config,
+    report: Callable[[str], object],
+    *,
+    summary: bool = False,
+    risk_stop: str | None = None,
+) -> None:
+    account = await paper.account()
+    orders = await paper.open_orders()
+    position = account.positions.get(config.symbol, Decimal(0))
+    pnl = account.equity - config.paper_balance
+    fills = sum(fill.symbol == config.symbol for fill in paper.fills)
+    quotes = sum(order.symbol == config.symbol for order in orders)
+    label = "PAPER SUMMARY" if summary else "PAPER"
+    report(
+        f"{label} {config.symbol} | inventory={position:f} | simulated_pnl={pnl:+f} USDC"
+        f" | fills={fills} | open_quotes={quotes} | risk_stop={risk_stop or 'none'}"
+    )
+
+
 async def run(
     config: Config,
     *,
@@ -65,6 +86,7 @@ async def run(
         strategy = None
         stream = None
         tasks: list[asyncio.Task] = []
+        risk_stop = None
         try:
             if stop.is_set():
                 return
@@ -136,6 +158,7 @@ async def run(
 
             async def drive() -> None:
                 refreshed = 0.0
+                reported = None
                 while not stop.is_set():
                     now = time.monotonic()
                     if now - refreshed >= min(2.0, limits.account_age_seconds / 2):
@@ -144,6 +167,9 @@ async def run(
                     if stop.is_set():
                         return
                     await strategy.on_tick()
+                    if config.mode == "paper" and (reported is None or now - reported >= 2):
+                        await report_paper_status(raw, config, report, risk_stop=guard.halted)
+                        reported = now
                     await asyncio.sleep(0.25)
 
             async def watchdog() -> None:
@@ -167,6 +193,9 @@ async def run(
                             raise
                     if not stop.is_set():
                         raise OneApiError("strategy task exited unexpectedly")
+        except RiskViolation as error:
+            risk_stop = str(error)
+            raise
         finally:
             for task in tasks:
                 task.cancel()
@@ -180,4 +209,15 @@ async def run(
                     if strategy is not None:
                         await strategy.stop()
                 finally:
-                    await managed.close()
+                    try:
+                        await managed.close()
+                    finally:
+                        if config.mode == "paper":
+                            reason = risk_stop or guard.halted
+                            await report_paper_status(
+                                raw,
+                                config,
+                                report,
+                                summary=True,
+                                risk_stop=None if reason == "closed" else reason,
+                            )
