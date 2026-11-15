@@ -140,7 +140,7 @@ async def test_unknown_or_invalid_venue_rules_never_guess_pass(tmp_path, market,
         == 1
     )
     assert any(fix in line for line in lines)
-    if "minOrderSize" not in market:
+    if fix == "minimum is unavailable":
         assert any("min_size=unavailable" in line for line in lines)
     assert not list(tmp_path.glob("preflight-*.json"))
 

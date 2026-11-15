@@ -179,8 +179,10 @@ def _market_fixes(config: Config, market: JsonObject, book: Book) -> tuple[list[
             f"{symbol}: reduce order_amount/levels; one-sided quantity {total:f} exceeds "
             f"max_position {config.risk.max_position:f} (including possible size skew)."
         )
+    minimum_label = f"{minimum:f}" if "minOrderSize" in market else "unavailable"
     details = (
-        f"{symbol}: quantity_step={step:f}, min_size={minimum:f}, tick={tick:f}, one_side={total:f}"
+        f"{symbol}: quantity_step={step:f}, min_size={minimum_label}, "
+        f"tick={tick:f}, one_side={total:f}"
     )
     return fixes, details, notional
 
