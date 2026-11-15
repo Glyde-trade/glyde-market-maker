@@ -398,3 +398,33 @@ async def test_paper_duplicate_cut_cannot_replay_consumed_liquidity():
     assert sum(row.quantity for row in paper.fills) == D("0.25")
     await paper.on_book(crossing)
     assert sum(row.quantity for row in paper.fills) == D("0.25")
+
+
+async def test_stream_can_be_closed_after_one_frame_without_exception_group():
+    import asyncio
+
+    closed = asyncio.Event()
+
+    class Socket:
+        async def send(self, raw):
+            pass
+
+        def __aiter__(self):
+            return self.frames()
+
+        async def frames(self):
+            yield '{"channel":"trades","data":[]}'
+            await asyncio.Event().wait()
+
+    @asynccontextmanager
+    async def connect(*args, **kwargs):
+        try:
+            yield Socket()
+        finally:
+            closed.set()
+
+    async with OneApiClient(Config(), connect_ws=connect) as api:
+        stream = api.stream([{"type": "trades", "coin": "BTC"}])
+        assert (await anext(stream))["channel"] == "trades"
+        await stream.aclose()
+        assert closed.is_set()
