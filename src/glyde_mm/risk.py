@@ -36,6 +36,12 @@ class RiskViolation(RuntimeError):
     """A quote was refused before dispatch; the message contains no credentials."""
 
 
+class StaleMarket(RiskViolation):
+    def __init__(self, symbol: str, reason: str) -> None:
+        super().__init__(reason)
+        self.symbol = symbol
+
+
 @dataclass(frozen=True)
 class RiskLimits:
     max_position: Decimal = Decimal("0.001")
@@ -335,7 +341,7 @@ class RiskGuard:
         book, account = self.books.get(symbol), self.account_state
         now = self.clock()
         if book is None or not 0 <= now - book.received_at <= self.limits.stale_book_seconds:
-            raise RiskViolation("stale_book")
+            raise StaleMarket(symbol, "stale_book")
         if (
             not book.bids
             or not book.asks
@@ -346,7 +352,7 @@ class RiskGuard:
             raise RiskViolation("invalid_book")
         source_age = self.wall_clock() - book.timestamp_ms / 1000
         if not -1 <= source_age <= self.limits.stale_book_seconds:
-            raise RiskViolation("stale_book_source")
+            raise StaleMarket(symbol, "stale_book_source")
         if account is None or not 0 <= now - account.received_at <= self.limits.account_age_seconds:
             raise RiskViolation("stale_account")
         if self.reference_check is not None:
@@ -440,7 +446,9 @@ class RiskManagedClient:
         cleanup_symbol: str | None = None,
         cleanup_symbols: tuple[str, ...] | None = None,
         metrics: Metrics | None = None,
+        isolate_stale_markets: bool = False,
     ) -> None:
+        self.isolate_stale_markets = isolate_stale_markets
         self.client, self.guard = client, guard
         self.metrics = metrics
         self._lock = asyncio.Lock()
@@ -565,6 +573,17 @@ class RiskManagedClient:
                 reason = str(error) if isinstance(error, RiskViolation) else "pretrade_refused"
                 if self.metrics:
                     self.metrics.refused(reason, len(prepared))
+                if (
+                    self.isolate_stale_markets
+                    and isinstance(error, StaleMarket)
+                    and error.symbol in self.guard.position_limits
+                ):
+                    try:
+                        await self._cancel_before_discovery(error.symbol)
+                    except BaseException:
+                        await self._cancel_and_halt("cancel_outcome_unknown")
+                        raise
+                    raise
                 try:
                     await self._cancel_and_halt(self.guard.halted or reason)
                 except Exception as cleanup_error:
@@ -650,6 +669,15 @@ class RiskManagedClient:
     async def open_orders(self) -> list[OpenOrder]:
         return await self.client.open_orders()
 
+    async def refresh_account(self) -> None:
+        async with self._lock:
+            self._ensure_running()
+            account = await self.client.account()
+            orders = await self.client.open_orders()
+            self._ensure_running()
+            self.guard.update_account(account)
+            self.guard.set_open_orders(orders)
+
     async def on_disconnect(self) -> None:
         async with self._lock:
             await self._cancel_and_halt("disconnected")
@@ -657,8 +685,16 @@ class RiskManagedClient:
     async def check_liveness(self) -> None:
         async with self._lock:
             try:
+                stale = set()
                 for order in self.guard.pending.values():
-                    self.guard.check_fresh(order.symbol)
+                    try:
+                        self.guard.check_fresh(order.symbol)
+                    except StaleMarket as error:
+                        if not self.isolate_stale_markets:
+                            raise
+                        stale.add(error.symbol)
+                for symbol in stale:
+                    await self._cancel_before_discovery(symbol)
             except RiskViolation:
                 await self._cancel_and_halt("stale_inputs")
                 raise

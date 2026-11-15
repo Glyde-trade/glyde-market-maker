@@ -1,10 +1,9 @@
-# One paper account, independent PMM instances and one shared risk boundary.
+# One paper account, independent strategies and one shared risk boundary.
+# A stale flat market retires its quotes while fresh markets can keep quoting.
 mode: paper
 strategy: pure_market_making
 paper_balance: '10000'
 strategy_config:
-  bid_spread: '0.01'
-  ask_spread: '0.01'
   order_refresh_time: 30
   max_order_age: 300
   refresh_tolerance_pct: '0.1'
@@ -13,10 +12,15 @@ markets:
     max_position: '0.001'
     strategy_config:
       order_amount: '0.0001'
+      bid_spread: '0.01'
+      ask_spread: '0.01'
   - symbol: ETH
+    strategy: inventory_skewed
     max_position: '0.02'
     strategy_config:
       order_amount: '0.002'
+      volatility_samples: 30
+      order_amount_shape_factor: '1'
 risk:
   # Gross worst-case USDC exposure across positions + open + pending orders.
   max_total_notional: '150'
