@@ -6,14 +6,13 @@ import argparse
 import asyncio
 import signal
 import sys
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from . import __version__
 from .client import OneApiError
 from .config import load_config, write_config
 from .risk import RiskViolation
 from .runner import run as run_strategy
+from .version import build_identity
 
 
 async def run_with_signals(selected, state_directory: Path) -> None:
@@ -35,10 +34,7 @@ async def run_with_signals(selected, state_directory: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="glyde-mm", description="Glyde paper-first market maker")
-    try:
-        installed_version = version("glyde-market-maker")
-    except PackageNotFoundError:
-        installed_version = __version__
+    installed_version = build_identity()["version"]
     parser.add_argument("--version", action="version", version=f"glyde-mm {installed_version}")
     commands = parser.add_subparsers(dest="command", required=True)
     init = commands.add_parser("init", help="write a private paper configuration")

@@ -163,7 +163,8 @@ Tests use fake One API clients/servers and require no network or credentials.
 
 The maintainer updates `project.version` in `pyproject.toml`, then creates the matching `v<version>`
 tag. The tag workflow builds the source archive and wheel, tests an isolated wheel installation,
-and attaches both to a GitHub Release using only the repository's `GITHUB_TOKEN`. It does not
+and attaches both to a GitHub Release using only the repository's `GITHUB_TOKEN`. Release packages
+embed the checked-out commit, which the isolated install check verifies against the build SHA. It does not
 publish to PyPI. A mismatched tag fails before publishing; PR packaging checks do not create tags or releases.
 
 To run the same packaging check locally:

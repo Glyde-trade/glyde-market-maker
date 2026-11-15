@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -13,7 +15,9 @@ from pathlib import Path
 from zipfile import ZipFile
 
 
-def check(wheel: Path) -> None:
+def check(wheel: Path, expected_commit: str | None = None) -> None:
+    if expected_commit is not None and not re.fullmatch(r"[0-9a-f]{40}", expected_commit):
+        raise ValueError("invalid expected source commit")
     wheel = wheel.resolve(strict=True)
     with ZipFile(wheel) as archive:
         metadata_paths = [
@@ -51,10 +55,29 @@ def check(wheel: Path) -> None:
         )
         if result.stdout.strip() != f"glyde-mm {metadata['Version']}" or result.stderr:
             raise AssertionError("installed console version does not match wheel metadata")
+        if expected_commit is not None:
+            identity = subprocess.run(
+                [
+                    str(python),
+                    "-c",
+                    "import json; from glyde_mm.version import build_identity; "
+                    "print(json.dumps(build_identity()))",
+                ],
+                cwd=root,
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if json.loads(identity.stdout)["commit"] != expected_commit:
+                raise AssertionError("installed build identity does not match the source commit")
         print(f"PASS: isolated wheel install; {result.stdout.strip()}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("wheel", type=Path)
-    check(parser.parse_args().wheel)
+    parser.add_argument("--expected-commit")
+    args = parser.parse_args()
+    check(args.wheel, args.expected_commit)
