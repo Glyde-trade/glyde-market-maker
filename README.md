@@ -9,6 +9,11 @@ Strategy designs are adapted from [Hummingbot](https://github.com/hummingbot/hum
 See [stock Hummingbot connector compatibility](docs/hummingbot.md) for the local
 wire-probe results and the authentication adapters still required.
 
+For SDK URLs, separate trading/read credentials, Python 0.24 examples and
+snapshot/reconnect rules, see the [One API developer quickstart](https://github.com/Glyde-trade/glyde/blob/master/docs/one-api/quickstart.md)
+(Glyde repository access required). Source support does not establish that a
+deployment has enabled the corresponding API; start with public reads and paper.
+
 ## Current status
 
 `glyde-mm paper <config>` runs the selected strategy through the risk layer into the paper
