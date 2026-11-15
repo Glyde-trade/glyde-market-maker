@@ -38,14 +38,24 @@ glyde-mm run live-small.yaml
 ```
 
 Preflight uses only public `meta` and `l2Book`, lists credential variable **names/presence**
-without reading values, and checks size precision, advertised minimum size, tick, per-order
-notional and one-sided level budgets. It prints one PASS or actionable FIX lines. PASS is
-stored privately beside the config and expires after five minutes; config changes invalidate
-it. Public metadata must advertise `minOrderSize`; if the service exposes only `szDecimals`,
-the venue minimum is **unavailable** and preflight refuses rather than guessing. Doctor,
-preflight and paper success do not verify private permissions, current positions or future
-prices. Live risk checks and typed confirmation still apply. The live wizard preflights its
-frozen derived config before private diagnostics and the preview.
+without reading values, and requires each selected `meta.universe` row's version-1
+`glydeOrderRules`. It checks the advertised `quantityStep` (which need not be a power of ten),
+`minimumNotionalUsd`, `priceTick`, decimal/significant-figure limits and integer-price exception.
+There is no fixed `minOrderSize` fallback. Missing, malformed or unsupported native rules
+refuse with FIX lines; `szDecimals` alone never supplies a venue minimum or lot.
+
+Minimum notional is checked on **both** rounded nominal bid and ask prices at the current
+book, before any maximum-size inventory skew; the higher ask cannot qualify an undersized
+bid. Grid checks include its lower levels. Per-order and one-sided budgets still use
+conservative maximum sizes/prices. These public checks do not model future volatility,
+private inventory skew or an external reference's future prices. Venue validation remains final.
+PASS is stored privately beside the config and expires after five minutes; config changes
+invalidate it. Receipts from the old checks are invalidated: run preflight again.
+Doctor, preflight and paper success do not verify private permissions, current positions or
+future prices. Live risk checks and typed confirmation still apply. The live wizard rounds its
+proposed amount up to the native lot and bid-side minimum, then preflights that frozen config
+against **unchanged** risk caps before private diagnostics and the preview. If the minimum
+cannot fit those caps, it refuses instead of raising a cap.
 
 See [Troubleshooting](docs/troubleshooting.md) for common refusals, unknown outcomes and reports.
 
@@ -118,8 +128,8 @@ glyde-mm doctor glyde-mm.yaml
 
 Doctor validates YAML and strategy settings and checks public metadata plus a fresh
 book. It reports the quantity step and the runner's price tick at the current
-midpoint. The public metadata does not expose minimum order size/notional, so
-those limits are reported as unavailable rather than inferred from precision.
+midpoint. Doctor does not certify native order-rule compliance; use public preflight
+for the advertised `glydeOrderRules` checks. Missing limits remain unavailable.
 Missing keys are optional in paper mode and fail the check in live mode.
 Configured credential variable names and presence are printed, never values.
 Clock diagnostics use the same public response's HTTP Date with request-latency
@@ -330,8 +340,9 @@ For diagnostic logs, use `glyde-mm report path/to/.glyde-mm/logs`.
 - Live mode requires the requested Glyde capabilities and registered owner, namespace,
   trading key and read credential. Doctor's optional private check proves read access
   only; it cannot establish signing authority or order acceptance.
-- Public metadata provides size precision, but no minimum order size/notional. The
-  displayed runner tick is derived at the current midpoint; venue validation remains final.
+- Native `glydeOrderRules` are optional public metadata: preflight refuses when absent.
+  The displayed runner tick is derived at the current midpoint; preflight checks its nominal
+  quotes against native price rules, and venue validation remains final.
 - Risk limits are local guardrails, not guaranteed loss bounds. Daily loss tracks equity
   against a UTC-day baseline, including unrealized changes and transfers; it does not
   flatten existing positions. Run one bot process per dedicated account: the local state

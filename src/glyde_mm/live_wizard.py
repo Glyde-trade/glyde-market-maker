@@ -8,7 +8,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
@@ -19,6 +19,7 @@ from .client import OneApiClient
 from .config import Config, load_config
 from .doctor import check
 from .market_preflight import check as check_markets
+from .order_rules import order_rules
 from .preflight import summary
 from .presets import strategy_preset
 from .report import summarize
@@ -75,9 +76,8 @@ async def conservative_config(
     async with client_factory(source) as client:
         metadata = await client.meta()
         book = await client.book(source.symbol)
-    precision = next(
-        row["szDecimals"] for row in metadata["universe"] if row["name"] == source.symbol
-    )
+    market = next(row for row in metadata["universe"] if row["name"] == source.symbol)
+    precision = market["szDecimals"]
     if (
         type(precision) is not int
         or not 0 <= precision <= 6
@@ -112,11 +112,33 @@ async def conservative_config(
     )
     if (
         Decimal(values["order_amount"]).quantize(
-            Decimal(1).scaleb(-precision), rounding="ROUND_DOWN"
+            Decimal(1).scaleb(-precision), rounding=ROUND_FLOOR
         )
         <= 0
     ):
         raise ValueError("caps are too small for market quantity precision")
+    rules = order_rules(market)
+    from .runner import _price_tick
+
+    tick = _price_tick(book, precision)
+    spread = Decimal(values.get("bid_spread", values["minimum_spread"]))
+    bid = (book.mid * (1 - spread) / tick).to_integral_value(rounding=ROUND_FLOOR) * tick
+    if source.strategy == "grid":
+        bid = (Decimal(values["lower_price"]) / tick).to_integral_value(rounding=ROUND_FLOOR) * tick
+    if bid <= 0:
+        raise ValueError("caps/price cannot support the native minimum")
+    amount = max(
+        Decimal(values["order_amount"]),
+        (rules.minimum_notional / bid / rules.quantity_step).to_integral_value(
+            rounding=ROUND_CEILING
+        )
+        * rules.quantity_step,
+    )
+    values["order_amount"] = str(
+        (amount / rules.quantity_step).to_integral_value(rounding=ROUND_CEILING)
+        * rules.quantity_step
+    )
+    # Public preflight checks the larger proposal against unchanged supplied caps below.
     return replace(source, risk=risk, strategy_config=values)
 
 
