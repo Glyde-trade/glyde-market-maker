@@ -63,6 +63,7 @@ async def run(
         raw = paper_factory(config.paper_balance) if config.mode == "paper" else source
         managed = RiskManagedClient(raw, guard)
         strategy = None
+        stream = None
         tasks: list[asyncio.Task] = []
         try:
             metadata = await source.meta()
@@ -157,7 +158,11 @@ async def run(
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             try:
-                if strategy is not None:
-                    await strategy.stop()
+                if stream is not None:
+                    await stream.aclose()
             finally:
-                await managed.close()
+                try:
+                    if strategy is not None:
+                        await strategy.stop()
+                finally:
+                    await managed.close()

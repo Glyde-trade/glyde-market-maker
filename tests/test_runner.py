@@ -217,3 +217,26 @@ async def test_grid_config_is_selectable_by_the_same_safe_runner(tmp_path):
     assert len(paper.submissions) == 4
     assert all(D("90") <= order.price <= D("110") for order in paper.submissions)
     assert await paper.open_orders() == []
+
+
+async def test_cli_installs_signal_driven_shutdown_without_sending_real_signals(
+    tmp_path, monkeypatch
+):
+    import signal
+
+    from glyde_mm import cli
+
+    installed, removed = {}, []
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(
+        loop, "add_signal_handler", lambda kind, callback: installed.__setitem__(kind, callback)
+    )
+    monkeypatch.setattr(loop, "remove_signal_handler", lambda kind: removed.append(kind))
+
+    async def fake_run(config, *, state_directory, stop_event):
+        installed[signal.SIGTERM]()
+        await asyncio.wait_for(stop_event.wait(), 1)
+
+    monkeypatch.setattr(cli, "run_strategy", fake_run)
+    await cli.run_with_signals(config(), tmp_path)
+    assert set(removed) == {signal.SIGTERM, signal.SIGINT}

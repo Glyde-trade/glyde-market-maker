@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import signal
 import sys
 from pathlib import Path
 
@@ -11,6 +12,24 @@ from .client import OneApiError
 from .config import load_config, write_config
 from .risk import RiskViolation
 from .runner import run as run_strategy
+
+
+async def run_with_signals(selected, state_directory: Path) -> None:
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    installed = []
+    for kind in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(kind, stop.set)
+            installed.append(kind)
+        except (NotImplementedError, RuntimeError):
+            # asyncio.run still handles keyboard interruption on unsupported loops.
+            continue
+    try:
+        await run_strategy(selected, state_directory=state_directory, stop_event=stop)
+    finally:
+        for kind in installed:
+            loop.remove_signal_handler(kind)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -46,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
 
             selected = replace(selected, mode="paper")
         config_path = Path(args.config_path or args.config_option or "glyde-mm.yaml")
-        asyncio.run(run_strategy(selected, state_directory=config_path.parent / ".glyde-mm"))
+        asyncio.run(run_with_signals(selected, config_path.parent / ".glyde-mm"))
         return 0
     except KeyboardInterrupt:
         return 0
