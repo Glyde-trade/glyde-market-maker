@@ -226,17 +226,21 @@ async def test_cli_installs_signal_driven_shutdown_without_sending_real_signals(
 
     from glyde_mm import cli
 
-    installed, removed = {}, []
-    loop = asyncio.get_running_loop()
-    monkeypatch.setattr(
-        loop, "add_signal_handler", lambda kind, callback: installed.__setitem__(kind, callback)
-    )
-    monkeypatch.setattr(loop, "remove_signal_handler", lambda kind: removed.append(kind))
+    installed, restored = {}, []
+
+    def set_handler(kind, callback):
+        if callable(callback):
+            installed[kind] = callback
+        else:
+            restored.append(kind)
+        return None
+
+    monkeypatch.setattr(signal, "signal", set_handler)
 
     async def fake_run(config, *, state_directory, stop_event):
-        installed[signal.SIGTERM]()
+        installed[signal.SIGTERM](signal.SIGTERM, None)
         await asyncio.wait_for(stop_event.wait(), 1)
 
     monkeypatch.setattr(cli, "run_strategy", fake_run)
     await cli.run_with_signals(config(), tmp_path)
-    assert set(removed) == {signal.SIGTERM, signal.SIGINT}
+    assert set(restored) == {signal.SIGTERM, signal.SIGINT}

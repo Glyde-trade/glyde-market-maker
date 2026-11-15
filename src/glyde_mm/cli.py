@@ -17,19 +17,18 @@ from .runner import run as run_strategy
 async def run_with_signals(selected, state_directory: Path) -> None:
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
-    installed = []
-    for kind in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(kind, stop.set)
-            installed.append(kind)
-        except (NotImplementedError, RuntimeError):
-            # asyncio.run still handles keyboard interruption on unsupported loops.
-            continue
+    previous = {}
+
+    def request_stop(*_: object) -> None:
+        loop.call_soon_threadsafe(stop.set)
+
     try:
+        for kind in (signal.SIGINT, signal.SIGTERM):
+            previous[kind] = signal.signal(kind, request_stop)
         await run_strategy(selected, state_directory=state_directory, stop_event=stop)
     finally:
-        for kind in installed:
-            loop.remove_signal_handler(kind)
+        for kind, handler in previous.items():
+            signal.signal(kind, handler)
 
 
 def main(argv: list[str] | None = None) -> int:
