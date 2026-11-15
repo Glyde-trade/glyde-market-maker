@@ -18,6 +18,7 @@ import yaml
 from .client import OneApiClient
 from .config import Config, load_config
 from .doctor import check
+from .market_preflight import check as check_markets
 from .preflight import summary
 from .presets import strategy_preset
 from .report import summarize
@@ -152,7 +153,9 @@ async def first_live_session(
         report("FIRST LIVE SESSION: Conservative preset; custom strategy settings are replaced.")
         report(summary(selected))
         report(f"Exact proposed config: {effective_path}")
-        report("Venue minimum size/notional is unavailable; no risk cap is raised to meet it.")
+        result["phase"] = "preflight"
+        if await check_markets(selected, state, report=report, client_factory=client_factory) != 0:
+            return 1
         result["phase"] = "doctor"
         if await doctor_fn(effective_path, private=True, report=report) != 0:
             return 1
