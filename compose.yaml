@@ -1,0 +1,30 @@
+services:
+  bot:
+    build: .
+    command: ["paper", "/work/bot.yaml"]
+    restart: "no"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    env_file:
+      - ${GLYDE_MM_ENV_FILE:?Set the absolute path to your private 0600 env file}
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - type: bind
+        source: ${GLYDE_MM_CONFIG:?Set the absolute path to your public bot YAML}
+        target: /work/bot.yaml
+        read_only: true
+      - state:/work/.glyde-mm
+    tmpfs:
+      - /tmp:mode=1777
+    stop_grace_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  state:
