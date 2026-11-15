@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import time
@@ -13,8 +14,32 @@ import httpx
 
 from .client import OneApiClient, OneApiError, OneApiHTTPError
 from .config import load_config
+from .risk import RiskLimits
 from .runner import _price_tick
 from .strategies.factory import validate_strategy_config
+
+
+def check_clock(
+    observation: tuple[float, float, float] | None, report: Callable[[str], object]
+) -> bool:
+    if observation is None:
+        report("Clock skew: unavailable (public HTTP Date absent/invalid; freshness still checked)")
+        return True
+    sent, received, server = observation
+    if not all(math.isfinite(value) for value in observation):
+        report("Clock skew: FAIL (invalid clock observation)")
+        return False
+    if received < sent:
+        report("Clock skew: FAIL (local wall clock changed during the request)")
+        return False
+    # HTTP Date is rounded to seconds; the request interval bounds network uncertainty.
+    low, high = server - received, server + 1 - sent
+    detected = low > 1 or high < -1
+    report(
+        f"Clock skew: {'FAIL' if detected else 'no detected skew'} "
+        f"(server minus local window {low:+.2f}..{high:+.2f}s; tolerance 1s)"
+    )
+    return not detected
 
 
 async def check(
@@ -22,6 +47,7 @@ async def check(
 ) -> int:
     try:
         selected = load_config(path)
+        RiskLimits.from_config(selected.risk)
         if private and selected.mode != "live":
             raise ValueError("private checks require explicit live configuration")
         for market_config in selected.market_configs():
@@ -47,7 +73,7 @@ async def check(
         requirement = (
             "required in live mode" if selected.mode == "live" else "optional in paper mode"
         )
-        report(f"{label}: {'present' if present else 'absent'} ({requirement})")
+        report(f"{label}: {'present' if present else 'absent'} ({requirement}) [variable: {name}]")
         if selected.mode == "live" and not present:
             healthy = False
     try:
@@ -61,6 +87,7 @@ async def check(
                 if type(size) is not int or not 0 <= size <= 6:
                     raise ValueError("invalid market precision")
                 book = await client.book(market_config.symbol)
+                healthy = check_clock(client.public_clock, report) and healthy
                 if (
                     book.symbol != market_config.symbol
                     or not book.bids

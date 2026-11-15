@@ -99,6 +99,10 @@ book. It reports the quantity step and the runner's price tick at the current
 midpoint. The public metadata does not expose minimum order size/notional, so
 those limits are reported as unavailable rather than inferred from precision.
 Missing keys are optional in paper mode and fail the check in live mode.
+Configured credential variable names and presence are printed, never values.
+Clock diagnostics use the same public response's HTTP Date with request-latency
+and one-second rounding bounds; absent Date is explicitly unavailable. See
+[doctor and restart operations](docs/operations.md) for limits of this check.
 
 Ordinary doctor runs never send credentials. To check your configured live
 account's read permissions explicitly:
@@ -372,27 +376,30 @@ requests until account permissions and read authorization are configured.
 
 ## Docker
 
-Starting with v0.6.0, tag releases publish an amd64/arm64 image to GHCR after a
-20-second offline paper-container smoke test. Pull a pinned version (once that
-release's container workflow succeeds), or use `sha-<full commit SHA>` for the
-exact source build. Credentials are supplied at runtime, never during the build:
+Build locally from a reviewed checkout for now: v0.6.0 images were published to
+GHCR, but anonymous pulls are unavailable until the organization owner makes the
+package public. Credentials are supplied at runtime, never during the build:
 
 ```sh
-docker pull ghcr.io/glyde-trade/glyde-market-maker:v0.6.0
+docker build -t glyde-mm .
 docker run --rm -it --init \
   --mount type=bind,source="$PWD/glyde-mm.yaml",target=/work/glyde-mm.yaml,readonly \
   --mount type=volume,source=glyde-mm-state,target=/work/.glyde-mm \
-  ghcr.io/glyde-trade/glyde-market-maker:v0.6.0 paper /work/glyde-mm.yaml
+  glyde-mm paper /work/glyde-mm.yaml
 ```
 
 The container runs as a non-root user. For live mode, mount the reviewed live YAML and pass existing
 environment variables by **name** with `--env GLYDE_API_PRIVATE_KEY --env GLYDE_READ_API_KEY`;
 use `run /work/live-small.yaml`. Do not copy credentials into the image.
-For a reviewed source checkout instead, `docker build -t glyde-mm .` retains the
-same entry point. CI checks the real CLI with a loopback fake One API, non-root
+The release workflow tags amd64/arm64 images with the version and `sha-<full SHA>`.
+CI checks the real CLI with a loopback fake One API, non-root
 UID and public-only requests; this does not qualify live exchange credentials.
 
 ## Development
+
+Use the [complete strategy/config reference](docs/strategies.md) and
+[operations guide](docs/operations.md) for paper examples, public doctor,
+state preservation, restart, stop and log interpretation.
 
 ```sh
 python -m pip install -e '.[dev]'
