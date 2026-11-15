@@ -21,6 +21,8 @@ registered account permissions and credentials. Refused or ambiguous actions sto
 Follow [Your first market maker in 10 minutes](docs/first-market-maker.md) for the paper → report →
 small-live workflow. See the [strategy chooser](docs/strategies.md#strategy-chooser) and
 [risk-limit FAQ](docs/risk-limits.md) before changing a config.
+New to quoting? [Market making 101](docs/market-making-101.md) explains spreads, inventory,
+adverse selection, fees and why paper fills differ from live.
 
 Browse the five commented [paper configs in the gallery](configs/gallery/README.md), or
 [contribute a bug report, strategy idea or PR](CONTRIBUTING.md).
@@ -36,11 +38,11 @@ before replacing an existing installation.
 
 ## Start in five minutes
 
-**1. Install.** Once the `v0.3.0` GitHub Release is published, install its wheel with
+**1. Install.** Once the `v0.4.0` GitHub Release is published, install its wheel with
 [pipx](https://pipx.pypa.io/stable/installation/) (Python 3.11+):
 
 ```sh
-pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.3.0/glyde_market_maker-0.3.0-py3-none-any.whl'
+pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.4.0/glyde_market_maker-0.4.0-py3-none-any.whl'
 glyde-mm --version
 ```
 
@@ -106,7 +108,7 @@ failures return a nonzero exit code.
 
 ## Go live with small, explicit limits
 
-For a guided current-source first session, see [live-wizard](docs/first-live-session.md):
+For a guided first session (v0.4.0+), see [live-wizard](docs/first-live-session.md):
 doctor → two-minute paper preview → typed confirmation → Conservative live run with a
 30-minute auto-stop and private final report. It currently supports one symbol.
 
