@@ -25,6 +25,11 @@ small-live workflow. See the [strategy chooser](docs/strategies.md#strategy-choo
 Browse the five commented [paper configs in the gallery](configs/gallery/README.md), or
 [contribute a bug report, strategy idea or PR](CONTRIBUTING.md).
 
+For a persistent host, use the [VPS recipes](docs/vps.md): Docker Compose with a state
+volume and rotated logs, or a systemd paper service with a private env file.
+See the [changelog](CHANGELOG.md) and [upgrade notes for 0.2 users](docs/upgrading-from-0.2.md)
+before replacing an existing installation.
+
 > **Quickstart GIF — placeholder:** a captioned paper-mode `init → doctor → paper → Ctrl-C → report`
 > recording will go here. No demo recording is attached yet; use the
 > [text tutorial](docs/first-market-maker.md).
@@ -439,3 +444,57 @@ simulated PnL and risk state. It binds loopback only and has no trading controls
 authentication. Finished or old snapshots are visibly stale. Live snapshots show
 tracked intents and daily equity change; live fills remain explicitly unavailable.
 See [dashboard scope and privacy](docs/dashboard.md).
+
+## Multiple markets, one account
+
+Current source supports a `markets` list in place of `symbol`:
+
+```yaml
+mode: paper
+strategy: pure_market_making
+strategy_config: {bid_spread: '0.01', ask_spread: '0.01'}
+markets:
+  - symbol: BTC
+    max_position: '0.001'
+    strategy_config: {order_amount: '0.0001'}
+  - symbol: ETH
+    max_position: '0.02'
+    strategy_config: {order_amount: '0.002'}
+risk:
+  max_total_notional: '150'
+  max_order_notional: '25'
+  max_daily_loss: '5'
+  max_orders_per_minute: 60
+```
+
+Start with `glyde-mm paper examples/multi-symbol-paper.yaml`. Review the example's
+amounts against current prices; these are editable examples, not sizing recommendations.
+Use `glyde-mm doctor examples/multi-symbol-paper.yaml` to check every selected market.
+Each of up to 16 distinct markets has its own strategy instance, precision, base-unit
+position cap and optional strategy overrides. All use the top-level strategy type;
+market overrides extend the shared `strategy_config`. Do not combine `symbol` and `markets`.
+Existing single-symbol configs keep their behavior.
+
+The whole session shares **one account, simulator, dispatcher, daily equity baseline,
+persisted order-attempt budget and ambiguous-outcome halt**. The required multi-market
+`max_total_notional` bounds gross worst-case exposure in USDC, summing each market's
+larger possible absolute position after its outstanding buys or sells. Open and pending
+orders count once; long BTC cannot cancel short ETH in this calculation. Each quantity
+uses the larger of the current ask and relevant limit prices. External positions/orders
+also count: a missing or stale book for any exposed asset refuses new orders. This is a
+local pre-trade bound, not a guarantee against price changes or losses.
+
+All books must arrive before quoting. A stale market, disconnect or risk violation
+stops the shared session; cleanup attempts **every configured symbol**, including manual
+orders on those symbols, while leaving other symbols and all positions untouched.
+Use a dedicated account and only one runner for it. Paper status lines show each market's
+inventory/fills/quotes; their PnL is the **same account-wide PnL**, not additive market PnL.
+`stop <config>` coordinates and verifies the full configured set; retain the exact config
+and state directory. Live mode still requires typed confirmation of the comma-separated
+list in configuration order (for example `BTC,ETH`), and checks existing exposure across
+all selected markets before it can acquire cleanup authority. `--i-understand` does not
+bypass risk limits. Begin in paper mode; no multi-market live qualification is claimed.
+
+Public-book `record`/`replay` currently require a separate single-symbol config and refuse
+`markets` configs rather than silently replaying just one market. Public external-reference
+settings, when enabled, are evaluated independently for each selected market.

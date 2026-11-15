@@ -162,3 +162,14 @@ def test_dashboard_cli_reads_only_explicit_snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr(Config, "secret", lambda *_: pytest.fail("no credential access"))
     assert main(["dashboard", "--state", str(tmp_path / "state"), "--port", "8181"]) == 0
     assert seen == [(tmp_path / "state", 8181)]
+
+
+def test_snapshot_names_all_configured_markets(tmp_path):
+    from glyde_mm.config import MarketConfig, RiskConfig
+
+    config = Config(
+        markets=(MarketConfig("ETH", D(1)), MarketConfig("SOL", D(2))),
+        risk=RiskConfig(max_total_notional=D(100)),
+    )
+    publisher = dashboard.SnapshotPublisher(tmp_path / "state", config, "multi")
+    assert dashboard.read_snapshot(publisher.path)["snapshot"]["symbols"] == ["ETH", "SOL"]

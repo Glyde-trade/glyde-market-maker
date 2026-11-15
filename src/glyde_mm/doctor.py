@@ -24,7 +24,8 @@ async def check(
         selected = load_config(path)
         if private and selected.mode != "live":
             raise ValueError("private checks require explicit live configuration")
-        validate_strategy_config(selected.strategy, selected.strategy_config)
+        for market_config in selected.market_configs():
+            validate_strategy_config(selected.strategy, market_config.strategy_config)
         for name in (selected.private_key_env, selected.read_api_key_env):
             if not isinstance(name, str) or not re.fullmatch(r"[A-Z_][A-Z_0-9]{0,127}", name):
                 raise ValueError("invalid environment variable name")
@@ -52,27 +53,32 @@ async def check(
     try:
         async with OneApiClient(selected) as client:
             metadata = await client.meta()
-            market = next(row for row in metadata["universe"] if row["name"] == selected.symbol)
-            size = market["szDecimals"]
-            if type(size) is not int or not 0 <= size <= 6:
-                raise ValueError("invalid market precision")
-            book = await client.book(selected.symbol)
-            if (
-                book.symbol != selected.symbol
-                or not book.bids
-                or not book.asks
-                or not -1
-                <= time.time() - book.timestamp_ms / 1000
-                <= float(selected.risk.stale_book_seconds)
-            ):
-                raise ValueError("configured market has no fresh book")
-            tick = _price_tick(book, size)
-            if abs(tick.adjusted()) > 30:
-                raise ValueError("market price outside supported diagnostic range")
-            report("Public info: OK")
-            report(f"Quantity step: {Decimal(1).scaleb(-size):f}")
-            report(f"Runner price tick at current midpoint: {tick:f}")
-            report("Venue minimum order size/notional: unavailable in public metadata")
+            for market_config in selected.market_configs():
+                market = next(
+                    row for row in metadata["universe"] if row["name"] == market_config.symbol
+                )
+                size = market["szDecimals"]
+                if type(size) is not int or not 0 <= size <= 6:
+                    raise ValueError("invalid market precision")
+                book = await client.book(market_config.symbol)
+                if (
+                    book.symbol != market_config.symbol
+                    or not book.bids
+                    or not book.asks
+                    or not -1
+                    <= time.time() - book.timestamp_ms / 1000
+                    <= float(selected.risk.stale_book_seconds)
+                ):
+                    raise ValueError("configured market has no fresh book")
+                tick = _price_tick(book, size)
+                if abs(tick.adjusted()) > 30:
+                    raise ValueError("market price outside supported diagnostic range")
+                if len(selected.symbols) > 1:
+                    report(f"Market: {market_config.symbol}")
+                report("Public info: OK")
+                report(f"Quantity step: {Decimal(1).scaleb(-size):f}")
+                report(f"Runner price tick at current midpoint: {tick:f}")
+                report("Venue minimum order size/notional: unavailable in public metadata")
             if private:
                 if not os.environ.get(selected.read_api_key_env):
                     report("Private reads: FAIL (read key absent)")

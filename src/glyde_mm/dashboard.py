@@ -53,7 +53,7 @@ class SnapshotPublisher:
             "run_id": run_id,
             "mode": config.mode,
             "strategy": config.strategy,
-            "symbols": [config.symbol],
+            "symbols": list(config.symbols),
             "updated_at_ms": 0,
             "status": "starting",
             "risk_stop": None,

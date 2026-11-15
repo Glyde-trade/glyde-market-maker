@@ -1,0 +1,31 @@
+[Unit]
+Description=Glyde market maker (paper mode)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=glyde-mm
+Group=glyde-mm
+StateDirectory=glyde-mm
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/glyde-mm
+EnvironmentFile=/etc/glyde-mm/bot.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/glyde-mm/venv/bin/glyde-mm paper /var/lib/glyde-mm/bot.yaml
+ExecStop=/opt/glyde-mm/venv/bin/glyde-mm stop /var/lib/glyde-mm/bot.yaml
+Restart=no
+TimeoutStopSec=45
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/glyde-mm
+StandardOutput=journal
+StandardError=journal
+LogNamespace=glyde-mm
+
+[Install]
+WantedBy=multi-user.target
