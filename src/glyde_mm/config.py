@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -31,12 +31,33 @@ class RiskConfig:
     stale_book_seconds: Decimal = Decimal("5")
     account_age_seconds: Decimal = Decimal("10")
     max_orders_per_minute: int = 60
+    max_total_notional: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class MarketConfig:
+    symbol: str
+    max_position: Decimal
+    strategy_config: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.symbol, str) or not self.symbol or len(self.symbol) > 64:
+            raise ValueError("invalid market symbol")
+        if (
+            not isinstance(self.max_position, Decimal)
+            or not self.max_position.is_finite()
+            or self.max_position <= 0
+        ):
+            raise ValueError("market max_position must be positive")
+        if not isinstance(self.strategy_config, dict):
+            raise ValueError("market strategy_config must be a mapping")
 
 
 @dataclass(frozen=True)
 class Config:
     mode: str = "paper"
     symbol: str = "BTC"
+    markets: tuple[MarketConfig, ...] = ()
     base_url: str = DEFAULT_BASE_URL
     owner: str = ""
     vault_address: str | None = None
@@ -65,7 +86,7 @@ class Config:
             raise ValueError("base_url must be HTTPS (HTTP allowed only on loopback)")
         if self.mode not in {"paper", "live"}:
             raise ValueError("mode must be paper or live")
-        if not self.symbol or len(self.symbol) > 64:
+        if not isinstance(self.symbol, str) or not self.symbol or len(self.symbol) > 64:
             raise ValueError("invalid symbol")
         if self.paper_balance <= 0 or not self.paper_balance.is_finite():
             raise ValueError("paper_balance must be positive")
@@ -73,10 +94,40 @@ class Config:
         if type(cap) is not int or not 1 <= cap <= 6000:
             raise ValueError("max_orders_per_minute must be an integer in 1..6000")
         for name, value in vars(self.risk).items():
-            if name == "max_orders_per_minute":
+            if name == "max_orders_per_minute" or (name == "max_total_notional" and value is None):
                 continue
             if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
                 raise ValueError("risk limits must be finite and positive")
+
+        if self.markets:
+            if (
+                not isinstance(self.markets, tuple)
+                or len(self.markets) > 16
+                or any(not isinstance(m, MarketConfig) for m in self.markets)
+            ):
+                raise ValueError("markets must contain at most 16 market configurations")
+            if len(set(self.symbols)) != len(self.markets):
+                raise ValueError("duplicate market symbol")
+            if self.risk.max_total_notional is None:
+                raise ValueError("markets requires risk.max_total_notional")
+
+    @property
+    def symbols(self) -> tuple[str, ...]:
+        return tuple(m.symbol for m in self.markets) if self.markets else (self.symbol,)
+
+    def market_configs(self) -> tuple[Config, ...]:
+        if not self.markets:
+            return (self,)
+        return tuple(
+            replace(
+                self,
+                markets=(),
+                symbol=m.symbol,
+                strategy_config={**self.strategy_config, **m.strategy_config},
+                risk=replace(self.risk, max_position=m.max_position),
+            )
+            for m in self.markets
+        )
 
     def secret(self, name: str) -> str:
         value = os.environ.get(name)
@@ -94,6 +145,27 @@ def load_config(path: str | Path) -> Config:
         raise ValueError("configuration must be a mapping")
     if set(raw) - set(Config.__dataclass_fields__):
         raise ValueError("unknown configuration field (store keys in environment variables)")
+    if "markets" in raw:
+        if (
+            "symbol" in raw
+            or not isinstance(raw["markets"], list)
+            or not 1 <= len(raw["markets"]) <= 16
+        ):
+            raise ValueError("use markets (1..16 entries) or symbol, not both")
+        markets = []
+        for item in raw["markets"]:
+            if (
+                not isinstance(item, dict)
+                or set(item) - {"symbol", "max_position", "strategy_config"}
+                or not {"symbol", "max_position"} <= set(item)
+            ):
+                raise ValueError("market requires symbol and max_position")
+            markets.append(
+                MarketConfig(
+                    item["symbol"], decimal(item["max_position"]), item.get("strategy_config", {})
+                )
+            )
+        raw["markets"] = tuple(markets)
     risk = raw.pop("risk", {})
     if not isinstance(risk, dict) or set(risk) - set(RiskConfig.__dataclass_fields__):
         raise ValueError("invalid risk configuration")
@@ -124,6 +196,7 @@ def write_config(path: str | Path) -> None:
         "risk": {
             key: value if key == "max_orders_per_minute" else str(value)
             for key, value in vars(RiskConfig()).items()
+            if value is not None
         },
     }
     # Exclusive creation prevents overwriting an existing configuration.

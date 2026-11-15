@@ -42,6 +42,7 @@ class RiskLimits:
     stale_book_seconds: float = 3.0
     account_age_seconds: float = 10.0
     max_orders_per_minute: int = 60
+    max_total_notional: Decimal | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -53,6 +54,8 @@ class RiskLimits:
             value = getattr(self, name)
             if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
                 raise ValueError(f"{name} must be a positive finite Decimal")
+        if self.max_total_notional is not None and not _positive(self.max_total_notional):
+            raise ValueError("max_total_notional must be positive")
         for value in (self.stale_book_seconds, self.account_age_seconds):
             if not isinstance(value, (int, float)) or not 0 < value <= 3600:
                 raise ValueError("freshness limits must be positive and at most 3600 seconds")
@@ -73,8 +76,12 @@ class RiskGuard:
         wall_clock: Callable[[], float] = time.time,
         state_path: Path | None = None,
         reference_check: Callable[[Book], Decimal] | None = None,
+        position_limits: dict[str, Decimal] | None = None,
     ) -> None:
         self.limits = limits
+        self.position_limits = dict(position_limits or {})
+        if any(not symbol or not _positive(cap) for symbol, cap in self.position_limits.items()):
+            raise ValueError("invalid market position limits")
         self.clock = clock
         self.wall_clock = wall_clock
         self.reference_check = reference_check
@@ -313,6 +320,9 @@ class RiskGuard:
         reference = max(price, book.asks[0].price)
         if quantity * reference > self.limits.max_order_notional:
             raise RiskViolation("max_order_notional")
+        if self.position_limits and symbol not in self.position_limits:
+            raise RiskViolation("unconfigured_market")
+        position_cap = self.position_limits.get(symbol, self.limits.max_position)
         position = self.account_state.positions.get(symbol, Decimal("0"))  # type: ignore[union-attr]
         pending_ids = set(self.pending)
         outstanding = list(self.pending.values()) + [
@@ -329,11 +339,34 @@ class RiskGuard:
                 buys += order.quantity
             else:
                 sells += order.quantity
-        if (
-            position + buys > self.limits.max_position
-            or position - sells < -self.limits.max_position
-        ):
+        if position + buys > position_cap or position - sells < -position_cap:
             raise RiskViolation("max_position")
+
+        if self.limits.max_total_notional is not None:
+            self._check_total_notional(outstanding, symbol, side, quantity, price)
+
+    def _check_total_notional(self, outstanding, symbol, side, quantity, price) -> None:
+        exposures = {
+            key: [Decimal(0), Decimal(0), Decimal(0)]
+            for key, value in self.account_state.positions.items()
+            if value != 0
+        }
+        for order_symbol, order_side, qty, limit in [
+            (o.symbol, o.side, o.quantity, o.price) for o in outstanding
+        ] + [(symbol, side, quantity, price)]:
+            if order_side not in ("buy", "sell") or not _positive(qty) or not _positive(limit):
+                raise RiskViolation("invalid_open_order")
+            row = exposures.setdefault(order_symbol, [Decimal(0), Decimal(0), Decimal(0)])
+            row[0 if order_side == "buy" else 1] += qty
+            row[2] = max(row[2], limit)
+        total = Decimal(0)
+        for market, (buys, sells, limit) in exposures.items():
+            book = self.check_fresh(market)
+            position = self.account_state.positions.get(market, Decimal(0))
+            worst = max(abs(position + buys), abs(position - sells))
+            total += worst * max(limit, book.asks[0].price)
+        if total > self.limits.max_total_notional:
+            raise RiskViolation("max_total_notional")
 
     def reserve(self, order: OrderRequest) -> None:
         if (
