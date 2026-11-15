@@ -61,8 +61,9 @@ Or copy [examples/paper.yaml](examples/paper.yaml) to `glyde-mm.yaml`.
 Amounts are base units; spread fractions use `0.002` for **0.2%**. The default is one bid and one ask,
 refreshed every 60 seconds with the Conservative preset. Hanging orders are off.
 
-**3. Run paper first.** Quotes and fills are simulated against the public live book. No trading key
-or funded account is needed; paper fills are not a prediction of live execution.
+**3. Run paper first.** Quotes use the public live book; resting fills use the public
+trade tape with approximate queue position and partial fills. No trading key or
+funded account is needed; paper fills are not a prediction of live execution.
 
 ```sh
 glyde-mm paper glyde-mm.yaml
@@ -275,8 +276,11 @@ For diagnostic logs, use `glyde-mm report path/to/.glyde-mm/logs`.
 
 ## Known limitations
 
-- Paper fills omit queue priority, fees, funding, margin and liquidation. Recorded-book
-  replay needs a prior local recording and cannot reconstruct missing historical depth.
+- Streaming paper fills approximate queue position from displayed depth and public
+  trades; they omit actual queue priority, hidden liquidity, fees, funding, margin
+  and liquidation. Book-only replay uses its existing depth-cross model, without a
+  trade tape. See [paper fill assumptions](docs/paper-fills.md). Recorded-book replay
+  needs a prior local recording and cannot reconstruct missing historical depth.
 - Live mode requires the requested Glyde capabilities and registered owner, namespace,
   trading key and read credential. Doctor's optional private check proves read access
   only; it cannot establish signing authority or order acceptance.

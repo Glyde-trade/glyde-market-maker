@@ -33,6 +33,32 @@ class Book:
 
 
 @dataclass(frozen=True)
+class Trade:
+    """Public aggressor print; side names the taker, not the resting paper order."""
+
+    symbol: str
+    side: Side
+    quantity: Decimal
+    price: Decimal
+    timestamp_ms: int
+    trade_id: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.symbol, str)
+            or not 1 <= len(self.symbol) <= 64
+            or self.side not in {"buy", "sell"}
+            or type(self.timestamp_ms) is not int
+            or self.timestamp_ms < 0
+            or not isinstance(self.trade_id, str)
+            or not self.trade_id
+            or len(self.trade_id) > 64
+            or any(not value.is_finite() or value <= 0 for value in (self.quantity, self.price))
+        ):
+            raise ValueError("invalid public trade")
+
+
+@dataclass(frozen=True)
 class Account:
     equity: Decimal
     positions: dict[str, Decimal] = field(default_factory=dict)

@@ -117,12 +117,12 @@ def exercise_cli(
             async def place_orders(self, orders):
                 result = await super().place_orders(orders)
                 assert len(await self.open_orders()) == 2
-                fake.advance_time(1)
-                fake.set_book("BTC", bids=[("97", "2")], asks=[("98", "2")])
+                fake.advance_time(max(1, time.time_ns() // 1_000_000 - fake.now_ms + 1))
+                fake.market_order("BTC", buy=False, size="0.1")
                 return result
 
-            async def on_book(self, book):
-                await super().on_book(book)
+            async def on_trade(self, trade):
+                await super().on_trade(trade)
                 if self.fills:
                     stop_event.set()
 
@@ -186,10 +186,10 @@ def test_paper_cli_quotes_fill_real_simulator_and_cancel_on_exit(monkeypatch, tm
     paper = papers[0]
     assert len(paper.fills) == 1
     assert paper.fills[0].side == "buy"
-    assert paper.fills[0].quantity == D("0.1") and paper.fills[0].price == D("98")
+    assert paper.fills[0].quantity == D("0.1") and paper.fills[0].price == D("99.8")
     account, remaining = asyncio.run(paper.account()), asyncio.run(paper.open_orders())
     assert account.positions == {"BTC": D("0.1")} and remaining == []
-    assert account.equity == D("9999.95")
+    assert account.equity == D("10000.02")
     assert any("PAPER SUMMARY" in line and "fills=1 | open_quotes=0" in line for line in reports)
     assert fake.info({"type": "openOrders", "user": OWNER}) == []
 
