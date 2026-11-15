@@ -130,13 +130,13 @@ glyde-mm preflight live-small.yaml
 glyde-mm run live-small.yaml
 ```
 
-Preflight PASS expires after five minutes and is tied to the exact config. Current master
-requires an advertised minimum size; missing venue limits mean FIX, not a guessed value.
-Native `glydeOrderRules` support is **pending** [One API PR1206](https://github.com/Glyde-trade/glyde/pull/1206)
-and held [MM PR81](https://github.com/Glyde-trade/glyde-market-maker/pull/81). It will use
-native lot/price constraints and USD minimums on both rounded quote sides, invalidate old
-receipts and refuse absent/invalid rules. Neither paper nor doctor bypasses that prerequisite.
-Do not assume source support means your endpoint has enabled it.
+Preflight PASS expires after five minutes and is tied to the exact config. Each selected
+market must advertise version-1 `glydeOrderRules`: native lot and price constraints plus
+USD minimums checked on both rounded quote sides. Missing or invalid rules mean FIX,
+not a guessed value. Run preflight again after upgrading; old receipts are invalidated.
+Neither paper nor doctor bypasses this prerequisite. Endpoint support comes from
+[One API PR1206](https://github.com/Glyde-trade/glyde/pull/1206); source support alone
+does not prove your endpoint serves the required rules.
 
 Read the printed pre-flight limits and type the exact symbol to confirm live startup. Existing
 orders or a position on that symbol refuse startup; `--i-understand` explicitly accepts that
