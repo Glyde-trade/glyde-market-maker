@@ -253,7 +253,6 @@ uses percentage points (`0.1 = 0.1%`). Defaults are not reviewed trading sizes.
 | `private_key_env` | `GLYDE_API_PRIVATE_KEY` | Trading-key environment variable name, never its value. |
 | `read_api_key_env` | `GLYDE_READ_API_KEY` | Private-read environment variable name, never its value. |
 | `paper_balance` | `10000` | Positive simulated starting equity, in USDC. |
-| `risk_state_path` | `.glyde-mm/risk-state.json` | Retained legacy config field; streaming CLI derives a hashed state filename beside the config instead. Do not use this to relocate state. |
 | `strategy` | `pure_market_making` | A chooser key above, or a trusted [plugin](plugins.md). |
 | `strategy_config` | empty | The selected strategy's keys below. |
 | `risk` | defaults below | Shared admission limits; never raised by strategy settings. |

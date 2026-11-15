@@ -43,8 +43,8 @@ For `path/to/bot.yaml`, ordinary CLI commands use `path/to/.glyde-mm/`:
 | `stops/stop-<id>.json` | Explicit stop result; inspect `outcome`, `failure` and remaining-order status. |
 | `live-wizard/session-<id>/` | Frozen wizard config, isolated preview/live log paths and final session report; account risk state remains shared. |
 
-The accepted legacy `risk_state_path` YAML field does not relocate the streaming
-CLI state: the runner derives the hashed path above. Keep config location stable.
+The runner derives the hashed path above; `risk_state_path` is not a supported YAML
+field. Keep config location stable.
 Moving the config without state or renaming a Docker volume creates a different
 local history; it is not a safe reset. Preserve the entire directory privately.
 Do not publish state, account IDs, keys, env files or webhook URLs. The runner uses
@@ -55,7 +55,9 @@ private files/directories; root and Docker administrators can still inspect them
 State snapshots are immutable and written by one background worker, with at most
 one active write and one coalesced successor. File `fsync`, atomic replacement and
 directory `fsync` run off the asyncio loop, so disk latency cannot stall incoming
-books or manufacture stale-feed quote churn. The JSON format is unchanged.
+books or manufacture stale-feed quote churn. Checkpoints must include execution
+intent and order-rate history; incomplete old files refuse startup without being
+rewritten. No migration or automatic reset is provided.
 
 An external order or cancellation still awaits its write-ahead intent barrier;
 nonblocking does not mean dispatching before durability. Orders recheck the latest
