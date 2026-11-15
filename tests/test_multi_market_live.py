@@ -11,6 +11,7 @@ import httpx
 import pytest
 from live_fake import SequencedFake, Socket
 from live_wire import batch
+from market_receipt import approved_market
 
 from glyde_mm.client import OneApiClient
 from glyde_mm.config import Config, MarketConfig, RiskConfig
@@ -99,6 +100,7 @@ async def test_one_live_ws_stale_market_retires_other_keeps_quoting_and_recovers
             max_orders_per_minute=600,
         ),
     )
+    approved_market(config, tmp_path)
     btc_when_paused = []
 
     def report(line):
