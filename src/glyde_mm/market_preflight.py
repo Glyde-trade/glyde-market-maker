@@ -162,6 +162,8 @@ def _market_fixes(config: Config, market: JsonObject, book: Book) -> tuple[list[
         for i in range(len(quantities))
     ]
     for i, (quantity, bid, ask) in enumerate(zip(nominal_quantities, bids, asks, strict=True), 1):
+        if quantity % step != 0:
+            fixes.append(f"{symbol}: level {i} quantity must be a multiple of {step:f} base.")
         for side, price, rounding in (("bid", bid, ROUND_FLOOR), ("ask", ask, ROUND_CEILING)):
             rounded = (price / tick).to_integral_value(rounding=rounding) * tick
             if not rules.valid_price(rounded):
@@ -181,8 +183,6 @@ def _market_fixes(config: Config, market: JsonObject, book: Book) -> tuple[list[
     total = Decimal(0)
     notional = Decimal(0)
     for i, (quantity, price) in enumerate(zip(quantities, prices, strict=True), 1):
-        if quantity % step != 0:
-            fixes.append(f"{symbol}: level {i} quantity must be a multiple of {step:f} base.")
         reference = max(
             book.asks[0].price, (price / tick).to_integral_value(rounding=ROUND_CEILING) * tick
         )

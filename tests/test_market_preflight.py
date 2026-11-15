@@ -414,3 +414,27 @@ async def test_receipt_from_previous_check_version_never_authorizes_new_checks(
         require_preflight(config, tmp_path)
     with pytest.raises(MarketPreflightRequired):
         require_preflight(config, tmp_path)
+
+
+@pytest.mark.parametrize("increment,expected", [("0.00001", 1), ("0.00002", 0)])
+async def test_skew_maximum_cannot_mask_off_lot_nominal_ladder(tmp_path, increment, expected):
+    config = replace(
+        selected(),
+        strategy_config={
+            "order_amount": "0.2",
+            "order_levels": 2,
+            "order_level_amount": increment,
+            "inventory_skew_enabled": True,
+        },
+        risk=RiskConfig(max_position=D(1), max_order_notional=D(100)),
+    )
+    lines = []
+    assert (
+        await check(config, tmp_path, client_factory=Public().factory, report=lines.append)
+        == expected
+    )
+    if expected:
+        assert any("level 2 quantity must be a multiple of 0.00002" in line for line in lines)
+        assert not list(tmp_path.glob("preflight-*.json"))
+    else:
+        require_preflight(config, tmp_path)
