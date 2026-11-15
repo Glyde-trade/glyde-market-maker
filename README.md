@@ -6,6 +6,9 @@ A paper-first market maker for Glyde's One API. Python 3.11+, one YAML file and 
 Strategy designs are adapted from [Hummingbot](https://github.com/hummingbot/hummingbot)
 (Apache-2.0); see [NOTICE](NOTICE).
 
+See [stock Hummingbot connector compatibility](docs/hummingbot.md) for the local
+wire-probe results and the authentication adapters still required.
+
 ## Current status
 
 `glyde-mm paper <config>` runs the selected strategy through the risk layer into the paper
