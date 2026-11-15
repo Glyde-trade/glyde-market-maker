@@ -28,6 +28,8 @@ def check_minutes(minutes: int) -> None:
 async def record_books(
     config: Config, output: Path, minutes: int, *, client_factory=OneApiClient
 ) -> int:
+    if config.markets:
+        raise ValueError("record/replay requires a single-symbol configuration")
     check_minutes(minutes)
     config = replace(config, mode="paper")
     count = 0

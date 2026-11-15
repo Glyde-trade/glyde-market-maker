@@ -49,6 +49,8 @@ async def replay(
 async def _replay(
     config: Config, recording: Path, minutes: int, *, journal: RunLog | None = None
 ) -> ReplayResult:
+    if config.markets:
+        raise ValueError("record/replay requires a single-symbol configuration")
     size, start, observations = read_window(recording, config.symbol, minutes)
     config = replace(config, mode="paper")
     now = start / 1000
