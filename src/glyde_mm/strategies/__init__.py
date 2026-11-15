@@ -1,5 +1,6 @@
 """Risk-managed, exact-decimal market making strategies."""
 
+from .avellaneda_market_making import AvellanedaConfig, AvellanedaMarketMakingStrategy
 from .factory import create_strategy
 from .pure_market_making import (
     PureMarketMakingConfig,
@@ -8,6 +9,8 @@ from .pure_market_making import (
 )
 
 __all__ = [
+    "AvellanedaConfig",
+    "AvellanedaMarketMakingStrategy",
     "PureMarketMakingConfig",
     "PureMarketMakingStrategy",
     "StrategyContext",

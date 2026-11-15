@@ -6,6 +6,7 @@ from dataclasses import fields
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from .avellaneda_market_making import AvellanedaConfig, AvellanedaMarketMakingStrategy
 from .pure_market_making import (
     PureMarketMakingConfig,
     PureMarketMakingStrategy,
@@ -35,6 +36,8 @@ def parse_config(cls: type, values: dict[str, Any]):
 
 
 def create_strategy(name: str, context: StrategyContext, values: dict[str, Any]):
+    if name == "avellaneda_market_making":
+        return AvellanedaMarketMakingStrategy(context, parse_config(AvellanedaConfig, values))
     if name != "pure_market_making":
         raise ValueError(f"unsupported strategy: {name}")
     return PureMarketMakingStrategy(context, parse_config(PureMarketMakingConfig, values))
