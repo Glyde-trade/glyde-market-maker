@@ -743,9 +743,23 @@ there is no HTTP fallback. Initial subscription snapshots must cover all private
 roots before quoting. Earlier private fill rows are not replayed as new fills.
 
 Disconnect stops the session and attempts cancellation of recorded original IDs,
-even if read authority has expired. Failed or unconfirmed cleanup stays an error;
+even if read authority has expired. Exact terminal/cancel receipts for every tracked ID
+can complete cleanup after read-stream failure, without requiring a new snapshot from that
+failed stream. The old stream stays invalid: account reads and new orders still refuse.
+A fresh manual session must pass startup checks and install complete snapshots before quoting.
+The same durable daily-loss and order-rate state is retained. Failed or unconfirmed cleanup stays an error;
 the bot does not claim that unknown orders disappeared. There is no automatic
 reconnect, and lost actions are never re-signed or replayed. A manual restart repeats startup exposure
 checks and requires a fresh WS snapshot; it cannot resume from a delta or gap.
 The durable risk/unknown-outcome fence remains in force. Private evidence caches
 are bounded; exhausting them stops the session rather than dropping evidence.
+
+### Offline quote-resilience checks
+
+`tests/test_quote_resilience.py` drives the real signed client, sequenced cache, risk wrapper
+and runner against the offline matching ledger. It covers WS disconnect/gap, silent books,
+ETH/BTC staleness flips, cooperative interruption and restart with the same state directory.
+Quotes retire within a two-second **test** bound with responsive simulated cancellation;
+confirmed IDs are never cancelled twice, and recovery installs fresh quotes. Lost cancel
+receipts keep the durable original-ID fence even when the simulated venue is already empty.
+These checks do not establish a production latency SLA or SIGKILL/venue-outage cleanup.

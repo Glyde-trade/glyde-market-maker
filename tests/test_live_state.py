@@ -145,8 +145,11 @@ async def test_gap_stops_reads_writes_but_attempts_known_cancel_without_resnapsh
             await state.account()
         with pytest.raises(OneApiError):
             await state.place_orders([OrderRequest("BTC", "sell", D("0.1"), D(101))])
+        await state.cancel_all("BTC")  # Exact cancel receipts remain usable after a read gap.
         with pytest.raises(OneApiError):
-            await state.cancel_all("BTC")
+            await state.account()
+        with pytest.raises(OneApiError):
+            await state.place_orders([OrderRequest("BTC", "sell", D("0.1"), D(101))])
         assert fake.ledger.info({"type": "openOrders", "user": OWNER}) == []
         assert len([r for r in fake.requests if r.get("action", {}).get("type") == "order"]) == 1
         assert [r.get("type") for r in fake.requests if "type" in r] == ["meta"]
