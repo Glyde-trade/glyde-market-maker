@@ -70,7 +70,7 @@ async def test_pnl_drawdown_inventory_and_private_exclusive_output(tmp_path):
     assert row["realized_pnl_usdc"] == "1"
     assert row["unrealized_pnl_usdc"] == "0"
     assert row["max_drawdown_usdc"] == "2"
-    assert row["quotes"]["fills"] == 2
+    assert row["fills"] == 2
     assert [point["inventory"]["BTC"] for point in row["inventory_path"]] == ["0", "1", "0"]
     assert stat.S_IMODE(result.path.stat().st_mode) == 0o600
     before = result.path.read_bytes()
@@ -215,7 +215,7 @@ def test_actual_cli_timer_public_tape_report_and_fail_closed_paths(monkeypatch, 
     if failure is None:
         assert code == 0 and row["termination"] == "duration_elapsed"
         assert row["outcome"] == "stopped"
-        assert row["quotes"]["placed"] == 2 and row["quotes"]["fills"] == 2
+        assert row["quotes"]["placed"] == 2 and row["fills"] == 2
         assert D(row["realized_pnl_usdc"]) == D("0.0006")
         assert D(row["unrealized_pnl_usdc"]) == 0
     elif failure == "stale":
@@ -260,3 +260,38 @@ def test_conservative_examples_are_paper_only(symbol):
     config = load_config(Path(__file__).parents[1] / "examples" / f"paper-{symbol}.yaml")
     assert config.mode == "paper" and config.symbol == symbol.upper()
     assert config.risk.max_daily_loss <= 5 and config.risk.max_order_notional <= 25
+
+
+def test_existing_report_refuses_before_runner_and_is_never_overwritten(monkeypatch, tmp_path):
+    config = tmp_path / "paper.yaml"
+    config.write_text("mode: paper\n")
+    output = tmp_path / "result.json"
+    output.write_text("existing result")
+    monkeypatch.setattr(cli, "run_strategy", lambda *_args, **_kwargs: pytest.fail("runner opened"))
+    assert cli.main(["paper", str(config), "--duration", "1s", "--report", str(output)]) == 1
+    assert output.read_text() == "existing result"
+
+
+def test_report_write_failure_is_nonzero_and_does_not_print_exception(
+    monkeypatch, tmp_path, capsys
+):
+    config = tmp_path / "paper.yaml"
+    config.write_text("mode: paper\n")
+
+    class BrokenResult(PaperResult):
+        def write(self, termination):
+            self._file.close()
+            raise OSError("private-error-data-not-for-output")
+
+    async def selected_run(*_args, **_kwargs):
+        return
+
+    monkeypatch.setattr(cli, "PaperResult", BrokenResult)
+    monkeypatch.setattr(cli, "run_strategy", selected_run)
+    assert (
+        cli.main(
+            ["paper", str(config), "--duration", "1s", "--report", str(tmp_path / "result.json")]
+        )
+        == 1
+    )
+    assert "private-error-data" not in capsys.readouterr().err

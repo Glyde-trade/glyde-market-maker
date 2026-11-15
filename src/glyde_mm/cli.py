@@ -97,7 +97,7 @@ async def run_with_signals(
                     f"PAPER RESULT | outcome={row['outcome']} | termination={row['termination']}"
                     f" | uptime={row['uptime_seconds']}s"
                     f" | quotes={row['quotes'].get('placed', 0)}"
-                    f" | fills={row['quotes'].get('fills', 0)}"
+                    f" | fills={row['fills']}"
                     f" | realized_pnl={row['realized_pnl_usdc']}"
                     f" | unrealized_pnl={row['unrealized_pnl_usdc']}"
                     f" | max_drawdown={row['max_drawdown_usdc']} | report={result.path}"
