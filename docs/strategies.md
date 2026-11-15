@@ -147,3 +147,8 @@ post-only behavior follow PMM. Hanging orders remain disabled.
 The normalized formula is rewritten from Hummingbot's
 `avellaneda_market_making` at revision
 `9af100d6822da7d2d0291a906c730ef172284ee2`, Apache-2.0. See `NOTICE`.
+
+## Compare against a recorded market
+
+[Record and replay public books](replay.md) to compare these strategies over the
+same captured window, using simulated funds and the same risk limits.
