@@ -27,6 +27,8 @@ Browse the five commented [paper configs in the gallery](configs/gallery/README.
 
 For a persistent host, use the [VPS recipes](docs/vps.md): Docker Compose with a state
 volume and rotated logs, or a systemd paper service with a private env file.
+See the [changelog](CHANGELOG.md) and [upgrade notes for 0.2 users](docs/upgrading-from-0.2.md)
+before replacing an existing installation.
 
 > **Quickstart GIF — placeholder:** a captioned paper-mode `init → doctor → paper → Ctrl-C → report`
 > recording will go here. No demo recording is attached yet; use the
