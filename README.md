@@ -6,10 +6,15 @@ Strategy designs are adapted from [Hummingbot](https://github.com/hummingbot/hum
 
 ## Current status
 
-Paper and explicit live commands share the strategy/risk runner. Live connectivity still requires
-Glyde to expose the requested One API capabilities and your exact registered account permissions;
-unit tests do not establish that a deployed account is enabled or that live trading is qualified.
-The bot stops on refused or ambiguous actions rather than falling back to another venue.
+`glyde-mm paper <config>` runs the selected strategy through the risk layer into the paper
+exchange: it places simulated quotes, fills them against subsequent public books and cancels
+remaining quotes on exit. It never sends a trading action or reads signing credentials.
+
+`glyde-mm run <config>` with `mode: live` sends orders and cancellations through the same risk
+boundary to One API, using Hyperliquid-compatible SDK signing and the configured vault namespace.
+Offline CLI tests exercise paper fills, signed live placement/cancellation and risk refusals before
+submission. They do not qualify a deployed account: live use still requires the API capabilities,
+registered account permissions and credentials. Refused or ambiguous actions stop quoting.
 
 ## Start in five minutes
 
