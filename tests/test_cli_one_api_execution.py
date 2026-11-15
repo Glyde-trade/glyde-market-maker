@@ -12,13 +12,13 @@ import pytest
 import yaml
 from eth_account import Account as EthAccount
 from hyperliquid.utils.signing import recover_agent_or_user_from_l1_action
+from live_fake import SequencedFake
 
 from glyde_mm import cli
 from glyde_mm.client import OneApiClient
 from glyde_mm.config import Config
 from glyde_mm.paper import PaperExchange
 from glyde_mm.runner import run
-from glyde_mm.testing import FakeOneApiServer
 
 D = Decimal
 OWNER = "0x" + "11" * 20
@@ -45,7 +45,8 @@ def exercise_cli(
     understand=False,
     paper_fill_sides=("buy",),
 ):
-    fake = FakeOneApiServer(user=OWNER, timestamp_ms=time.time_ns() // 1_000_000)
+    sequenced = SequencedFake(read_credential="synthetic-read-credential")
+    fake = sequenced.ledger
     fake.set_book("BTC", bids=[("99", "2")], asks=[("101", "2")])
     if existing_position:
         fake.market_order("BTC", buy=True, size="0.1", user=OWNER)
@@ -154,6 +155,8 @@ def exercise_cli(
                     private = body["type"] in {"clearinghouseState", "openOrders"}
                     assert request.headers.get("X-Glyde-API-Key") == (token if private else None)
                 response = await transport.handle_async_request(request)
+                if request.url.path.endswith("/exchange"):
+                    sequenced.emit_owner()
                 if request.url.path.endswith("/exchange") and body["action"]["type"] == "order":
                     assert len(fake.info({"type": "openOrders", "user": OWNER})) == 2 + int(
                         existing_order
@@ -163,7 +166,9 @@ def exercise_cli(
 
             async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
                 async with OneApiClient(
-                    selected, http_client=http, connect_ws=fake.connect_ws
+                    selected,
+                    http_client=http,
+                    connect_ws=sequenced.connect if selected.mode == "live" else fake.connect_ws,
                 ) as client:
                     yield client
 
@@ -181,6 +186,8 @@ def exercise_cli(
     monkeypatch.setattr(cli, "run_strategy", controlled_run)
     result = cli.main([command, str(path)] + (["--i-understand"] if understand else []))
     assert not fake._connections
+    if actions:
+        assert sequenced.sequence == 1 + len(actions)
     return result, fake, actions, reports, papers
 
 
