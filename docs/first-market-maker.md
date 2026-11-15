@@ -80,10 +80,10 @@ Copy [the multi-market paper example](../examples/multi-symbol-paper.yaml) as
 glyde-mm paper multi-paper.yaml --duration 3m --report multi-result.json
 ```
 
-One Glyde WS session carries all selected books plus live account/orders/fills. Each market
-can choose its own `strategy`, strategy settings and base-unit `max_position`; shared risk
-caps bound per-order notional, gross `max_total_notional`, daily equity loss and order rate.
-Paper uses the same risk boundary with a simulated account.
+**Live mode** uses one Glyde WS session for all selected books and private account/orders/fills.
+Paper subscribes to public books/trades, with the same risk boundary and a simulated account.
+Each market can choose its own `strategy`, settings and base-unit `max_position`; shared caps
+bound per-order notional, gross `max_total_notional`, daily equity loss and order rate.
 
 A stale **flat** market cancels its quotes while fresh peers can keep quoting. A fresh book
 restarts that market's strategy, including volatility warm-up. A stale nonflat position can

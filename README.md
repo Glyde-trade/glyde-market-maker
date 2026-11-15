@@ -615,8 +615,9 @@ uses the larger of the current ask and relevant limit prices. External positions
 also count: a missing or stale book for any exposed asset refuses new orders. This is a
 local pre-trade bound, not a guarantee against price changes or losses.
 
-All books must arrive before quoting. One Glyde WS session carries every selected book
-and the shared owner/order/fill state; HTTP is used only for startup snapshots and metadata.
+All books must arrive before quoting. In **live mode**, one Glyde WS session carries every
+selected book and shared owner/order/fill state; HTTP is used only for startup snapshots and
+metadata. Paper subscribes to public books/trades and keeps its simulated account locally.
 A stale book pauses that market and confirms cancellation of its quotes. Other fresh
 markets keep quoting once the stale market is flat and its outstanding orders are retired.
 A fresh book restarts the paused strategy instance, including its volatility warm-up.
