@@ -36,11 +36,11 @@ before replacing an existing installation.
 
 ## Start in five minutes
 
-**1. Install.** Once the `v0.3.0` GitHub Release is published, install its wheel with
+**1. Install.** Once the `v0.4.0` GitHub Release is published, install its wheel with
 [pipx](https://pipx.pypa.io/stable/installation/) (Python 3.11+):
 
 ```sh
-pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.3.0/glyde_market_maker-0.3.0-py3-none-any.whl'
+pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.4.0/glyde_market_maker-0.4.0-py3-none-any.whl'
 glyde-mm --version
 ```
 
@@ -105,6 +105,10 @@ Configuration, connectivity, stale/missing book and requested read-permission
 failures return a nonzero exit code.
 
 ## Go live with small, explicit limits
+
+For a guided first session (v0.4.0+), see [live-wizard](docs/first-live-session.md):
+doctor → two-minute paper preview → typed confirmation → Conservative live run with a
+30-minute auto-stop and private final report. It currently supports one symbol.
 
 Create/authorize an API wallet for your Glyde trading account using Glyde's account controls. Use its
 **trading key**, not a main wallet seed phrase. Use the exact account and any assigned vault/namespace
@@ -433,6 +437,21 @@ current source checkout; it does not claim that a deployed account can trade.
 
 ![Offline paper replay report: completed, 61 books, 2 simulated fills, zero pending orders](docs/images/paper-session-report.svg)
 
+### Compare paper strategies offline
+
+Record one public tape, then compare PMM, inventory-skewed, grid and HL-reference
+quotes under the same balance and risk caps:
+
+```sh
+glyde-mm record-tape --config examples/paper.yaml --minutes 5 --include-hl --tape-file tape.jsonl
+glyde-mm compare --config examples/paper.yaml --tape-file tape.jsonl --preset balanced
+```
+
+The table shows fill fragments, inventory range, marked PnL, maximum drawdown,
+two-sided quote uptime and risk stops. Missing recorded HL data is unavailable,
+never a fallback. Comparison is offline/paper-only, including with a live YAML.
+See [comparison assumptions and tape format](docs/compare-strategies.md).
+
 ### Local read-only dashboard
 
 Each running bot prints its private dashboard snapshot path. In another terminal:
@@ -500,3 +519,12 @@ bypass risk limits. Begin in paper mode; no multi-market live qualification is c
 Public-book `record`/`replay` currently require a separate single-symbol config and refuse
 `markets` configs rather than silently replaying just one market. Public external-reference
 settings, when enabled, are evaluated independently for each selected market.
+
+## Offline API compatibility checks
+
+`pytest -q tests/test_public_api_compatibility.py` replays frozen public HTTP and
+WebSocket wire frames through the real client, including metadata, books, mids,
+trade snapshots/updates and subscription acknowledgements. It forbids sockets,
+credential reads and private requests. See the [fixture provenance](tests/fixtures/one-api-public/README.md):
+the initial recording is synthetic, so these checks catch client wire regressions
+without claiming the production service is reachable or qualified.
