@@ -17,7 +17,13 @@ _FIELDS = {
     "run_ended": {"outcome"},
 }
 _OUTCOMES = {"completed", "stopped", "cancelled", "risk_stop", "transport_error", "error"}
-_STRATEGIES = {"pure_market_making", "avellaneda_market_making", "grid", "inventory_skewed"}
+_STRATEGIES = {
+    "pure_market_making",
+    "avellaneda_market_making",
+    "grid",
+    "inventory_skewed",
+    "plugin",
+}
 
 
 class RunLog:
@@ -44,6 +50,8 @@ class RunLog:
         self.max_bytes, self.backups = max_bytes, backups
         self.sequence = 0
         self.identity = build_identity()
+        if strategy.startswith("plugin:"):
+            strategy = "plugin"
         self.header = {
             "mode": mode if mode in {"paper", "live"} else "unknown",
             "strategy": strategy if strategy in _STRATEGIES else "unknown",

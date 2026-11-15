@@ -9,6 +9,7 @@ from typing import Any
 from .avellaneda_market_making import AvellanedaConfig, AvellanedaMarketMakingStrategy
 from .grid import GridConfig, GridStrategy
 from .inventory_skewed import InventorySkewedConfig, InventorySkewedStrategy
+from .plugin import PluginDefinition, PluginStrategy, load_plugin
 from .pure_market_making import (
     PureMarketMakingConfig,
     PureMarketMakingStrategy,
@@ -53,6 +54,8 @@ _STRATEGIES = {
 
 
 def validate_strategy_config(name: str, values: dict[str, Any]):
+    if name.startswith("plugin:"):
+        return load_plugin(name, values)
     try:
         _, config_type = _STRATEGIES[name]
     except KeyError:
@@ -62,5 +65,7 @@ def validate_strategy_config(name: str, values: dict[str, Any]):
 
 def create_strategy(name: str, context: StrategyContext, values: dict[str, Any]):
     selected = validate_strategy_config(name, values)
+    if isinstance(selected, PluginDefinition):
+        return PluginStrategy(context, selected)
     strategy_type, _ = _STRATEGIES[name]
     return strategy_type(context, selected)
