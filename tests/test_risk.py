@@ -45,6 +45,7 @@ class Order:
 class Cancel:
     order_id: str | None = None
     client_order_id: str | None = None
+    symbol: str = "BTC"
 
 
 class FakeClient:
@@ -378,5 +379,150 @@ def test_first_cancel_failure_still_attempts_each_other_original_once():
         assert len(raw.placed) == 2
         assert set(g.pending) == {"one", "two"}
         assert g.halted == "closed"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("status", ["timeout", "unknown"])
+def test_ambiguous_execution_survives_restart_and_day_rollover(tmp_path, status):
+    async def scenario():
+        path = tmp_path / "risk.json"
+        g, now = guard(path)
+        raw = FakeClient()
+        raw.result, raw.cancel_result = status, "unknown"
+        client = RiskManagedClient(raw, g)
+        with pytest.raises((RiskViolation, TimeoutError)):
+            await client.place_orders([Order(client_order_id="original-uncertain")])
+        restarted, _ = guard_restart(path, now)
+        assert restarted.halted == "order_outcome_unknown"
+        now[1] += 86400
+        with pytest.raises(RiskViolation, match="order_outcome_unknown"):
+            restarted.update_account(Account())
+        restarted_client = RiskManagedClient(raw, restarted)
+        with pytest.raises(RiskViolation, match="order_outcome_unknown"):
+            await restarted_client.place_orders([Order(client_order_id="replacement")])
+        assert [row.client_order_id for row in raw.placed] == ["original-uncertain"]
+        import json
+
+        record = json.loads(path.read_text())["execution"]
+        assert record["originals"] == [
+            {"symbol": "BTC", "order_id": None, "client_order_id": "original-uncertain"}
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_intent_is_durable_before_transport_and_definite_reply_clears_it(tmp_path):
+    async def scenario():
+        path = tmp_path / "risk.json"
+        g, now = guard(path)
+
+        class InspectingClient(FakeClient):
+            async def place_orders(self, orders):
+                interrupted, _ = guard_restart(path, now)
+                assert interrupted.halted == "order_outcome_unknown"
+                return await super().place_orders(orders)
+
+        raw = InspectingClient()
+        await RiskManagedClient(raw, g).place_orders([Order(client_order_id="known")])
+        restarted, _ = guard_restart(path, now)
+        assert restarted.halted is None
+        restarted.update_account(Account())
+
+    asyncio.run(scenario())
+
+
+def test_uncertain_cancel_survives_restart_with_original_identity(tmp_path):
+    async def scenario():
+        path = tmp_path / "risk.json"
+        g, now = guard(path)
+        raw = FakeClient()
+        client = RiskManagedClient(raw, g)
+        await client.place_orders([Order(client_order_id="one")])
+        raw.cancel_result = "unknown"
+        with pytest.raises(RiskViolation, match="cancel_outcome_unknown"):
+            await client.cancel_orders([Cancel(order_id="0")])
+        restarted, _ = guard_restart(path, now)
+        assert restarted.halted == "cancel_outcome_unknown"
+        import json
+
+        assert json.loads(path.read_text())["execution"]["originals"] == [
+            {"symbol": "BTC", "order_id": "0", "client_order_id": None}
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_state_write_failure_prevents_order_submission(tmp_path, monkeypatch):
+    async def scenario():
+        path = tmp_path / "risk.json"
+        g, _ = guard(path)
+        raw = FakeClient()
+
+        def no_space(*_):
+            raise OSError("state storage unavailable")
+
+        monkeypatch.setattr("glyde_mm.risk.os.replace", no_space)
+        with pytest.raises(RiskViolation):
+            await RiskManagedClient(raw, g).place_orders([Order(client_order_id="never-sent")])
+        assert not raw.placed
+        assert g.halted == "risk_state_unavailable"
+
+    asyncio.run(scenario())
+
+
+def test_exit_before_account_baseline_keeps_readable_state(tmp_path):
+    async def scenario():
+        path = tmp_path / "risk.json"
+        g = RiskGuard(RiskLimits(), state_path=path)
+        await RiskManagedClient(FakeClient(), g).close()
+        restarted = RiskGuard(RiskLimits(), state_path=path)
+        assert restarted.halted is None
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "execution",
+    [
+        "not-a-record",
+        {},
+        {"reason": "approved", "originals": []},
+        {"reason": "order_outcome_unknown", "originals": [{"symbol": "BTC"}]},
+    ],
+)
+def test_malformed_execution_state_refuses_restart(tmp_path, execution):
+    import json
+
+    path = tmp_path / "risk.json"
+    guard(path)
+    data = json.loads(path.read_text())
+    data["execution"] = execution
+    path.write_text(json.dumps(data))
+    with pytest.raises(RiskViolation, match="risk_state_unavailable"):
+        guard(path)
+
+
+def test_failed_state_clear_after_reply_retains_durable_original(tmp_path, monkeypatch):
+    async def scenario():
+        path = tmp_path / "risk.json"
+        g, now = guard(path)
+
+        class LostStateClient(FakeClient):
+            async def place_orders(self, orders):
+                result = await super().place_orders(orders)
+
+                def no_space(*_):
+                    raise OSError("state clear unavailable")
+
+                monkeypatch.setattr("glyde_mm.risk.os.replace", no_space)
+                return result
+
+        raw = LostStateClient()
+        with pytest.raises(RiskViolation, match="risk_state_unavailable"):
+            await RiskManagedClient(raw, g).place_orders([Order(client_order_id="original")])
+        assert len(raw.placed) == 1
+        restarted, _ = guard_restart(path, now)
+        assert restarted.halted == "order_outcome_unknown"
 
     asyncio.run(scenario())

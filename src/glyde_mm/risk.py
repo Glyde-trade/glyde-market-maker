@@ -77,17 +77,80 @@ class RiskGuard:
         self.halted: str | None = None
         self._day: str | None = None
         self._equity_start: Decimal | None = None
+        self._execution: dict | None = None
         if state_path is not None and state_path.exists():
             try:
                 data = json.loads(state_path.read_text())
-                self._day = datetime.strptime(data["day"], "%Y-%m-%d").date().isoformat()
-                self._equity_start = Decimal(data["equity_start"])
-                if not _positive(self._equity_start) or not isinstance(data["loss_halted"], bool):
+                if data["day"] is not None or data["equity_start"] is not None:
+                    self._day = datetime.strptime(data["day"], "%Y-%m-%d").date().isoformat()
+                    self._equity_start = Decimal(data["equity_start"])
+                    if not _positive(self._equity_start):
+                        raise ValueError("invalid risk baseline")
+                if not isinstance(data["loss_halted"], bool) or (
+                    data["loss_halted"] and self._equity_start is None
+                ):
                     raise ValueError("invalid risk state")
-                if data["loss_halted"]:
+                self._execution = data.get("execution")
+                if self._execution is not None:
+                    self._validate_execution(self._execution)
+                    self.halted = self._execution["reason"]
+                elif data["loss_halted"]:
                     self.halted = "daily_loss"
             except (ValueError, KeyError, TypeError, OSError) as exc:
                 raise RiskViolation("risk_state_unavailable") from exc
+
+    @staticmethod
+    def _validate_execution(record: dict) -> None:
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"reason", "originals"}
+            or record["reason"] not in ("order_outcome_unknown", "cancel_outcome_unknown")
+            or not isinstance(record["originals"], list)
+        ):
+            raise ValueError("invalid execution state")
+        for row in record["originals"]:
+            if (
+                not isinstance(row, dict)
+                or set(row) != {"symbol", "order_id", "client_order_id"}
+                or not isinstance(row["symbol"], str)
+                or not row["symbol"]
+                or (row["order_id"] is None and row["client_order_id"] is None)
+                or any(
+                    value is not None and (not isinstance(value, str) or not value)
+                    for value in (row["order_id"], row["client_order_id"])
+                )
+            ):
+                raise ValueError("invalid execution identity")
+
+    def begin_execution(self, reason: str, originals: Sequence) -> bool:
+        if self._execution is not None:
+            return False
+        record = {
+            "reason": reason,
+            "originals": [
+                {
+                    "symbol": row.symbol,
+                    "order_id": getattr(row, "order_id", None),
+                    "client_order_id": row.client_order_id,
+                }
+                for row in originals
+            ],
+        }
+        self._validate_execution(record)
+        self._execution = record
+        self._persist()
+        return True
+
+    def finish_execution(self, owned: bool) -> None:
+        if not owned:
+            return
+        original = self._execution
+        self._execution = None
+        try:
+            self._persist()
+        except BaseException:
+            self._execution = original
+            raise
 
     def _persist(self) -> None:
         if self.state_path is None:
@@ -101,8 +164,11 @@ class RiskGuard:
                 json.dump(
                     {
                         "day": self._day,
-                        "equity_start": str(self._equity_start),
+                        "equity_start": str(self._equity_start)
+                        if self._equity_start is not None
+                        else None,
                         "loss_halted": self.halted == "daily_loss",
+                        "execution": self._execution,
                     },
                     handle,
                 )
@@ -150,6 +216,8 @@ class RiskGuard:
             self.halted = "daily_loss"
             self._persist()
             raise RiskViolation(self.halted)
+        if self._execution is not None:
+            self.halted = self._execution["reason"]
         if self.halted is not None:
             raise RiskViolation(self.halted)
 
@@ -244,6 +312,11 @@ class RiskManagedClient:
             if symbol is None or order.symbol == symbol
         ]
         failure: Exception | None = None
+        owned = False
+        try:
+            owned = self.guard.begin_execution("cancel_outcome_unknown", requests)
+        except Exception as error:
+            failure = error
         for request in requests:
             try:
                 results = await self.client.cancel_orders([request])
@@ -268,6 +341,7 @@ class RiskManagedClient:
         if failure is not None:
             raise RiskViolation("cancel_outcome_unknown") from failure
 
+        self.guard.finish_execution(owned)
         self.guard.pending = {
             key: order
             for key, order in self.guard.pending.items()
@@ -309,6 +383,7 @@ class RiskManagedClient:
                 await self._cancel_and_halt(self.guard.halted or "pretrade_refused")
                 raise
             try:
+                owned = self.guard.begin_execution("order_outcome_unknown", prepared)
                 results = await self.client.place_orders(prepared)
                 if len(results) != len(prepared) or any(
                     r.status not in ("resting", "filled", "rejected") for r in results
@@ -326,6 +401,7 @@ class RiskManagedClient:
                         self.guard.pending.pop(key, None)
                         if result.status == "filled":
                             self.guard.account_state = None
+                self.guard.finish_execution(owned)
                 return results
             except BaseException:
                 await self._cancel_and_halt("order_outcome_unknown")
@@ -334,6 +410,7 @@ class RiskManagedClient:
     async def cancel_orders(self, orders: Sequence[CancelRequest]) -> list[CancelResult]:
         async with self._lock:
             try:
+                owned = self.guard.begin_execution("cancel_outcome_unknown", orders)
                 results = await self.client.cancel_orders(orders)
                 if len(results) != len(orders) or any(
                     r.status not in ("cancelled", "already_closed") for r in results
@@ -347,6 +424,7 @@ class RiskManagedClient:
                     key = request.client_order_id or self._order_ids.get(request.order_id or "")
                     if key is not None:
                         self.guard.pending.pop(key, None)
+                self.guard.finish_execution(owned)
                 return results
             except BaseException:
                 await self._cancel_and_halt("cancel_outcome_unknown")
