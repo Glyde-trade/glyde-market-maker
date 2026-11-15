@@ -102,6 +102,11 @@ def _actual_fills(header, events, orders):
             ):
                 raise ValueError("private fill binding/time mismatch")
             quantity, price = _positive(fill["sz"]), _positive(fill["px"])
+            limit = _positive(request["price"])
+            if (request["side"] == "buy" and price > limit) or (
+                request["side"] == "sell" and price < limit
+            ):
+                raise ValueError("private fill violates original limit price")
             fee = decimal(fill["fee"]) if fill.get("feeToken") == "USDC" and "fee" in fill else None
             normalized = (quantity, price, fee, fill["time"], fill.get("feeToken"), fill.get("fee"))
             identity = oid, _id(fill["tid"])
@@ -254,6 +259,7 @@ async def reconcile_session(path: Path) -> dict:
             "capture-declared coverage",
             "paper_fee_basis": "zero; no fee schedule inferred",
             "orders": rows,
+            "matched_quantity": str(sum((decimal(row["matched_quantity"]) for row in rows), ZERO)),
             "matched_slippage_usdc": str(
                 sum(
                     (
@@ -263,7 +269,9 @@ async def reconcile_session(path: Path) -> dict:
                     ),
                     ZERO,
                 )
-            ),
+            )
+            if any(decimal(row["matched_quantity"]) > ZERO for row in rows)
+            else None,
             "fee_impact_usdc": str(total_fees) if total_fees is not None else None,
             "missed_live_quantity": str(
                 sum((decimal(row["missed_live_quantity"]) for row in rows), ZERO)

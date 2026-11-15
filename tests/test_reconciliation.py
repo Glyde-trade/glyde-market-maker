@@ -34,15 +34,15 @@ def edited(tmp_path, change):
 
 async def test_exact_order_attribution_partial_missed_slippage_and_fee_rebate():
     result = await reconcile_session(FIXTURE)
-    assert D(result["matched_slippage_usdc"]) == D(".15")
+    assert D(result["matched_slippage_usdc"]) == D("-.15")
     assert D(result["fee_impact_usdc"]) == D(".005")
     assert D(result["missed_live_quantity"]) == D(".25")
     assert D(result["live_only_quantity"]) == D(".25")
     buy, sell = result["orders"]
     assert D(buy["live_quantity"]) == D(".25") and D(buy["paper_quantity"]) == D(".5")
     assert D(sell["live_quantity"]) == D(".75") and D(sell["paper_quantity"]) == D(".5")
-    assert D(buy["adverse_slippage_per_base"]) == D(".2")
-    assert D(sell["adverse_slippage_per_base"]) == D(".2")
+    assert D(buy["adverse_slippage_per_base"]) == D("-.2")
+    assert D(sell["adverse_slippage_per_base"]) == D("-.2")
     assert D(sell["live_fee_usdc"]) < 0  # Maker rebates are not clipped to zero.
 
 
@@ -71,6 +71,7 @@ async def test_empty_complete_private_capture_is_not_missing_capture(tmp_path):
     result = await reconcile_session(path)
     assert D(result["missed_live_quantity"]) == 1
     assert D(result["fee_impact_usdc"]) == 0
+    assert result["matched_slippage_usdc"] is None and D(result["matched_quantity"]) == 0
     assert all(
         row["live_vwap"] is None and row["matched_slippage_usdc"] is None
         for row in result["orders"]
@@ -106,6 +107,8 @@ async def test_empty_complete_private_capture_is_not_missing_capture(tmp_path):
         lambda rows: rows[4].update(received_at_ms=999),
         lambda rows: rows[4]["frame"]["data"][0].update(sz="NaN"),
         lambda rows: rows[2]["receipt"].update(client_order_id="0x" + "77" * 16),
+        lambda rows: rows[5]["frame"]["data"]["fills"][0].update(px="99.2"),
+        lambda rows: rows[7]["frame"]["data"]["fills"][0].update(px="100.8"),
     ],
 )
 async def test_incomplete_ambiguous_mismatched_or_conflicting_capture_refuses(tmp_path, change):
@@ -129,6 +132,6 @@ def test_actual_cli_runs_entirely_offline_without_state_write(tmp_path, capsys, 
     before = set(tmp_path.iterdir())
     assert main(["reconcile", "--session-file", str(FIXTURE)]) == 0
     result = json.loads(capsys.readouterr().out)
-    assert D(result["matched_slippage_usdc"]) == D(".15")
+    assert D(result["matched_slippage_usdc"]) == D("-.15")
     assert set(tmp_path.iterdir()) == before
     assert "user" not in result and "paper_fee_basis" in result
