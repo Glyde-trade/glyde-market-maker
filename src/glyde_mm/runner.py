@@ -17,6 +17,7 @@ from .client import OneApiClient, OneApiError, book_from_wire, trades_from_wire
 from .config import Config
 from .dashboard import SnapshotPublisher
 from .live_state import LiveStateClient
+from .market_preflight import require_preflight
 from .models import Book
 from .paper import PaperExchange
 from .preflight import check_live_exposure
@@ -173,6 +174,7 @@ async def _run_session(
             for value in (config.owner, config.vault_address)
         ):
             raise ValueError("live mode requires registered account and vault addresses")
+        require_preflight(config, state_directory)
         config.secret(config.private_key_env)
         config.secret(config.read_api_key_env)
     limits = RiskLimits(

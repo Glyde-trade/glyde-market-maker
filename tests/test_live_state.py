@@ -11,6 +11,7 @@ import httpx
 import pytest
 from live_fake import SequencedFake
 from live_wire import batch, owner_roots
+from market_receipt import approved_market
 
 from glyde_mm.client import OneApiClient, OneApiError
 from glyde_mm.config import Config, RiskConfig
@@ -290,6 +291,7 @@ async def test_actual_live_runner_uses_http_only_for_startup(monkeypatch, tmp_pa
         await fake.refreshed.wait()
         stop.set()
 
+    approved_market(selected, tmp_path)
     stopper = asyncio.create_task(stop_after_refresh())
     try:
         await asyncio.wait_for(

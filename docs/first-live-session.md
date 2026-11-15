@@ -18,7 +18,8 @@ and order attempts at 60/minute; tighter supplied caps remain. The position cap 
 25 USDC at the sizing snapshot. Prices can move, these are not loss guarantees, and venue
 minimums may still refuse the resulting small size. No cap is raised to make an order fit.
 
-1. Run doctor on the **derived** config, including explicitly requested private read checks.
+1. Run public market preflight on the **derived** config, then doctor including explicitly
+   requested private read checks. Missing advertised minimum size refuses without guessing.
    A failure ends the wizard without placing anything.
 2. Run a **120-second paper preview**, displaying the usual paper status/summary. It uses
    exactly the proposed live settings, strategy and account identifiers, with only `mode`
