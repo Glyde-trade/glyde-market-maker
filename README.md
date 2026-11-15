@@ -448,6 +448,20 @@ two-sided quote uptime and risk stops. Missing recorded HL data is unavailable,
 never a fallback. Comparison is offline/paper-only, including with a live YAML.
 See [comparison assumptions and tape format](docs/compare-strategies.md).
 
+### Local read-only dashboard
+
+Each running bot prints its private dashboard snapshot path. In another terminal:
+
+```sh
+glyde-mm dashboard --state .glyde-mm/logs/run-<id>/dashboard.json --port 8080
+```
+
+Open `http://127.0.0.1:8080` for quotes, recent simulated fills, inventory,
+simulated PnL and risk state. It binds loopback only and has no trading controls or
+authentication. Finished or old snapshots are visibly stale. Live snapshots show
+tracked intents and daily equity change; live fills remain explicitly unavailable.
+See [dashboard scope and privacy](docs/dashboard.md).
+
 ## Multiple markets, one account
 
 Current source supports a `markets` list in place of `symbol`:

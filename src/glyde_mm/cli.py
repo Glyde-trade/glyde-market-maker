@@ -69,6 +69,9 @@ def main(argv: list[str] | None = None) -> int:
             run.add_argument(
                 "--private", action="store_true", help="check live read permissions only"
             )
+    dashboard = commands.add_parser("dashboard", help="serve one local read-only bot snapshot")
+    dashboard.add_argument("--state", required=True, type=Path)
+    dashboard.add_argument("--port", type=int, default=8080)
     report = commands.add_parser("report", help="summarize private run logs for a support ticket")
     report.add_argument("logdir", type=Path)
     for name in ("record", "replay"):
@@ -117,6 +120,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             print(f"Recorded {count} public tape events; no private data or orders accessed.")
+            return 0
+        if args.command == "dashboard":
+            from .dashboard import serve
+
+            serve(args.state, args.port)
             return 0
         if args.command == "report":
             from .report import summarize
