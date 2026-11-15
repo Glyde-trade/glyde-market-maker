@@ -34,12 +34,44 @@ def offline_only(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect_ex", refused)
 
 
-def exercise_cli(monkeypatch, tmp_path, *, command, risk=None):
+def exercise_cli(
+    monkeypatch,
+    tmp_path,
+    *,
+    command,
+    risk=None,
+    existing_position=False,
+    existing_order=False,
+    understand=False,
+):
     fake = FakeOneApiServer(user=OWNER, timestamp_ms=time.time_ns() // 1_000_000)
     fake.set_book("BTC", bids=[("99", "2")], asks=[("101", "2")])
+    if existing_position:
+        fake.market_order("BTC", buy=True, size="0.1", user=OWNER)
+    if existing_order:
+        fake.exchange(
+            {
+                "action": {
+                    "type": "order",
+                    "orders": [
+                        {
+                            "a": 0,
+                            "b": True,
+                            "p": "98",
+                            "s": "0.1",
+                            "r": False,
+                            "t": {"limit": {"tif": "Gtc"}},
+                            "c": "0x" + "d" * 32,
+                        }
+                    ],
+                }
+            },
+            user=OWNER,
+        )
     wallet = EthAccount.create()
     token = "synthetic-read-credential"
     if command == "run":
+        monkeypatch.setattr("builtins.input", lambda _: "BTC")
         monkeypatch.setenv("GLYDE_API_PRIVATE_KEY", wallet.key.hex())
         monkeypatch.setenv("GLYDE_READ_API_KEY", token)
     else:
@@ -74,7 +106,13 @@ def exercise_cli(monkeypatch, tmp_path, *, command, risk=None):
 
     monkeypatch.setattr(Config, "secret", observed_secret)
 
-    async def controlled_run(config, *, state_directory, stop_event):
+    async def controlled_run(
+        config,
+        *,
+        state_directory,
+        stop_event,
+        allow_existing_exposure=False,
+    ):
         class ObservedPaper(PaperExchange):
             async def place_orders(self, orders):
                 result = await super().place_orders(orders)
@@ -112,7 +150,9 @@ def exercise_cli(monkeypatch, tmp_path, *, command, risk=None):
                     assert request.headers.get("X-Glyde-API-Key") == (token if private else None)
                 response = await transport.handle_async_request(request)
                 if request.url.path.endswith("/exchange") and body["action"]["type"] == "order":
-                    assert len(fake.info({"type": "openOrders", "user": OWNER})) == 2
+                    assert len(fake.info({"type": "openOrders", "user": OWNER})) == 2 + int(
+                        existing_order
+                    )
                     stop_event.set()
                 return response
 
@@ -130,10 +170,11 @@ def exercise_cli(monkeypatch, tmp_path, *, command, risk=None):
                 paper_factory=paper_factory,
                 stop_event=stop_event,
                 report=reports.append,
+                allow_existing_exposure=allow_existing_exposure,
             )
 
     monkeypatch.setattr(cli, "run_strategy", controlled_run)
-    result = cli.main([command, str(path)])
+    result = cli.main([command, str(path)] + (["--i-understand"] if understand else []))
     assert not fake._connections
     return result, fake, actions, reports, papers
 
@@ -177,3 +218,51 @@ def test_live_cli_risk_rejection_never_reaches_exchange(monkeypatch, tmp_path, r
     assert result == 1 and actions == [] and papers == []
     assert all(row["path"].endswith("/info") for row in fake.requests)
     assert fake.info({"type": "openOrders", "user": OWNER}) == []
+
+
+@pytest.mark.parametrize("position,order", [(True, False), (False, True), (True, True)])
+def test_live_preflight_refuses_other_exposure_without_cancelling_it(
+    monkeypatch,
+    tmp_path,
+    position,
+    order,
+    capsys,
+):
+    result, fake, actions, _, papers = exercise_cli(
+        monkeypatch,
+        tmp_path,
+        command="run",
+        existing_position=position,
+        existing_order=order,
+    )
+    assert result == 1 and actions == [] and papers == []
+    remaining = fake.info({"type": "openOrders", "user": OWNER})
+    assert len(remaining) == int(order)
+    assert "--i-understand" in capsys.readouterr().err
+    if position:
+        state = fake.info({"type": "clearinghouseState", "user": OWNER})
+        assert state["assetPositions"][0]["position"]["szi"] == "0.1"
+
+
+def test_live_preflight_override_allows_start_but_retains_actual_risk(monkeypatch, tmp_path):
+    result, _, actions, _, papers = exercise_cli(
+        monkeypatch,
+        tmp_path,
+        command="run",
+        existing_position=True,
+        understand=True,
+    )
+    assert result == 0 and papers == []
+    assert actions[0]["action"]["type"] == "order"
+
+
+def test_live_preflight_override_cannot_bypass_position_cap(monkeypatch, tmp_path):
+    result, _, actions, _, _ = exercise_cli(
+        monkeypatch,
+        tmp_path,
+        command="run",
+        existing_position=True,
+        understand=True,
+        risk={"max_position": "0.05"},
+    )
+    assert result == 1 and actions == []

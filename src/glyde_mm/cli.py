@@ -11,12 +11,15 @@ from pathlib import Path
 
 from .client import OneApiError
 from .config import load_config, write_config
+from .preflight import LivePreflightRefused, summary
 from .risk import RiskViolation
 from .runner import run as run_strategy
 from .version import build_identity
 
 
-async def run_with_signals(selected, state_directory: Path) -> None:
+async def run_with_signals(
+    selected, state_directory: Path, *, allow_existing_exposure: bool = False
+) -> None:
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     previous = {}
@@ -27,7 +30,12 @@ async def run_with_signals(selected, state_directory: Path) -> None:
     try:
         for kind in (signal.SIGINT, signal.SIGTERM):
             previous[kind] = signal.signal(kind, request_stop)
-        await run_strategy(selected, state_directory=state_directory, stop_event=stop)
+        await run_strategy(
+            selected,
+            state_directory=state_directory,
+            stop_event=stop,
+            allow_existing_exposure=allow_existing_exposure,
+        )
     finally:
         for kind, handler in previous.items():
             signal.signal(kind, handler)
@@ -49,6 +57,14 @@ def main(argv: list[str] | None = None) -> int:
         run = commands.add_parser(name)
         run.add_argument("config_path", nargs="?")
         run.add_argument("--config", dest="config_option")
+        if name == "run":
+            run.add_argument(
+                "--i-understand",
+                action="store_true",
+                help=(
+                    "allow existing symbol orders/positions; confirmation and risk caps still apply"
+                ),
+            )
         if name == "doctor":
             run.add_argument(
                 "--private", action="store_true", help="check live read permissions only"
@@ -86,7 +102,14 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 from .replay import replay
 
-                result = asyncio.run(replay(selected, args.book_file, args.minutes))
+                result = asyncio.run(
+                    replay(
+                        selected,
+                        args.book_file,
+                        args.minutes,
+                        state_directory=Path(args.config_option).parent / ".glyde-mm",
+                    )
+                )
                 print(
                     f"PAPER REPLAY | inventory={result.inventory:f}"
                     f" | simulated_pnl={result.pnl:+f} USDC | fills={result.fills}"
@@ -107,8 +130,33 @@ def main(argv: list[str] | None = None) -> int:
             from dataclasses import replace
 
             selected = replace(selected, mode="paper")
-        asyncio.run(run_with_signals(selected, config_path.parent / ".glyde-mm"))
+        print(summary(selected), flush=True)
+        if selected.mode == "live":
+            print("Daily loss is an equity stop threshold, not a guaranteed maximum loss.")
+            print("Cleanup can cancel other orders in this account; use a dedicated account.")
+            try:
+                confirmed = input(f"Type {selected.symbol} to confirm LIVE trading: ")
+            except EOFError:
+                print("Live start cancelled: symbol confirmation is required.", file=sys.stderr)
+                return 1
+            if confirmed != selected.symbol:
+                print("Live start cancelled: symbol confirmation did not match.", file=sys.stderr)
+                return 1
+        asyncio.run(
+            run_with_signals(
+                selected,
+                config_path.parent / ".glyde-mm",
+                allow_existing_exposure=getattr(args, "i_understand", False),
+            )
+        )
         return 0
+    except LivePreflightRefused:
+        print(
+            "Live start refused: existing orders or a position on this symbol. "
+            "Review the account and use --i-understand only to accept that exposure.",
+            file=sys.stderr,
+        )
+        return 1
     except KeyboardInterrupt:
         return 0
     except (ValueError, OSError, OneApiError, RiskViolation, TimeoutError):

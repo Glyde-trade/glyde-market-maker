@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
@@ -10,6 +11,7 @@ from .book_history import read_window
 from .config import Config
 from .paper import PaperExchange
 from .risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
+from .runlog import RunLog
 from .runner import _price_tick
 from .strategies import StrategyContext, create_strategy
 
@@ -24,7 +26,29 @@ class ReplayResult:
     risk_stop: str | None
 
 
-async def replay(config: Config, recording: Path, minutes: int) -> ReplayResult:
+async def replay(
+    config: Config, recording: Path, minutes: int, *, state_directory: Path | None = None
+) -> ReplayResult:
+    if state_directory is None:
+        return await _replay(config, recording, minutes)
+    with RunLog(state_directory / "logs", mode="paper", strategy=config.strategy) as journal:
+        try:
+            result = await _replay(config, recording, minutes, journal=journal)
+        except BaseException as error:
+            journal.emit(
+                "run_ended",
+                outcome="cancelled"
+                if isinstance(error, (asyncio.CancelledError, KeyboardInterrupt))
+                else "error",
+            )
+            raise
+        journal.emit("run_ended", outcome="risk_stop" if result.risk_stop else "completed")
+        return result
+
+
+async def _replay(
+    config: Config, recording: Path, minutes: int, *, journal: RunLog | None = None
+) -> ReplayResult:
     size, start, observations = read_window(recording, config.symbol, minutes)
     config = replace(config, mode="paper")
     now = start / 1000
@@ -58,10 +82,14 @@ async def replay(config: Config, recording: Path, minutes: int) -> ReplayResult:
         config.strategy_config,
     )
     fill_index = 0
+    observed = 0
     reason = None
+    if journal is not None:
+        journal.emit("strategy_started")
 
     async def observe(book):
-        nonlocal fill_index
+        nonlocal fill_index, observed
+        observed += 1
         guard.update_book(book)
         await paper.on_book(book)
         for fill in paper.fills[fill_index:]:
@@ -98,6 +126,13 @@ async def replay(config: Config, recording: Path, minutes: int) -> ReplayResult:
         finally:
             await managed.close()
     account = await paper.account()
+    if journal is not None:
+        journal.emit(
+            "progress",
+            book_messages=observed,
+            pending_orders=len(await paper.open_orders()),
+            paper_fills=len(paper.fills),
+        )
     return ReplayResult(
         start,
         int(now * 1000),

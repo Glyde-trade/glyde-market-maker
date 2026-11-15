@@ -16,6 +16,7 @@ from .client import OneApiClient, OneApiError, book_from_wire
 from .config import Config
 from .models import Book
 from .paper import PaperExchange
+from .preflight import check_live_exposure
 from .reference import HYPERLIQUID_PUBLIC_URL, ExternalReference
 from .risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
 from .runlog import RunLog
@@ -68,6 +69,7 @@ async def run(
     strategy_factory: Callable = create_strategy,
     stop_event: asyncio.Event | None = None,
     report: Callable[[str], object] = print,
+    allow_existing_exposure: bool = False,
 ) -> None:
     with RunLog(state_directory / "logs", mode=config.mode, strategy=config.strategy) as journal:
         report(f"GLYDE-MM {journal.identity['version']} commit={journal.identity['commit']}")
@@ -83,6 +85,7 @@ async def run(
                 stop_event=stop_event,
                 report=report,
                 journal=journal,
+                allow_existing_exposure=allow_existing_exposure,
             )
             if stop_event is not None and stop_event.is_set():
                 outcome = "stopped"
@@ -112,6 +115,7 @@ async def _run_session(
     stop_event: asyncio.Event | None = None,
     report: Callable[[str], object] = print,
     journal: RunLog,
+    allow_existing_exposure: bool = False,
 ) -> None:
     policy = validate_strategy_config(config.strategy, config.strategy_config)
     reference = None
@@ -145,6 +149,15 @@ async def _run_session(
     )
     stop = stop_event or asyncio.Event()
     async with client_factory(config) as source:
+        if config.mode == "live":
+            if stop.is_set():
+                return
+            # Refusal must not enter managed cleanup, which can cancel existing orders.
+            await check_live_exposure(
+                source, config.symbol, allow_existing_exposure=allow_existing_exposure
+            )
+            if stop.is_set():
+                return
         raw = paper_factory(config.paper_balance) if config.mode == "paper" else source
         managed = RiskManagedClient(raw, guard, stop_event=stop)
         strategy = None
