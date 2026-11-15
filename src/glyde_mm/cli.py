@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import signal
 import sys
 from pathlib import Path
@@ -48,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
         run = commands.add_parser(name)
         run.add_argument("config_path", nargs="?")
         run.add_argument("--config", dest="config_option")
+    report = commands.add_parser("report", help="summarize private run logs for a support ticket")
+    report.add_argument("logdir", type=Path)
     for name in ("record", "replay"):
         history = commands.add_parser(name, help="capture/replay local public books in paper mode")
         history.add_argument("--config", dest="config_option", default="glyde-mm.yaml")
@@ -55,6 +58,11 @@ def main(argv: list[str] | None = None) -> int:
         history.add_argument("--book-file", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.command == "report":
+            from .report import summarize
+
+            print(json.dumps(summarize(args.logdir), indent=2, sort_keys=True))
+            return 0
         if args.command == "init":
             from .wizard import run_wizard
 
