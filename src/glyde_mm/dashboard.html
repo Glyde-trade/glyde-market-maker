@@ -1,0 +1,17 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Glyde MM local dashboard</title><style>
+body{font:16px system-ui;background:#101725;color:#e6edf6;margin:2rem;max-width:1050px}h1{font-size:1.6rem}section{padding:1rem;background:#1a2537;margin:1rem 0;border-radius:8px}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.4rem;border-bottom:1px solid #354359}.muted{color:#aebbd0}#status{font-weight:bold;color:#f1d57c}pre{white-space:pre-wrap}
+</style><h1>Glyde MM</h1><p class="muted">Local read-only view. This page cannot place, cancel, resume or reset anything.</p>
+<section id="status">Waiting for a bot snapshot</section><section><h2>Account</h2><pre id="account">Unavailable</pre></section>
+<section><h2>Quotes</h2><p id="basis" class="muted"></p><table id="quotes"></table></section>
+<section><h2>Recent fills</h2><p id="count" class="muted"></p><table id="fills"></table></section>
+<script>
+const put=(id,value)=>document.getElementById(id).textContent=value;
+function table(id,rows){const node=document.getElementById(id);node.replaceChildren();if(rows===null){node.textContent='Unavailable from this source';return}if(!rows.length){node.textContent='None observed';return}for(const values of [['Symbol','Side','Quantity','Price'],...rows.map(r=>[r.symbol,r.side,r.quantity,r.price])]){const tr=document.createElement('tr');for(const value of values){const td=document.createElement('td');td.textContent=value;tr.append(td)}node.append(tr)}}
+async function update(){try{const response=await fetch('/state',{cache:'no-store'});if(!response.ok)throw Error();const data=await response.json();if(!data.available)throw Error();const s=data.snapshot;
+put('status',`${data.stale?'STALE / FINISHED':'UPDATING'} | ${s.mode.toUpperCase()} | ${s.symbols.join(', ')} | ${s.status} | risk: ${s.risk_stop??'none reported'} | age ${(data.age_ms/1000).toFixed(1)}s`);
+put('account',`Equity: ${s.equity??'unavailable'} USDC\n${s.mode==='paper'?'Simulated PnL':'Daily equity change'}: ${s.pnl??'unavailable'} USDC\nInventory: ${s.inventory===null?'unavailable':JSON.stringify(s.inventory)}\nRun: ${s.run_id}`);
+put('basis',s.quotes_basis==='simulator_open_orders'?'Actual simulator open quotes (up to 200)':'Tracked intents; current venue-open status is not established (up to 200)');
+put('count',s.fill_count===null?'Live fills are unavailable in this snapshot; absence is not zero.':`${s.fill_count} simulated fills total; showing last 100. Fees/funding excluded.`);table('quotes',s.quotes);table('fills',s.fills);
+}catch{put('status','UNAVAILABLE — no current readable bot snapshot');put('account','Unavailable');table('quotes',null);table('fills',null)}setTimeout(update,1000)}update();
+</script></html>

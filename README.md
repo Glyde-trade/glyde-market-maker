@@ -433,6 +433,20 @@ current source checkout; it does not claim that a deployed account can trade.
 
 ![Offline paper replay report: completed, 61 books, 2 simulated fills, zero pending orders](docs/images/paper-session-report.svg)
 
+### Local read-only dashboard
+
+Each running bot prints its private dashboard snapshot path. In another terminal:
+
+```sh
+glyde-mm dashboard --state .glyde-mm/logs/run-<id>/dashboard.json --port 8080
+```
+
+Open `http://127.0.0.1:8080` for quotes, recent simulated fills, inventory,
+simulated PnL and risk state. It binds loopback only and has no trading controls or
+authentication. Finished or old snapshots are visibly stale. Live snapshots show
+tracked intents and daily equity change; live fills remain explicitly unavailable.
+See [dashboard scope and privacy](docs/dashboard.md).
+
 ## Multiple markets, one account
 
 Current source supports a `markets` list in place of `symbol`:
