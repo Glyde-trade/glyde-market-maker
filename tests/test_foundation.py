@@ -277,7 +277,7 @@ def test_config_init_is_exclusive_private_paper_and_has_no_key(tmp_path):
     assert main(["config", "init", "--output", str(tmp_path / "cli.yaml")]) == 0
 
 
-def test_live_cli_blocked_until_risk_integration(tmp_path, capsys):
+def test_live_cli_refuses_missing_registration_before_network(tmp_path, capsys):
     path = tmp_path / "config.yaml"
     path.write_text("mode: live\n")
     assert main(["run", "--config", str(path)]) == 1

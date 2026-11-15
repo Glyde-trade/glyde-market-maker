@@ -6,10 +6,10 @@ Strategy designs are adapted from [Hummingbot](https://github.com/hummingbot/hum
 
 ## Current status
 
-The quickstart below defines the CLI contract being shipped. The initial foundation currently
-observes public books in paper mode; quoting through strategies/risk and the live runner are still
-being integrated. Until that integration lands, paper does not place quotes and live `run` refuses.
-Do not treat an observing book stream as trading or end-to-end qualification.
+Paper and explicit live commands share the strategy/risk runner. Live connectivity still requires
+Glyde to expose the requested One API capabilities and your exact registered account permissions;
+unit tests do not establish that a deployed account is enabled or that live trading is qualified.
+The bot stops on refused or ambiguous actions rather than falling back to another venue.
 
 ## Start in five minutes
 
@@ -76,6 +76,17 @@ Unknown order/cancel outcomes stop new orders and retain the original identity. 
 resend an ambiguous order or replace it with a new nonce/ID. Stale books, unavailable account reads
 and daily-loss breaches stop quoting. Preserve the runtime risk-state directory across restarts so
 the daily-loss baseline is retained.
+
+## Fixed-range grid
+
+Use [examples/grid-paper.yaml](examples/grid-paper.yaml) to try evenly spaced levels inside a fixed
+price band. Set the band around the current book first. Levels below the midpoint buy; levels above
+it sell; no quote sits at the midpoint. Out-of-band markets cancel and wait, and rounding never
+moves quotes outside the band. Grid uses the same risk limits and cancel-before-replace lifecycle.
+
+```sh
+glyde-mm paper examples/grid-paper.yaml
+```
 
 ## Configuration
 
