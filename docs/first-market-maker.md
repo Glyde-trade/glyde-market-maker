@@ -91,10 +91,12 @@ read -r -s -p 'Read credential: ' GLYDE_READ_API_KEY
 export GLYDE_READ_API_KEY
 printf '\n'
 glyde-mm doctor live-small.yaml
+glyde-mm doctor live-small.yaml --private
 glyde-mm paper live-small.yaml
 ```
 
-That last command still forces paper mode. Stop it and inspect the summary. When you deliberately
+The explicit `--private` check reads account and open orders; it does not sign or test order
+permissions. That last command still forces paper mode. Stop it and inspect the summary. When you deliberately
 intend to submit real orders with the reviewed config, run:
 
 ```sh
