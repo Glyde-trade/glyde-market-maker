@@ -37,7 +37,14 @@ class RiskStateStore:
             self._latest = future
             if not self._running:
                 self._running = True
-                self._worker.submit(self._drain)
+                try:
+                    self._worker.submit(self._drain)
+                except RuntimeError as error:
+                    self._failure = OSError("risk state writer unavailable")
+                    self._running = False
+                    self._pending = None
+                    future.set_exception(self._failure)
+                    raise self._failure from error
 
     async def flush(self) -> None:
         with self._lock:

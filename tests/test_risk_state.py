@@ -62,6 +62,19 @@ async def test_writer_failure_reaches_barrier_and_refuses_later_snapshots(tmp_pa
         await store.close()
 
 
+async def test_worker_start_failure_refuses_without_stranding_a_barrier(tmp_path, monkeypatch):
+    store = RiskStateStore(tmp_path / "risk.json")
+
+    def failed(*_):
+        raise RuntimeError("cannot start writer")
+
+    monkeypatch.setattr(store._worker, "submit", failed)
+    with pytest.raises(OSError, match="writer unavailable"):
+        store.submit("{}")
+    with pytest.raises(OSError, match="writer unavailable"):
+        await asyncio.wait_for(store.close(), 1)
+
+
 async def test_held_clear_does_not_delay_reply_and_restart_retains_original(tmp_path, monkeypatch):
     path = tmp_path / "risk.json"
     g, now = guard(path)
