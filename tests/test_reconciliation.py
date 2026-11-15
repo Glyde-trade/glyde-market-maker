@@ -135,3 +135,18 @@ def test_actual_cli_runs_entirely_offline_without_state_write(tmp_path, capsys, 
     assert D(result["matched_slippage_usdc"]) == D("-.15")
     assert set(tmp_path.iterdir()) == before
     assert "user" not in result and "paper_fee_basis" in result
+
+
+async def test_numeric_json_economics_keep_decimal_precision(tmp_path):
+    path = tmp_path / "session.jsonl"
+    path.write_text(FIXTURE.read_text().replace('"px":"98.8"', '"px":98.800000000000000001'))
+    result = await reconcile_session(path)
+    assert D(result["orders"][0]["live_vwap"]) == D("98.800000000000000001")
+
+
+async def test_extreme_public_economics_are_refused_before_arithmetic(tmp_path):
+    path = edited(
+        tmp_path, lambda rows: rows[1]["frame"]["data"]["levels"][0][0].update(px="1e-999999999")
+    )
+    with pytest.raises(ValueError, match="capture bounds"):
+        await reconcile_session(path)

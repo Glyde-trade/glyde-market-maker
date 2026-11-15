@@ -23,8 +23,17 @@ def _id(value):
     return str(value)
 
 
-def _positive(value):
+def _number(value):
+    if len(str(value)) > 128:
+        raise ValueError("execution number exceeds capture bounds")
     number = decimal(value)
+    if abs(number.adjusted()) > 64:
+        raise ValueError("execution number exceeds capture bounds")
+    return number
+
+
+def _positive(value):
+    number = _number(value)
     if number <= 0:
         raise ValueError("invalid execution economics")
     return number
@@ -37,7 +46,7 @@ def read_session(path: Path):
         content = source.read(16 * 1024 * 1024 + 1)
     if len(content) > 16 * 1024 * 1024:
         raise ValueError("session exceeds 16 MiB")
-    rows = [json.loads(line) for line in content.splitlines()]
+    rows = [json.loads(line, parse_float=Decimal) for line in content.splitlines()]
     if not 3 <= len(rows) <= 100000:
         raise ValueError("session event count unavailable")
     header, events = rows[0], rows[1:]
@@ -55,7 +64,7 @@ def read_session(path: Path):
     previous = -1
     for event in events:
         stamp = event["received_at_ms"]
-        if type(stamp) is not int or stamp < previous:
+        if type(stamp) is not int or not 0 <= stamp <= 2**63 - 1 or stamp < previous:
             raise ValueError("session receipt time regressed")
         previous = stamp
     end = events[-1]
@@ -107,7 +116,7 @@ def _actual_fills(header, events, orders):
                 request["side"] == "sell" and price < limit
             ):
                 raise ValueError("private fill violates original limit price")
-            fee = decimal(fill["fee"]) if fill.get("feeToken") == "USDC" and "fee" in fill else None
+            fee = _number(fill["fee"]) if fill.get("feeToken") == "USDC" and "fee" in fill else None
             normalized = (quantity, price, fee, fill["time"], fill.get("feeToken"), fill.get("fee"))
             identity = oid, _id(fill["tid"])
             if identity in seen:
@@ -164,10 +173,15 @@ async def reconcile_session(path: Path) -> dict:
                         header["symbol"],
                     )
                     if decoded.book:
+                        for level in (*decoded.book.bids, *decoded.book.asks):
+                            _positive(level.price)
+                            _positive(level.quantity)
                         await paper.on_book(decoded.book)
                     else:
                         public_trades_seen = True
                         for trade in trades_from_wire(frame["data"]):
+                            _positive(trade.price)
+                            _positive(trade.quantity)
                             await paper.on_trade(trade)
                 elif kind == "order":
                     request = event["order"]
