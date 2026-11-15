@@ -128,7 +128,7 @@ class RiskGuard:
                     data["loss_halted"] and self._equity_start is None
                 ):
                     raise ValueError("invalid risk state")
-                self._order_attempts = data.get("order_attempts", [])
+                self._order_attempts = data["order_attempts"]
                 if (
                     not isinstance(self._order_attempts, list)
                     or len(self._order_attempts) > 6000
@@ -144,7 +144,7 @@ class RiskGuard:
                 self._rate_monotonic = [
                     monotonic_now - min(60, wall - stamp) for stamp in self._order_attempts
                 ]
-                self._execution = data.get("execution")
+                self._execution = data["execution"]
                 if self._execution is not None:
                     self._validate_execution(self._execution)
                     self.halted = self._execution["reason"]

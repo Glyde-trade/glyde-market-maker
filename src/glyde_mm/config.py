@@ -70,7 +70,6 @@ class Config:
     private_key_env: str = "GLYDE_API_PRIVATE_KEY"
     read_api_key_env: str = "GLYDE_READ_API_KEY"
     paper_balance: Decimal = Decimal("10000")
-    risk_state_path: str = ".glyde-mm/risk-state.json"
     strategy: str = "pure_market_making"
     strategy_config: dict[str, Any] = field(default_factory=dict)
     risk: RiskConfig = field(default_factory=RiskConfig)
