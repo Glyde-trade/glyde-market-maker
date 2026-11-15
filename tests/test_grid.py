@@ -5,10 +5,10 @@ from dataclasses import replace
 from decimal import Decimal as D
 
 import pytest
-from glyde_mm.models import Account, Book, Level, OrderResult
-from glyde_mm.strategies.pure_market_making import StrategyContext
 
+from glyde_mm.models import Account, Book, Level, OrderResult
 from glyde_mm.strategies.grid import GridConfig, GridStrategy
+from glyde_mm.strategies.pure_market_making import StrategyContext
 
 
 class FakeClient:
