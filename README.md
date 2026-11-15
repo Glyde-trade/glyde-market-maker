@@ -183,6 +183,27 @@ nonzero movement; gaps reset it. Exponential sizing is adapted from
 balances. Shared risk checks, cancel-before-replace, unknown-outcome stops and
 paper limitations apply. It is not a promise of profitable or target-reaching fills.
 
+## Known limitations
+
+- Paper fills omit queue priority, fees, funding, margin and liquidation. Recorded-book
+  replay needs a prior local recording and cannot reconstruct missing historical depth.
+- Live mode requires the requested Glyde capabilities and registered owner, namespace,
+  trading key and read credential. Doctor's optional private check proves read access
+  only; it cannot establish signing authority or order acceptance.
+- Public metadata provides size precision, but no minimum order size/notional. The
+  displayed runner tick is derived at the current midpoint; venue validation remains final.
+- Risk limits are local guardrails, not guaranteed loss bounds. Daily loss tracks equity
+  against a UTC-day baseline, including unrealized changes and transfers; it does not
+  flatten existing positions. Run one bot process per dedicated account: the local state
+  file is not a cross-process coordinator.
+- Disconnects, stale data and ambiguous writes stop quoting. Cleanup attempts cancellation,
+  but cannot guarantee success while disconnected and can affect other orders in the same
+  account. Keep persistent risk state and reconcile original orders after an unknown outcome;
+  restarting or deleting state is not reconciliation. Ambiguous order submissions are not
+  automatically resubmitted.
+- Strategies provide quoting logic, not a profit guarantee. The fixed grid does not manage
+  separate paired take-profit exits. The init wizard always writes paper configurations.
+
 ## Configuration
 
 | Key | Meaning |
@@ -235,15 +256,36 @@ Tests use fake One API clients/servers and require no network or credentials.
 The maintainer updates `project.version` in `pyproject.toml`, then creates the matching `v<version>`
 tag. The tag workflow builds the source archive and wheel, tests an isolated wheel installation,
 and attaches both to a GitHub Release using only the repository's `GITHUB_TOKEN`. Release packages
-embed the checked-out commit, which the isolated install check verifies against the build SHA. It does not
-publish to PyPI. A mismatched tag fails before publishing; PR packaging checks do not create tags or releases.
+embed the checked-out commit, which the isolated install check verifies against the build SHA.
+Both CI and tag builds run `twine check --strict` on the distributions. LICENSE and NOTICE
+are included in the source and wheel archives. A mismatched tag fails before publishing;
+PR packaging checks do not create tags, releases or PyPI uploads.
+
+PyPI publishing is **disabled by default**. To enable trusted publishing, a maintainer must:
+
+1. Check the normalized project name `glyde-market-maker` on PyPI. An absent project is
+   not a reservation or a guarantee that registration will be accepted.
+2. Configure a pending or existing PyPI Trusted Publisher with owner `Glyde-trade`,
+   repository `glyde-market-maker`, workflow `release.yml`, environment `pypi`.
+3. Configure the repository's GitHub environment `pypi` (prefer tag restrictions and
+   required reviewers), then set the repository variable `PYPI_PUBLISH_ENABLED=true`.
+4. Push a new matching version tag. The publish job downloads only the distributions
+   checked in that same workflow run and authenticates via GitHub OIDC; no PyPI token,
+   password or long-lived publishing secret belongs in the repo or workflow.
+
+The existing GitHub Release still uses only `GITHUB_TOKEN`; OIDC permission is limited
+to the separate PyPI job. No project has been registered or uploaded by adding this workflow.
+See [PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/using-a-publisher/)
+and [pending publisher setup](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/).
 
 To run the same packaging check locally:
 
 ```sh
-python -m pip install 'pip>=23' 'build>=1.2,<2'
+python -m pip install 'pip>=23' 'build>=1.2,<2' 'twine>=6,<7'
+python scripts/write-build-info.py "$(git rev-parse HEAD)"
 python -m build
-python scripts/check-wheel-install.py dist/*.whl
+python -m twine check --strict dist/*
+python scripts/check-wheel-install.py dist/*.whl --expected-commit "$(git rev-parse HEAD)"
 ```
 
 ### Run diagnostics
