@@ -490,7 +490,7 @@ class FakeOneApiServer:
         self._publish_books()
 
     def market_order(
-        self, coin: str, *, buy: bool, size: str, user: str | None = None
+        self, coin: str, *, buy: bool, size: str, user: str = "0x" + "2" * 40
     ) -> dict[str, Any]:
         """Explicit simulated counterparty trade; never contacts an exchange."""
         levels = self._book(coin, not buy)

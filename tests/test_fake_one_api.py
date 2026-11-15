@@ -268,3 +268,10 @@ def test_invalid_cancel_cannot_match_missing_cloid(server, oid):
     result = server.exchange({"action": {"type": "cancel", "cancels": [{"a": 0, "o": oid}]}})
     assert "error" in result["response"]["data"]["statuses"][0]
     assert server.info({"type": "openOrders", "user": ALICE})[0]["oid"] == resting
+
+
+def test_default_market_control_is_a_counterparty_not_a_self_trade(server):
+    oid = place(server, wire(size="1"))["resting"]["oid"]
+    server.market_order("BTC", buy=False, size="0.2")
+    fills = server.info({"type": "userFills", "user": ALICE})
+    assert len(fills) == 1 and fills[0]["oid"] == oid and fills[0]["sz"] == "0.2"
