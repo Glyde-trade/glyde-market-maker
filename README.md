@@ -310,3 +310,13 @@ counters and exit category. A missing exit is labeled `incomplete`; it does not
 mean cleanup succeeded. Rotated-away history is explicit. Malformed logs are refused
 without printing their contents. Reports accept up to 50 runs / 64 MiB; select one
 run if the directory exceeds that limit. Review the summary before sharing it.
+
+### Try an offline paper-session report
+
+See [the end-to-end sample](docs/paper-session.md) for a recorded public-book
+fixture → real paper replay → support report, with actual output and a text
+screenshot. The supplied recording is clearly labeled synthetic; neither command
+needs network access, credentials or a private account. This example requires the
+current source checkout; it does not claim that a deployed account can trade.
+
+![Offline paper replay report: completed, 61 books, 2 simulated fills, zero pending orders](docs/images/paper-session-report.svg)
