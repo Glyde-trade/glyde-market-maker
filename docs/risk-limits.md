@@ -64,7 +64,9 @@ symbol/account cleanup may affect orders placed outside this bot.
 
 ## Does doctor or paper mode prove live trading will work?
 
-No. The ordinary doctor command checks configuration, key presence and public market data. Paper simulates
+No. Ordinary doctor checks config, key presence, public metadata and a fresh public book. Explicit
+`doctor live-small.yaml --private` also checks account/open-order read permissions; it still does
+not sign or establish trading authority. Paper simulates
 fills and account state locally; it omits fees, funding, liquidation and real queue priority. Live
 requires supported One API capabilities and correct owner, namespace and key permissions. The bot
 never falls back to another venue when those are unavailable.
