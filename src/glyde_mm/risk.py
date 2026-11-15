@@ -21,6 +21,7 @@ if TYPE_CHECKING:
         Book,
         CancelRequest,
         CancelResult,
+        OpenOrder,
         OrderRequest,
         OrderResult,
         TradingClient,
@@ -71,7 +72,7 @@ class RiskGuard:
         self.books: dict[str, Book] = {}
         self.account_state: Account | None = None
         self.pending: dict[str, OrderRequest] = {}
-        self.open_orders: list[OrderRequest] = []
+        self.open_orders: list[OpenOrder | OrderRequest] = []
         self.halted: str | None = None
         self._day: str | None = None
         self._equity_start: Decimal | None = None
@@ -151,7 +152,7 @@ class RiskGuard:
         if self.halted is not None:
             raise RiskViolation(self.halted)
 
-    def set_open_orders(self, orders: Sequence[OrderRequest]) -> None:
+    def set_open_orders(self, orders: Sequence[OpenOrder | OrderRequest]) -> None:
         self.open_orders = list(orders)
 
     def check_fresh(self, symbol: str) -> Book:
@@ -234,6 +235,8 @@ class RiskManagedClient:
         async with self._lock:
             if self._closed:
                 raise RiskViolation("client_closed")
+            if not orders:
+                return []
             reserved: list[str] = []
             prepared = [
                 replace(
@@ -281,7 +284,11 @@ class RiskManagedClient:
                 results = await self.client.cancel_orders(orders)
                 if len(results) != len(orders) or any(r.status != "cancelled" for r in results):
                     raise RiskViolation("cancel_outcome_unknown")
-                for request in orders:
+                for request, result in zip(orders, results, strict=True):
+                    if getattr(result, "order_id", None) not in (None, request.order_id) or getattr(
+                        result, "client_order_id", None
+                    ) not in (None, request.client_order_id):
+                        raise RiskViolation("cancel_identity_mismatch")
                     key = request.client_order_id or self._order_ids.get(request.order_id or "")
                     if key is not None:
                         self.guard.pending.pop(key, None)
@@ -310,6 +317,9 @@ class RiskManagedClient:
 
     async def account(self) -> Account:
         return await self.client.account()
+
+    async def open_orders(self) -> list[OpenOrder]:
+        return await self.client.open_orders()
 
     async def on_disconnect(self) -> None:
         async with self._lock:
