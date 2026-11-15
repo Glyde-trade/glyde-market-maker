@@ -13,11 +13,11 @@ The bot stops on refused or ambiguous actions rather than falling back to anothe
 
 ## Start in five minutes
 
-**1. Install.** Once the `v0.1.0` GitHub Release is published, install its wheel with
+**1. Install.** Once the `v0.2.0` GitHub Release is published, install its wheel with
 [pipx](https://pipx.pypa.io/stable/installation/) (Python 3.11+):
 
 ```sh
-pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.1.0/glyde_market_maker-0.1.0-py3-none-any.whl'
+pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.2.0/glyde_market_maker-0.2.0-py3-none-any.whl'
 glyde-mm --version
 ```
 
