@@ -41,6 +41,7 @@ class MarketConfig:
     symbol: str
     max_position: Decimal
     strategy_config: dict[str, Any] = field(default_factory=dict)
+    strategy: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.symbol, str) or not self.symbol or len(self.symbol) > 64:
@@ -53,6 +54,8 @@ class MarketConfig:
             raise ValueError("market max_position must be positive")
         if not isinstance(self.strategy_config, dict):
             raise ValueError("market strategy_config must be a mapping")
+        if self.strategy is not None and (not isinstance(self.strategy, str) or not self.strategy):
+            raise ValueError("market strategy must be a nonempty name")
 
 
 @dataclass(frozen=True)
@@ -139,6 +142,7 @@ class Config:
                 self,
                 markets=(),
                 symbol=m.symbol,
+                strategy=m.strategy or self.strategy,
                 strategy_config={**self.strategy_config, **m.strategy_config},
                 risk=replace(self.risk, max_position=m.max_position),
             )
@@ -172,13 +176,16 @@ def load_config(path: str | Path) -> Config:
         for item in raw["markets"]:
             if (
                 not isinstance(item, dict)
-                or set(item) - {"symbol", "max_position", "strategy_config"}
+                or set(item) - {"symbol", "max_position", "strategy_config", "strategy"}
                 or not {"symbol", "max_position"} <= set(item)
             ):
                 raise ValueError("market requires symbol and max_position")
             markets.append(
                 MarketConfig(
-                    item["symbol"], decimal(item["max_position"]), item.get("strategy_config", {})
+                    item["symbol"],
+                    decimal(item["max_position"]),
+                    item.get("strategy_config", {}),
+                    item.get("strategy"),
                 )
             )
         raw["markets"] = tuple(markets)

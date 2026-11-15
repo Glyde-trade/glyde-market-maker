@@ -587,8 +587,10 @@ Start with `glyde-mm paper examples/multi-symbol-paper.yaml`. Review the example
 amounts against current prices; these are editable examples, not sizing recommendations.
 Use `glyde-mm doctor examples/multi-symbol-paper.yaml` to check every selected market.
 Each of up to 16 distinct markets has its own strategy instance, precision, base-unit
-position cap and optional strategy overrides. All use the top-level strategy type;
-market overrides extend the shared `strategy_config`. Do not combine `symbol` and `markets`.
+position cap and optional strategy overrides. Each may set `strategy` to choose a different
+strategy type; it defaults to the top-level type. Market settings extend shared
+`strategy_config`, so keep shared keys compatible with every selected type. Do not
+combine `symbol` and `markets`.
 Existing single-symbol configs keep their behavior.
 
 The whole session shares **one account, simulator, dispatcher, daily equity baseline,
@@ -600,9 +602,18 @@ uses the larger of the current ask and relevant limit prices. External positions
 also count: a missing or stale book for any exposed asset refuses new orders. This is a
 local pre-trade bound, not a guarantee against price changes or losses.
 
-All books must arrive before quoting. A stale market, disconnect or risk violation
-stops the shared session; cleanup attempts **every configured symbol**, including manual
-orders on those symbols, while leaving other symbols and all positions untouched.
+All books must arrive before quoting. One Glyde WS session carries every selected book
+and the shared owner/order/fill state; HTTP is used only for startup snapshots and metadata.
+A stale book pauses that market and confirms cancellation of its quotes. Other fresh
+markets keep quoting once the stale market is flat and its outstanding orders are retired.
+A fresh book restarts the paused strategy instance, including its volatility warm-up.
+If the stale market has a position, new quotes that require its notional valuation pause
+until that book is fresh; stale prices never become an assumed account-level bound.
+
+A private/account stream failure, continuity gap, unknown cancellation, disconnect,
+daily-loss stop or other risk violation still stops the shared session. Shutdown attempts
+**every configured symbol**, including manual orders on those symbols, while leaving other
+symbols and all positions untouched.
 Use a dedicated account and only one runner for it. Paper status lines show each market's
 inventory/fills/quotes; their PnL is the **same account-wide PnL**, not additive market PnL.
 `stop <config>` coordinates and verifies the full configured set; retain the exact config

@@ -24,7 +24,7 @@ from .paper import PaperExchange
 from .paper_result import PaperResult
 from .preflight import check_live_exposure
 from .reference import HYPERLIQUID_PUBLIC_URL, ExternalReference
-from .risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
+from .risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation, StaleMarket
 from .runlog import RunLog
 from .shutdown import RunnerControl
 from .strategies import StrategyContext, create_strategy
@@ -232,7 +232,12 @@ async def _run_session(
         if paper is not None:
             paper.use_trade_tape()
         managed = RiskManagedClient(
-            raw, guard, stop_event=stop, cleanup_symbols=config.symbols, metrics=metrics
+            raw,
+            guard,
+            stop_event=stop,
+            cleanup_symbols=config.symbols,
+            metrics=metrics,
+            isolate_stale_markets=len(selected) > 1,
         )
         strategies: dict[str, Strategy] = {}
         stream = reference_stream = None
@@ -329,7 +334,9 @@ async def _run_session(
                     Decimal(1).scaleb(-precision[symbol]),
                     quote_center=references[symbol].center if symbol in references else None,
                 )
-                strategy = strategy_factory(config.strategy, context, market_config.strategy_config)
+                strategy = strategy_factory(
+                    market_config.strategy, context, market_config.strategy_config
+                )
                 strategies[symbol] = strategy
                 await strategy.on_book(initial)
                 report(
@@ -337,6 +344,41 @@ async def _run_session(
                     "with shared account risk limits"
                 )
                 journal.emit("strategy_started")
+            market_lock = asyncio.Lock()
+            paused: dict[str, str] = {}
+
+            async def pause_market(symbol: str, dependency: str) -> None:
+                if symbol not in paused:
+                    await strategies[symbol].stop()
+                    report(f"{config.mode.upper()} {symbol}: quoting paused (stale {dependency})")
+                paused[symbol] = dependency
+
+            async def refresh_markets() -> None:
+                for symbol in selected:
+                    try:
+                        book = guard.check_fresh(symbol)
+                        guard.check_fresh(paused.get(symbol, symbol))
+                    except StaleMarket as error:
+                        await pause_market(symbol, error.symbol)
+                        continue
+                    if symbol in paused:
+                        policy = selected[symbol]
+                        context = StrategyContext(
+                            managed,
+                            symbol,
+                            _price_tick(book, precision[symbol]),
+                            Decimal(1).scaleb(-precision[symbol]),
+                            quote_center=references[symbol].center
+                            if symbol in references
+                            else None,
+                        )
+                        strategies[symbol] = strategy_factory(
+                            policy.strategy, context, policy.strategy_config
+                        )
+                        await strategies[symbol].on_book(book)
+                        del paused[symbol]
+                        report(f"{config.mode.upper()} {symbol}: quoting resumed")
+
             fill_index = 0
             book_messages = len(initial_books)
 
@@ -359,8 +401,7 @@ async def _run_session(
                             paper_result.pause("gap")
                         raise OneApiError("paper source requires a fresh snapshot")
                     if live is not None and frame.get("channel") == "mmOwner":
-                        guard.update_account(await live.account())
-                        guard.set_open_orders(await live.open_orders())
+                        await managed.refresh_account()
                         for fill in frame["fills"]:
                             metrics.fill(fill.symbol)
                             await strategies[fill.symbol].on_fill(fill)
@@ -422,13 +463,24 @@ async def _run_session(
                     ):
                         guard.update_account(await raw.account())
                         refreshed = now
-                    for strategy in strategies.values():
-                        if stop.is_set():
-                            return
-                        await strategy.on_tick()
-                        if paper is not None:
-                            metrics.paper_fills(paper)
-                            await observe_paper()
+                    async with market_lock:
+                        if len(selected) > 1:
+                            await refresh_markets()
+                        for symbol, strategy in strategies.items():
+                            if stop.is_set():
+                                return
+                            if symbol in paused:
+                                continue
+                            try:
+                                await strategy.on_tick()
+                            except StaleMarket as error:
+                                if len(selected) == 1 or error.symbol not in selected:
+                                    raise
+                                await pause_market(error.symbol, error.symbol)
+                                await pause_market(symbol, error.symbol)
+                            if paper is not None:
+                                metrics.paper_fills(paper)
+                                await observe_paper()
                     if logged is None or now - logged >= 2:
                         journal.emit(
                             "progress",
@@ -457,9 +509,12 @@ async def _run_session(
                 while True:
                     if live is not None:
                         live.check()
-                    for symbol in selected:
-                        guard.check_fresh(symbol)
-                    await managed.check_liveness()
+                    async with market_lock:
+                        if len(selected) > 1:
+                            await refresh_markets()
+                        else:
+                            guard.check_fresh(config.symbols[0])
+                        await managed.check_liveness()
                     await asyncio.sleep(0.25)
 
             tasks = [

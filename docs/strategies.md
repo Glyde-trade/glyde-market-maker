@@ -268,6 +268,7 @@ Each entry in `markets` has these keys:
 | --- | --- | --- |
 | `symbol` | required | Unique exact metadata symbol. |
 | `max_position` | required | Positive base-unit cap for this market. |
+| `strategy` | session strategy | Optional strategy type for this market; shared settings must be compatible. |
 | `strategy_config` | empty | Overrides merged into the session's strategy settings for this market. |
 
 ### Shared risk keys

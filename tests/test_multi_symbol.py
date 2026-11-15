@@ -443,3 +443,131 @@ risk: {max_total_notional: '50'}
     assert cli.main(["run", str(path)]) == 0
     assert calls == [("BTC", "ETH")]
     assert "max_total_notional=50" in capsys.readouterr().out
+
+
+def test_per_market_strategy_override_uses_shared_defaults(tmp_path):
+    from glyde_mm.strategies import StrategyContext, create_strategy
+    from glyde_mm.strategies.grid import GridStrategy
+
+    path = tmp_path / "different-strategies.yaml"
+    path.write_text("""mode: paper
+strategy_config: {order_amount: '0.01', order_refresh_time: 2}
+risk: {max_total_notional: '50'}
+markets:
+ - {symbol: BTC, max_position: '0.1', strategy_config: {bid_spread: '0.02'}}
+ - symbol: ETH
+   max_position: '1'
+   strategy: grid
+   strategy_config: {lower_price: '9', upper_price: '11', levels: 3, order_amount: '0.1'}
+""")
+    btc, eth = load_config(path).market_configs()
+    assert btc.strategy == "pure_market_making" and eth.strategy == "grid"
+    assert btc.strategy_config["bid_spread"] == "0.02"
+    assert eth.strategy_config["order_refresh_time"] == 2
+    strategy = create_strategy(
+        eth.strategy, StrategyContext(None, "ETH", D("0.01"), D("0.001")), eth.strategy_config
+    )
+    assert isinstance(strategy, GridStrategy)
+    with pytest.raises(ValueError, match="market strategy"):
+        MarketConfig("ETH", D(1), strategy=False)
+
+
+async def test_stale_exposed_market_blocks_shared_cap_without_discarding_position():
+    from glyde_mm.models import OrderResult
+    from glyde_mm.risk import RiskManagedClient, StaleMarket
+
+    g = guard(total="100", positions={"ETH": D(1)})
+    fresh = g.books["ETH"]
+    g.books["ETH"] = replace(fresh, received_at=90)
+    cancelled, sent = [], []
+
+    class Source:
+        async def account(self):
+            return g.account_state
+
+        async def open_orders(self):
+            return []
+
+        async def cancel_all(self, symbol):
+            cancelled.append(symbol)
+
+        async def place_orders(self, orders):
+            sent.extend(orders)
+            return [OrderResult("resting", "1", row.client_order_id) for row in orders]
+
+    managed = RiskManagedClient(
+        Source(), g, cleanup_symbols=("BTC", "ETH"), isolate_stale_markets=True
+    )
+    order = OrderRequest("BTC", "buy", D("0.01"), D(99))
+    with pytest.raises(StaleMarket) as refusal:
+        await managed.place_orders([order])
+    assert refusal.value.symbol == "ETH"
+    assert cancelled == ["ETH"] and not sent and g.halted is None
+    assert g.account_state.positions == {"ETH": D(1)}
+    g.books["ETH"] = fresh
+    assert (await managed.place_orders([order]))[0].status == "resting"
+    assert len(sent) == 1
+
+
+async def test_unknown_stale_exposure_cannot_authorize_unconfigured_cancellation():
+    from glyde_mm.risk import RiskManagedClient
+
+    g = guard(total="100", positions={"SOL": D(1)})
+    cancelled = []
+
+    class Source:
+        async def account(self):
+            return g.account_state
+
+        async def open_orders(self):
+            return []
+
+        async def cancel_all(self, symbol):
+            cancelled.append(symbol)
+
+        async def place_orders(self, orders):
+            pytest.fail("unvalued exposure must refuse")
+
+    managed = RiskManagedClient(
+        Source(), g, cleanup_symbols=("BTC", "ETH"), isolate_stale_markets=True
+    )
+    with pytest.raises(RiskViolation, match="stale_book"):
+        await managed.place_orders([OrderRequest("BTC", "buy", D("0.01"), D(99))])
+    assert cancelled == ["BTC", "ETH"] and g.halted == "stale_book"
+
+
+async def test_owner_refresh_waits_until_inflight_cancellation_is_resolved():
+    import asyncio
+
+    from glyde_mm.models import CancelRequest, CancelResult
+    from glyde_mm.risk import RiskManagedClient
+
+    g = guard()
+    started, finish = asyncio.Event(), asyncio.Event()
+    reads = []
+
+    class Source:
+        async def cancel_orders(self, requests):
+            started.set()
+            await finish.wait()
+            return [
+                CancelResult("cancelled", row.order_id, row.client_order_id) for row in requests
+            ]
+
+        async def account(self):
+            reads.append("account")
+            return g.account_state
+
+        async def open_orders(self):
+            return []
+
+    managed = RiskManagedClient(Source(), g)
+    cancelling = asyncio.create_task(managed.cancel_orders([CancelRequest("BTC", "1")]))
+    await started.wait()
+    refreshing = asyncio.create_task(managed.refresh_account())
+    await asyncio.sleep(0)
+    assert not refreshing.done() and not reads and g.halted is None
+    finish.set()
+    await cancelling
+    await refreshing
+    assert reads == ["account"] and g.halted is None and g._execution is None
