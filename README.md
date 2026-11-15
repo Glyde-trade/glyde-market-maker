@@ -9,12 +9,16 @@ Strategy designs are adapted from [Hummingbot](https://github.com/hummingbot/hum
 ## Current status
 
 `glyde-mm paper <config>` runs the selected strategy through the risk layer into the paper
-exchange: it places simulated quotes, fills them against subsequent public books and cancels
-remaining quotes on exit. It never sends a trading action or reads signing credentials.
+exchange: pure market making places one simulated bid and one ask by default. Public books
+set quote prices; subsequent public trades can fill resting quotes using the simulator's
+approximate queue model. Remaining quotes are cancelled on exit. Paper mode never sends a
+trading action or reads signing credentials, and risk refusals prevent simulated placement too.
 
 `glyde-mm run <config>` with `mode: live` sends orders and cancellations through the same risk
 boundary to One API, using Hyperliquid-compatible SDK signing and the configured vault namespace.
-Offline CLI tests exercise paper fills, signed live placement/cancellation and risk refusals before
+Offline fake-One-API CLI tests prove both paper quote sides fill, paper risk refusals place
+nothing, and shutdown leaves no simulated quotes. They also exercise signed live
+placement/cancellation and risk refusals before
 submission. They do not qualify a deployed account: live use still requires the API capabilities,
 registered account permissions and credentials. Refused or ambiguous actions stop quoting.
 
