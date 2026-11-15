@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = config.add_subparsers(dest="config_command", required=True)
     create = sub.add_parser("init")
     create.add_argument("--output", default="glyde-mm.yaml")
-    for name in ("paper", "run", "doctor"):
+    for name in ("paper", "run", "doctor", "stop"):
         run = commands.add_parser(name)
         run.add_argument("config_path", nargs="?")
         run.add_argument("--config", dest="config_option")
@@ -126,6 +126,19 @@ def main(argv: list[str] | None = None) -> int:
 
             return asyncio.run(check(config_path, private=args.private))
         selected = load_config(config_path)
+        if args.command == "stop":
+            from .shutdown import stop_bot
+
+            result, path = asyncio.run(stop_bot(selected, config_path.parent / ".glyde-mm"))
+            print(f"STOP {selected.symbol}: {result['outcome']} | report={path}")
+            if result["outcome"] != "stopped":
+                print(
+                    "Cancellation NOT confirmed; check the venue before restarting.",
+                    file=sys.stderr,
+                )
+                return 1
+            print("No positions closed. Other symbols are unchanged.")
+            return 0
         if args.command == "paper":
             from dataclasses import replace
 
@@ -158,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     except KeyboardInterrupt:
-        return 0
+        return 1 if args.command == "stop" else 0
     except (ValueError, OSError, OneApiError, RiskViolation, TimeoutError):
         # Exception bodies can include HTTP headers or local credential paths.
         print(

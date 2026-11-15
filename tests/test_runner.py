@@ -33,7 +33,10 @@ class Source:
         return {"universe": [{"name": "BTC", "szDecimals": 2}]}
 
     async def stream(self, subscriptions):
-        assert subscriptions == [{"type": "l2Book", "coin": "BTC"}]
+        expected = [{"type": "l2Book", "coin": "BTC"}]
+        if self.config.mode == "paper":
+            expected.append({"type": "trades", "coin": "BTC"})
+        assert subscriptions == expected
         yield {"channel": "subscriptionResponse", "data": {}}
         yield {
             "channel": "l2Book",
@@ -337,3 +340,49 @@ async def test_paper_status_uses_simulated_equity_and_fill_ledger():
         " | fills=1 | open_quotes=0 | risk_stop=none"
     ]
     assert (await paper.account()).equity == selected.paper_balance - D("0.5")
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        [{"coin": "ETH", "side": "A", "px": "99", "sz": "1", "time": 1, "tid": 1}],
+        [{"coin": "BTC", "side": "invalid", "px": "99", "sz": "1", "time": 1, "tid": 1}],
+    ],
+)
+async def test_invalid_public_tape_stops_and_cancels_paper_quotes(tmp_path, data):
+    from glyde_mm.client import OneApiError
+
+    stop, placed = asyncio.Event(), asyncio.Event()
+    selected = config()
+
+    class TradeSource(Source):
+        async def stream(self, subscriptions):
+            assert {row["type"] for row in subscriptions} == {"l2Book", "trades"}
+            yield {
+                "channel": "l2Book",
+                "data": {
+                    "coin": "BTC",
+                    "time": self.wire_time,
+                    "levels": [[{"px": "99", "sz": "2"}], [{"px": "101", "sz": "2"}]],
+                },
+            }
+            await placed.wait()
+            yield {"channel": "trades", "data": data}
+            await asyncio.Event().wait()
+
+    source = TradeSource(selected, stop=stop, placed=placed)
+    paper = Paper(selected.paper_balance, stop=stop, placed=placed, stop_on_place=False)
+    with pytest.raises(OneApiError, match="trade"):
+        await asyncio.wait_for(
+            run(
+                selected,
+                state_directory=tmp_path,
+                client_factory=lambda _: source,
+                paper_factory=lambda _: paper,
+                stop_event=stop,
+                report=lambda _: None,
+            ),
+            2,
+        )
+    assert len(paper.submissions) == 2 and source.live_orders == []
+    assert not paper.fills and not await paper.open_orders()
