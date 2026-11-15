@@ -36,11 +36,11 @@ before replacing an existing installation.
 
 ## Start in five minutes
 
-**1. Install.** Once the `v0.3.0` GitHub Release is published, install its wheel with
+**1. Install.** Once the `v0.4.0` GitHub Release is published, install its wheel with
 [pipx](https://pipx.pypa.io/stable/installation/) (Python 3.11+):
 
 ```sh
-pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.3.0/glyde_market_maker-0.3.0-py3-none-any.whl'
+pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.4.0/glyde_market_maker-0.4.0-py3-none-any.whl'
 glyde-mm --version
 ```
 
@@ -106,7 +106,7 @@ failures return a nonzero exit code.
 
 ## Go live with small, explicit limits
 
-For a guided current-source first session, see [live-wizard](docs/first-live-session.md):
+For a guided first session (v0.4.0+), see [live-wizard](docs/first-live-session.md):
 doctor → two-minute paper preview → typed confirmation → Conservative live run with a
 30-minute auto-stop and private final report. It currently supports one symbol.
 

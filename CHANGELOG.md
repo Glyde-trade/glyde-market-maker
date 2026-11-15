@@ -4,6 +4,22 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 ## [Unreleased]
 
+## [0.4.0]
+
+- Guided `live-wizard` runs doctor and a two-minute paper preview of a frozen Conservative
+  config before typed live confirmation. A 30-minute raw-stop timer ends new quoting and
+  attempts cleanup, with retained account risk state and a private final report. Single-symbol
+  only; cleanup can fail and positions are not flattened. (#48)
+- `record-tape` captures bounded public books/trades and optional HL reference books;
+  `compare` evaluates four paper configurations on the same recorded timeline with fill,
+  inventory, marked-PnL, drawdown, quote-uptime and risk-stop metrics. Missing HL data is
+  unavailable, never invented. No compare network/signing or persistent risk writes. (#47)
+- Public One API compatibility tests replay a frozen synthetic transcript through the actual
+  HTTP/WS client. They detect parser/wire drift without claiming production deployment
+  compatibility or live trading authorization. (#46)
+- An optional loopback read-only dashboard displays private local runner snapshots without
+  new exchange reads or trading controls. (#44)
+
 ## [0.3.0]
 
 - Paper streaming consumes public trade prints with approximate queue-ahead and partial
@@ -44,7 +60,8 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 - Initial Python One API client, offline fake server, paper simulator and strategy foundation.
 
-[Unreleased]: https://github.com/Glyde-trade/glyde-market-maker/compare/v0.3.0...master
+[Unreleased]: https://github.com/Glyde-trade/glyde-market-maker/compare/v0.4.0...master
+[0.4.0]: https://github.com/Glyde-trade/glyde-market-maker/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Glyde-trade/glyde-market-maker/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Glyde-trade/glyde-market-maker/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Glyde-trade/glyde-market-maker/releases/tag/v0.1.0
