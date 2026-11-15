@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 from live_wire import batch, owner_roots
+from market_receipt import approved_market
 
 from glyde_mm.client import OneApiError, account_from_wire
 from glyde_mm.config import Config
@@ -295,6 +296,7 @@ async def test_actual_live_runner_ignores_duplicate_fill_history(monkeypatch, tm
         assert value(metrics, "fills_total", '{market="0"}') == "1"
         stop.set()
 
+    approved_market(config, tmp_path)
     emitter = asyncio.create_task(emit())
     try:
         await asyncio.wait_for(

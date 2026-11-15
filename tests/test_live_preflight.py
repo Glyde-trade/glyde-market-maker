@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from market_receipt import approved_market
 
 from glyde_mm import cli
 
@@ -125,6 +126,7 @@ async def test_preflight_read_failure_cannot_enter_cancellation_cleanup(tmp_path
             cancellations.append(args)
 
     selected = Config(mode="live", owner="0x" + "1" * 40, vault_address="0x" + "2" * 40)
+    approved_market(selected, tmp_path)
     with pytest.raises(OneApiError, match="private read unavailable"):
         await run(
             selected,
@@ -168,6 +170,7 @@ async def test_stop_during_live_preflight_does_not_cancel_existing_orders(tmp_pa
             cancellations.append(args)
 
     selected = Config(mode="live", owner="0x" + "1" * 40, vault_address="0x" + "2" * 40)
+    approved_market(selected, tmp_path)
     await run(
         selected,
         state_directory=tmp_path,

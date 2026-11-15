@@ -13,6 +13,7 @@ from typing import TypedDict
 
 from .client import OneApiError
 from .config import Config, load_config, write_config
+from .market_preflight import MarketPreflightRequired
 from .paper_result import PaperResult
 from .preflight import LivePreflightRefused, summary
 from .risk import RiskViolation
@@ -93,7 +94,8 @@ async def run_with_signals(
                     else "completed"
                 )
                 print(
-                    f"PAPER RESULT | outcome={row['outcome']} | uptime={row['uptime_seconds']}s"
+                    f"PAPER RESULT | outcome={row['outcome']} | termination={row['termination']}"
+                    f" | uptime={row['uptime_seconds']}s"
                     f" | quotes={row['quotes'].get('placed', 0)}"
                     f" | fills={row['quotes'].get('fills', 0)}"
                     f" | realized_pnl={row['realized_pnl_usdc']}"
@@ -128,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = config.add_subparsers(dest="config_command", required=True)
     create = sub.add_parser("init")
     create.add_argument("--output", default="glyde-mm.yaml")
-    for name in ("paper", "run", "doctor", "stop", "live-wizard"):
+    for name in ("paper", "run", "doctor", "preflight", "stop", "live-wizard"):
         run = commands.add_parser(name)
         run.add_argument("config_path", nargs="?")
         run.add_argument("--config", dest="config_option")
@@ -270,6 +272,10 @@ def main(argv: list[str] | None = None) -> int:
 
             return asyncio.run(check(config_path, private=args.private))
         selected = load_config(config_path)
+        if args.command == "preflight":
+            from .market_preflight import check as check_markets
+
+            return asyncio.run(check_markets(selected, config_path.parent / ".glyde-mm"))
         if args.command == "stop":
             from .shutdown import stop_bot
 
@@ -299,6 +305,10 @@ def main(argv: list[str] | None = None) -> int:
             if confirmed != ",".join(selected.symbols):
                 print("Live start cancelled: symbol confirmation did not match.", file=sys.stderr)
                 return 1
+        if selected.mode == "live":
+            from .market_preflight import require_preflight
+
+            require_preflight(selected, config_path.parent / ".glyde-mm")
         asyncio.run(
             run_with_signals(
                 selected,
@@ -319,6 +329,12 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
+    except MarketPreflightRequired:
+        print(
+            "Run glyde-mm preflight with this exact config; PASS expires after 5 minutes.",
+            file=sys.stderr,
+        )
+        return 1
     except LivePreflightRefused:
         print(
             "Live start refused: existing orders or a position on this symbol. "

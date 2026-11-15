@@ -30,6 +30,23 @@ placement/cancellation and risk refusals before
 submission. They do not qualify a deployed account: live use still requires the API capabilities,
 registered account permissions and credentials. Refused or ambiguous actions stop quoting.
 
+Live startup requires a recent public market preflight for the **same effective config**:
+
+```sh
+glyde-mm preflight live-small.yaml
+glyde-mm run live-small.yaml
+```
+
+Preflight uses only public `meta` and `l2Book`, lists credential variable **names/presence**
+without reading values, and checks size precision, advertised minimum size, tick, per-order
+notional and one-sided level budgets. It prints one PASS or actionable FIX lines. PASS is
+stored privately beside the config and expires after five minutes; config changes invalidate
+it. Public metadata must advertise `minOrderSize`; if the service exposes only `szDecimals`,
+the venue minimum is **unavailable** and preflight refuses rather than guessing. Doctor,
+preflight and paper success do not verify private permissions, current positions or future
+prices. Live risk checks and typed confirmation still apply. The live wizard preflights its
+frozen derived config before private diagnostics and the preview.
+
 See [Troubleshooting](docs/troubleshooting.md) for common refusals, unknown outcomes and reports.
 
 Follow [Your first market maker in 10 minutes](docs/first-market-maker.md) for the paper → report →
