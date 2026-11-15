@@ -13,7 +13,14 @@ from hummingbot.core.data_type.common import OrderType, PositionAction, TradeTyp
 from .glyde_perpetual_api_order_book_data_source import GlydePerpetualAPIOrderBookDataSource
 from .glyde_perpetual_auth import GlydePerpetualAuth
 from .glyde_perpetual_user_stream_data_source import GlydePerpetualUserStreamDataSource
-from .glyde_perpetual_wire import Settings, market_rules, quantize_price, wire_number
+from .glyde_perpetual_wire import (
+    Settings,
+    canonical_order_id,
+    market_rules,
+    number,
+    quantize_price,
+    wire_number,
+)
 
 
 class GlydePerpetualDerivative(HyperliquidPerpetualDerivative):
@@ -205,17 +212,19 @@ class GlydePerpetualDerivative(HyperliquidPerpetualDerivative):
                 raise ValueError
             status = statuses[0]
             if "error" in status:
+                if not isinstance(status["error"], str) or not status["error"].strip():
+                    raise ValueError
                 raise OSError("Glyde refused order")
-            order = status.get("resting") or status.get("filled")
-            oid = order["oid"]
-            if (
-                isinstance(oid, bool)
-                or not str(oid).isascii()
-                or not str(oid).isdigit()
-                or int(oid) <= 0
-            ):
+            if "resting" in status:
+                order = status["resting"]
+            elif "filled" in status:
+                order = status["filled"]
+                size, average = number(order["totalSz"]), number(order["avgPx"])
+                if not 0 < size <= amount or average <= 0:
+                    raise ValueError
+            else:
                 raise ValueError
-            return str(oid), self.current_timestamp
+            return canonical_order_id(order["oid"]), self.current_timestamp
         except (KeyError, TypeError, ValueError):
             self._unknown_exchange()
             raise OSError("Glyde order outcome unknown; reconcile original envelope") from None

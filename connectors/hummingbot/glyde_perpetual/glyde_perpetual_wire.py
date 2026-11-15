@@ -7,7 +7,7 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from urllib.parse import urlsplit, urlunsplit
 
 import eth_account
@@ -35,10 +35,22 @@ PRIVATE_TYPES = {
 def number(value):
     if not isinstance(value, (str, Decimal, int)) or isinstance(value, bool):
         raise ValueError("use exact decimal strings")
-    result = Decimal(value)
+    try:
+        result = Decimal(value)
+    except InvalidOperation:
+        raise ValueError("invalid decimal") from None
     if not result.is_finite():
         raise ValueError("nonfinite decimal")
     return result
+
+
+def canonical_order_id(value):
+    if type(value) not in (int, str):
+        raise ValueError("invalid order ID")
+    text = str(value)
+    if not re.fullmatch(r"[1-9][0-9]{0,19}", text) or int(text) > 2**64 - 1:
+        raise ValueError("invalid order ID")
+    return text
 
 
 def wire_number(value):

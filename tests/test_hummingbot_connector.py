@@ -374,3 +374,66 @@ def test_large_integer_prices_remain_exact_and_bad_public_urls_refuse(modules):
     ):
         with pytest.raises(ValueError, match="base URL"):
             modules.wire.Settings(OWNER, VAULT, wallet.key.hex(), READ_KEY, base)
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        {"filled": {"oid": 1}},
+        {"filled": {"oid": 1, "totalSz": "0.1"}},
+        {"filled": {"oid": 1, "totalSz": "0", "avgPx": "99"}},
+        {"filled": {"oid": 1, "totalSz": "-1", "avgPx": "99"}},
+        {"filled": {"oid": 1, "totalSz": "NaN", "avgPx": "99"}},
+        {"filled": {"oid": 1, "totalSz": "bad", "avgPx": "99"}},
+        {"filled": {"oid": 1, "totalSz": "1", "avgPx": "99"}},
+        {"filled": {"oid": 1, "totalSz": "0.1", "avgPx": "Infinity"}},
+        {"filled": {"oid": 1, "totalSz": "0.1", "avgPx": "0"}},
+        {"filled": {"oid": 1, "totalSz": "0.1", "avgPx": "-99"}},
+        {"filled": {"oid": 1, "totalSz": "0.1", "avgPx": 99.1}},
+        {"resting": {"oid": "01"}},
+        {"resting": {"oid": "+1"}},
+        {"resting": {"oid": " 1"}},
+        {"resting": {"oid": "١"}},
+        {"resting": {"oid": True}},
+        {"resting": {"oid": 1.0}},
+        {"resting": {"oid": 0}},
+        {"resting": {"oid": -1}},
+        {"resting": {"oid": 2**64}},
+        {"resting": {"oid": "9" * 100}},
+    ],
+)
+async def test_malformed_receipt_preserves_uncertainty(venue, receipt):
+    _, gateway, connector = venue
+    gateway.response_override = {
+        "status": "ok",
+        "response": {"type": "order", "data": {"statuses": [receipt]}},
+    }
+    with pytest.raises(OSError, match="outcome unknown"):
+        await place(connector)
+    assert connector.unresolved_exchange_envelope == connector.authenticator.wire.last_envelope
+    before = len(gateway.requests)
+    with pytest.raises(OSError, match="suspended"):
+        await place(connector)
+    assert len(gateway.requests) == before and not connector.ready
+
+
+async def test_complete_actual_filled_receipt_accepts_decimal_economics(venue):
+    _, gateway, connector = venue
+    oid, _ = await connector._place_order(
+        "0x" + "f" * 32,
+        "BTC-USD",
+        D("0.12345"),
+        TradeType.BUY,
+        OrderType.MARKET,
+        D(101),
+        PositionAction.OPEN,
+    )
+    fills = gateway.fake.info({"type": "userFills", "user": OWNER})
+    assert fills[0]["oid"] == int(oid)
+    assert D(fills[0]["sz"]) == D("0.12345") and D(fills[0]["px"]) == D(101)
+    assert connector.ready and connector.unresolved_exchange_envelope is None
+
+
+def test_receipt_order_id_accepts_canonical_u64_boundaries(modules):
+    assert modules.wire.canonical_order_id("1") == "1"
+    assert modules.wire.canonical_order_id(2**64 - 1) == str(2**64 - 1)
