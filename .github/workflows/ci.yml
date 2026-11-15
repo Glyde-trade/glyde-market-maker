@@ -3,6 +3,8 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  container:
+    uses: ./.github/workflows/container-smoke.yml
   test:
     runs-on: ubuntu-latest
     strategy:

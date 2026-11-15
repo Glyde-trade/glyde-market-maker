@@ -44,11 +44,11 @@ before replacing an existing installation.
 
 ## Start in five minutes
 
-**1. Install.** Once the `v0.5.0` GitHub Release is published, install its wheel with
+**1. Install.** Once the `v0.6.0` GitHub Release is published, install its wheel with
 [pipx](https://pipx.pypa.io/stable/installation/) (Python 3.11+):
 
 ```sh
-pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.5.0/glyde_market_maker-0.5.0-py3-none-any.whl'
+pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.6.0/glyde_market_maker-0.6.0-py3-none-any.whl'
 glyde-mm --version
 ```
 
@@ -369,19 +369,25 @@ requests until account permissions and read authorization are configured.
 
 ## Docker
 
-Build from this repository; credentials are supplied at runtime, never during the build:
+Starting with v0.6.0, tag releases publish an amd64/arm64 image to GHCR after a
+20-second offline paper-container smoke test. Pull a pinned version (once that
+release's container workflow succeeds), or use `sha-<full commit SHA>` for the
+exact source build. Credentials are supplied at runtime, never during the build:
 
 ```sh
-docker build -t glyde-mm .
+docker pull ghcr.io/glyde-trade/glyde-market-maker:v0.6.0
 docker run --rm -it --init \
   --mount type=bind,source="$PWD/glyde-mm.yaml",target=/work/glyde-mm.yaml,readonly \
   --mount type=volume,source=glyde-mm-state,target=/work/.glyde-mm \
-  glyde-mm paper /work/glyde-mm.yaml
+  ghcr.io/glyde-trade/glyde-market-maker:v0.6.0 paper /work/glyde-mm.yaml
 ```
 
 The container runs as a non-root user. For live mode, mount the reviewed live YAML and pass existing
 environment variables by **name** with `--env GLYDE_API_PRIVATE_KEY --env GLYDE_READ_API_KEY`;
 use `run /work/live-small.yaml`. Do not copy credentials into the image.
+For a reviewed source checkout instead, `docker build -t glyde-mm .` retains the
+same entry point. CI checks the real CLI with a loopback fake One API, non-root
+UID and public-only requests; this does not qualify live exchange credentials.
 
 ## Development
 
