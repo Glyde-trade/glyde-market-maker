@@ -155,6 +155,8 @@ async def _run_session(
             await check_live_exposure(
                 source, config.symbol, allow_existing_exposure=allow_existing_exposure
             )
+            if stop.is_set():
+                return
         raw = paper_factory(config.paper_balance) if config.mode == "paper" else source
         managed = RiskManagedClient(raw, guard, stop_event=stop)
         strategy = None

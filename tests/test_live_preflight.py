@@ -133,3 +133,47 @@ async def test_preflight_read_failure_cannot_enter_cancellation_cleanup(tmp_path
             report=lambda _: None,
         )
     assert cancellations == []
+
+
+async def test_stop_during_live_preflight_does_not_cancel_existing_orders(tmp_path, monkeypatch):
+    import asyncio
+    from decimal import Decimal as D
+
+    from glyde_mm.config import Config
+    from glyde_mm.models import Account
+    from glyde_mm.runner import run
+
+    monkeypatch.setenv("GLYDE_API_PRIVATE_KEY", "synthetic-not-a-real-key")
+    monkeypatch.setenv("GLYDE_READ_API_KEY", "synthetic-read")
+    stop = asyncio.Event()
+    cancellations = []
+    reads = []
+
+    class Source:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def account(self):
+            return Account(D(1000), {})
+
+        async def open_orders(self):
+            reads.append("orders")
+            stop.set()
+            return []
+
+        async def cancel_all(self, *args):
+            cancellations.append(args)
+
+    selected = Config(mode="live", owner="0x" + "1" * 40, vault_address="0x" + "2" * 40)
+    await run(
+        selected,
+        state_directory=tmp_path,
+        client_factory=lambda _: Source(),
+        stop_event=stop,
+        report=lambda _: None,
+    )
+    assert cancellations == []
+    assert reads == ["orders"]
