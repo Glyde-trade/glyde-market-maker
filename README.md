@@ -504,3 +504,12 @@ bypass risk limits. Begin in paper mode; no multi-market live qualification is c
 Public-book `record`/`replay` currently require a separate single-symbol config and refuse
 `markets` configs rather than silently replaying just one market. Public external-reference
 settings, when enabled, are evaluated independently for each selected market.
+
+## Offline API compatibility checks
+
+`pytest -q tests/test_public_api_compatibility.py` replays frozen public HTTP and
+WebSocket wire frames through the real client, including metadata, books, mids,
+trade snapshots/updates and subscription acknowledgements. It forbids sockets,
+credential reads and private requests. See the [fixture provenance](tests/fixtures/one-api-public/README.md):
+the initial recording is synthetic, so these checks catch client wire regressions
+without claiming the production service is reachable or qualified.

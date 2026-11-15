@@ -1,0 +1,15 @@
+{"transport":"http","request":{"type":"meta"},"response":{"universe":[{"name":"BTC","szDecimals":5,"maxLeverage":1},{"name":"ETH","szDecimals":4,"maxLeverage":1}]}}
+{"transport":"http","request":{"type":"l2Book","coin":"BTC"},"response":{"coin":"BTC","time":1700000000000,"levels":[[{"px":"65432.12345","sz":"2.00001","n":1},{"px":"65431","sz":"3","n":1}],[{"px":"65433.12345","sz":"1.00001","n":1}]]}}
+{"transport":"http","request":{"type":"allMids"},"response":{"BTC":"65432.62345","ETH":"3200.2002"}}
+{"transport":"websocket","direction":"send","frame":{"method":"subscribe","subscription":{"type":"l2Book","coin":"BTC"}}}
+{"transport":"websocket","direction":"receive","frame":{"channel":"subscriptionResponse","data":{"method":"subscribe","subscription":{"type":"l2Book","coin":"BTC"}}}}
+{"transport":"websocket","direction":"receive","frame":{"channel":"l2Book","data":{"coin":"BTC","time":1700000000000,"levels":[[{"px":"65432.12345","sz":"2.00001","n":1},{"px":"65431","sz":"3","n":1}],[{"px":"65433.12345","sz":"1.00001","n":1}]]}}}
+{"transport":"websocket","direction":"send","frame":{"method":"subscribe","subscription":{"type":"allMids"}}}
+{"transport":"websocket","direction":"receive","frame":{"channel":"subscriptionResponse","data":{"method":"subscribe","subscription":{"type":"allMids"}}}}
+{"transport":"websocket","direction":"receive","frame":{"channel":"allMids","data":{"mids":{"BTC":"65432.62345","ETH":"3200.2002"}}}}
+{"transport":"websocket","direction":"send","frame":{"method":"subscribe","subscription":{"type":"trades","coin":"BTC"}}}
+{"transport":"websocket","direction":"receive","frame":{"channel":"subscriptionResponse","data":{"method":"subscribe","subscription":{"type":"trades","coin":"BTC"}}}}
+{"transport":"websocket","direction":"receive","frame":{"channel":"trades","data":[]}}
+{"transport":"websocket","direction":"receive","frame":{"channel":"trades","data":[{"coin":"BTC","side":"B","px":"65433.12345","sz":"0.00001","time":1700000000001,"tid":9007199254740993,"hash":"0x0000000000000000000000000000000000000000000000000020000000000001"}]}}
+{"transport":"websocket","direction":"receive","frame":{"channel":"l2Book","data":{"coin":"BTC","time":1700000000001,"levels":[[{"px":"65432.12345","sz":"2.00001","n":1},{"px":"65431","sz":"3","n":1}],[{"px":"65433.12345","sz":"1.00000","n":1}]]}}}
+{"transport":"websocket","direction":"receive","frame":{"channel":"allMids","data":{"mids":{"BTC":"65432.62345","ETH":"3200.2002"}}}}
