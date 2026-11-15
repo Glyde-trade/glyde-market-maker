@@ -425,9 +425,14 @@ docker run --rm -it --init \
 The container runs as a non-root user. For live mode, mount the reviewed live YAML and pass existing
 environment variables by **name** with `--env GLYDE_API_PRIVATE_KEY --env GLYDE_READ_API_KEY`;
 use `run /work/live-small.yaml`. Do not copy credentials into the image.
-The release workflow tags amd64/arm64 images with the version and `sha-<full SHA>`.
-CI checks the real CLI with a loopback fake One API, non-root
-UID and public-only requests; this does not qualify live exchange credentials.
+The GHCR workflow builds amd64/arm64 images on default-branch `master` pushes and is
+called by the matching-version tag release. Tags are `master` or `v<version>`, plus
+`sha-<full SHA>`. Publication requires the real 20-second paper CLI/container smoke with a
+loopback fake One API, non-root UID and public-only requests. PR checks run on GitHub-hosted
+Ubuntu runners: offline tests (Python 3.11–3.13), strict mypy, Ruff check/format, packaging and
+container smoke. Publishing uses only the job-scoped `GITHUB_TOKEN` for registry login;
+credentials are never build arguments. Package visibility remains owner-managed. These checks
+do not qualify live exchange credentials.
 
 ## Development
 
