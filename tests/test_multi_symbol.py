@@ -118,6 +118,9 @@ def test_daily_loss_and_attempt_budget_shared_across_markets_and_restart(tmp_pat
     g.consume_order_rate(1)
     g.reserve(OrderRequest("ETH", "buy", D(".1"), D(9), "eth"))
     g.consume_order_rate(1)
+    import asyncio
+
+    asyncio.run(g.flush_state())
     restored = guard(state_path=path, rate=2)
     with pytest.raises(RiskViolation, match="order_rate_limit"):
         restored.consume_order_rate(1)

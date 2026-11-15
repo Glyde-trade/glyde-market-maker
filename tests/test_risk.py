@@ -174,6 +174,7 @@ def test_daily_loss_persists_across_restart_and_does_not_clear_on_equity_rebound
     g, now = guard(path)
     with pytest.raises(RiskViolation, match="daily_loss"):
         g.update_account(Account(equity=D("95")))
+    asyncio.run(g.flush_state())
     restarted, _ = guard_restart(path, now)
     with pytest.raises(RiskViolation, match="daily_loss"):
         restarted.update_account(Account(equity=D("105")))
@@ -425,6 +426,7 @@ def test_intent_is_durable_before_transport_and_definite_reply_clears_it(tmp_pat
 
         raw = InspectingClient()
         await RiskManagedClient(raw, g).place_orders([Order(client_order_id="known")])
+        await g.flush_state()
         restarted, _ = guard_restart(path, now)
         assert restarted.halted is None
         restarted.update_account(Account())
@@ -462,7 +464,7 @@ def test_state_write_failure_prevents_order_submission(tmp_path, monkeypatch):
         def no_space(*_):
             raise OSError("state storage unavailable")
 
-        monkeypatch.setattr("glyde_mm.risk.os.replace", no_space)
+        monkeypatch.setattr("glyde_mm.risk_state.os.replace", no_space)
         with pytest.raises(RiskViolation):
             await RiskManagedClient(raw, g).place_orders([Order(client_order_id="never-sent")])
         assert not raw.placed
@@ -495,7 +497,8 @@ def test_malformed_execution_state_refuses_restart(tmp_path, execution):
     import json
 
     path = tmp_path / "risk.json"
-    guard(path)
+    initial, _ = guard(path)
+    asyncio.run(initial.close_state())
     data = json.loads(path.read_text())
     data["execution"] = execution
     path.write_text(json.dumps(data))
@@ -515,12 +518,13 @@ def test_failed_state_clear_after_reply_retains_durable_original(tmp_path, monke
                 def no_space(*_):
                     raise OSError("state clear unavailable")
 
-                monkeypatch.setattr("glyde_mm.risk.os.replace", no_space)
+                monkeypatch.setattr("glyde_mm.risk_state.os.replace", no_space)
                 return result
 
         raw = LostStateClient()
         with pytest.raises(RiskViolation, match="risk_state_unavailable"):
             await RiskManagedClient(raw, g).place_orders([Order(client_order_id="original")])
+            await g.flush_state()
         assert len(raw.placed) == 1
         restarted, _ = guard_restart(path, now)
         assert restarted.halted == "order_outcome_unknown"
@@ -536,6 +540,7 @@ def test_order_rate_window_counts_orders_and_survives_restart(tmp_path):
     now[1] += 30
     now[0] += 30
     g.consume_order_rate(1)
+    asyncio.run(g.flush_state())
     restored = RiskGuard(g.limits, wall_clock=lambda: now[1], state_path=path)
     with pytest.raises(RiskViolation, match="order_rate_limit"):
         restored.consume_order_rate(1)
@@ -591,6 +596,7 @@ def test_order_rate_refuses_backwards_clock_and_invalid_saved_clock(tmp_path):
     path = tmp_path / "risk.json"
     g, now = guard(path)
     g.consume_order_rate(1)
+    asyncio.run(g.flush_state())
     now[1] -= 1
     with pytest.raises(RiskViolation, match="order_rate_clock"):
         g.consume_order_rate(1)
@@ -625,4 +631,22 @@ async def test_rate_timestamp_is_consumed_after_private_snapshot_awaits():
 
     raw.open_orders = delayed_snapshot
     await RiskManagedClient(raw, g).place_orders([Order(quantity=D("0.01"))])
-    assert g._order_attempts == [1_700_000_001.0]
+    assert g._order_attempts == [1_700_000_002.0]
+
+
+async def test_disk_and_transport_wait_do_not_expire_dispatched_rate_early():
+    g, now = guard()
+    g.limits = RiskLimits(max_position=D(1), max_orders_per_minute=1)
+
+    class DelayedReply(FakeClient):
+        async def place_orders(self, orders):
+            now[0] += 30
+            now[1] += 30
+            return await super().place_orders(orders)
+
+    await RiskManagedClient(DelayedReply(), g).place_orders([Order(quantity=D("0.01"))])
+    assert g._order_attempts == [now[1]]
+    now[0] += 31
+    now[1] += 31
+    with pytest.raises(RiskViolation, match="order_rate_limit"):
+        g.consume_order_rate(1)
