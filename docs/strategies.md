@@ -1,3 +1,31 @@
+# Choose a paper strategy
+
+Copy an example, then run `glyde-mm paper --config YOUR_COPY.yaml`.
+Amounts are base-asset units; spreads are fractions (`0.002` = 0.2%). Check the
+current price, venue minimum and risk caps before changing to live mode.
+
+### Pure market making — [paper.yaml](../examples/paper.yaml)
+
+Quotes a bid and ask at fixed distances from the moving midpoint.  
+Set `bid_spread`, `ask_spread`, `order_amount` and `order_refresh_time`.  
+Use it to learn the quote/refresh lifecycle with the simplest pricing rule.
+
+### Avellaneda — [avellaneda-paper.yaml](../examples/avellaneda-paper.yaml)
+
+Moves quotes with measured volatility and your position relative to its target.  
+Set `risk_factor`, `liquidity_kappa`, `inventory_target_position` and sample window.  
+Use it to paper-test adaptive pricing; warmup needs 31 consecutive one-second
+samples with nonzero movement, and missing intervals restart that window.
+
+### Grid — [grid-paper.yaml](../examples/grid-paper.yaml)
+
+Places fixed price levels inside a band you choose; outside it, quotes retire.  
+Set `lower_price`, `upper_price`, `levels` and `order_amount`.  
+Use it for a range-bound experiment after setting the band around today's book.
+
+All examples use simulated funds, no trading key, bounded position/notional/loss
+limits and no hanging orders. A paper result is not a live-profit guarantee.
+
 # Pure market making
 
 `pure_market_making` quotes both sides of the current midpoint. Spreads are
