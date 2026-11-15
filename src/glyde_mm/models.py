@@ -64,6 +64,7 @@ class Account:
     positions: dict[str, Decimal] = field(default_factory=dict)
     available_balance: Decimal = Decimal("0")
     received_at: float = field(default_factory=monotonic)
+    unrealized_pnl: Decimal | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)

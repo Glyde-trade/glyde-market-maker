@@ -108,3 +108,54 @@ run's exact snapshot after restart; do not expose it through a public tunnel.
 Chat alerts are best effort, not a kill switch or cancellation receipt. Execution
 comparison needs a complete [reconciliation capture](reconciliation.md), not these
 diagnostic logs. Check [troubleshooting](troubleshooting.md) for refusal categories.
+
+## Optional local Prometheus metrics
+
+Metrics are **off by default**. Add these keys to the exact bot YAML:
+
+```yaml
+metrics_enabled: true
+metrics_port: 9464
+```
+
+The running bot serves `http://127.0.0.1:9464/metrics` in Prometheus text format.
+Only loopback binding is supported; it has no authentication and must not be
+forwarded to the Internet. Choose different ports for simultaneous runners.
+The endpoint starts/stops with the bot, has no write API and makes no exchange
+request on a scrape. An occupied port fails startup before trading.
+
+Configure a local Prometheus scrape target:
+
+```yaml
+scrape_configs:
+  - job_name: glyde-mm
+    static_configs:
+      - targets: ['127.0.0.1:9464']
+```
+
+Import [the sample Grafana dashboard](grafana-market-maker.json), selecting your
+Prometheus datasource. Its scrape cadence is monitoring only, not HTTP polling
+of account/order/market state. Counters reset with each runner session (including wizard preview/live); use Prometheus
+`rate()`/`increase()` for time-window counts. Market labels are zero-based indexes
+in the config's market order, never symbols, owner addresses, keys or URLs.
+Refusal labels come from a fixed allowlist; arbitrary venue error text is omitted.
+
+| Metric prefix `glyde_mm_` | Meaning |
+| --- | --- |
+| `quotes_placed_total` | Accepted resting/filled order receipts at the risk boundary; excludes unknown outcomes. |
+| `quotes_cancelled_total` | Confirmed per-ID cancellation receipts observed by that boundary; excludes already-closed results. Extra venue orders discovered only inside raw cancel-all are not counted. |
+| `quotes_refused_total{reason}` | Definite venue rejections or pre-dispatch risk refusals, by fixed category; unknown writes are not counted as refusals. |
+| `fills_total{market}` | Delivered, identified fill events; partial fills count as events, not whole completed orders. Live history snapshots are not new fills. |
+| `inventory{market}` | Signed base quantity from the latest account observation. |
+| `realized_pnl`, `unrealized_pnl` | USDC. Paper uses simulator cash/PnL, with its zero-fee model. Live unrealized PnL requires complete supplied position facts; live realized PnL is unavailable because equity/cash changes cannot distinguish trading from transfers/funding. |
+| `daily_loss_headroom` | Maximum daily loss minus loss from the retained UTC-day equity baseline; can be negative or exceed the limit after gains. It is not margin/withdrawable balance. |
+| `book_arrival_age_seconds{market}`, `book_source_age_seconds{market}` | Age of the last committed book by local receipt and source clock; scrapes never restamp it. |
+| `account_arrival_age_seconds`, `account_source_age_seconds` | Same for the complete sequenced owner cut. Paper has no owner stream. |
+| `gaps_total` | First detected sequence/session/epoch/cursor continuity failure per failed cache. |
+| `reconnects_total` | Subsequent stream baselines within the same process/collector. Current fail-closed runner has no automatic reconnect, so normally zero; a new runner session resets it. |
+
+`NaN` means unavailable or not yet observed, **not zero**. PnL is observational,
+not accounting/settlement proof. Inventory/headroom are cached and refreshed with
+the runner's progress publication (normally every two seconds); consult stream
+age before interpreting them. A failed or stopped process is an absent endpoint,
+not a healthy zero balance. Metrics never alter raw risk or stream admission.

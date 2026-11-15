@@ -71,10 +71,16 @@ class Config:
     strategy: str = "pure_market_making"
     strategy_config: dict[str, Any] = field(default_factory=dict)
     risk: RiskConfig = field(default_factory=RiskConfig)
+    metrics_enabled: bool = False
+    metrics_port: int = 9464
     alerts_enabled: bool = False
     alert_webhook_env: str = "GLYDE_MM_ALERT_WEBHOOK"
 
     def __post_init__(self) -> None:
+        if type(self.metrics_enabled) is not bool:
+            raise ValueError("metrics_enabled must be boolean")
+        if type(self.metrics_port) is not int or not 0 <= self.metrics_port <= 65535:
+            raise ValueError("metrics_port must be an integer in 0..65535")
         if type(self.alerts_enabled) is not bool:
             raise ValueError("alerts_enabled must be boolean")
         if not isinstance(self.alert_webhook_env, str) or not re.fullmatch(

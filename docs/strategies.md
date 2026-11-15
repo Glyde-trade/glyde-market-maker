@@ -257,6 +257,8 @@ uses percentage points (`0.1 = 0.1%`). Defaults are not reviewed trading sizes.
 | `strategy` | `pure_market_making` | A chooser key above, or a trusted [plugin](plugins.md). |
 | `strategy_config` | empty | The selected strategy's keys below. |
 | `risk` | defaults below | Shared admission limits; never raised by strategy settings. |
+| `metrics_enabled` | false | Enable read-only Prometheus observations on loopback; no exchange polling. |
+| `metrics_port` | 9464 | Loopback TCP port (0 chooses a free port); choose distinct ports for separate runners. |
 | `alerts_enabled` | false | Best-effort after-cleanup chat notifications; not a safety controller. |
 | `alert_webhook_env` | `GLYDE_MM_ALERT_WEBHOOK` | Optional webhook variable name; never put its URL in YAML. |
 
