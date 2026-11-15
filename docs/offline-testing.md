@@ -14,11 +14,14 @@ from glyde_mm.testing import FakeOneApiServer
 fake = FakeOneApiServer()
 fake.set_book("BTC", bids=[("99", "2")], asks=[("101", "2")])
 
+
 async def read_book():
     config = Config(base_url="https://offline.invalid/v1")
     async with httpx.AsyncClient(transport=fake.http_transport()) as http:
         async with OneApiClient(
-            config, http_client=http, connect_ws=fake.connect_ws,
+            config,
+            http_client=http,
+            connect_ws=fake.connect_ws,
         ) as client:
             book = await client.book("BTC")
             assert str(book.mid) == "100"

@@ -429,6 +429,7 @@ async def test_stream_can_be_closed_after_one_frame_without_exception_group():
         await stream.aclose()
         assert closed.is_set()
 
+
 async def test_paper_terminal_cancellation_requires_retained_own_proof():
     paper = PaperExchange()
     await paper.on_book(book())
@@ -458,4 +459,3 @@ async def test_paper_repeated_cancel_has_bounded_terminal_proof():
         paper._remember_terminal(f"synthetic-{index}", OrderRequest("BTC", "buy", D(1), D(99)))
     assert len(paper._terminal) == 4096
     assert (await paper.cancel_orders([request]))[0].status == "rejected"
-
