@@ -16,10 +16,11 @@ settings are saved privately and printed before proceeding. It never raises the 
 caps: per-order and gross exposure are capped at 25 USDC, daily-equity-loss threshold at 5 USDC,
 and order attempts at 60/minute; tighter supplied caps remain. The position cap is at most
 25 USDC at the sizing snapshot. Prices can move, these are not loss guarantees, and venue
-minimums may still refuse the resulting small size. No cap is raised to make an order fit.
+minimums may still refuse the resulting size. The proposal is rounded up to the advertised
+native lot and bid-side USD minimum before preflight; no cap is raised to make it fit.
 
 1. Run public market preflight on the **derived** config, then doctor including explicitly
-   requested private read checks. Missing advertised minimum size refuses without guessing.
+   requested private read checks. Missing/invalid `glydeOrderRules` refuses without guessing.
    A failure ends the wizard without placing anything.
 2. Run a **120-second paper preview**, displaying the usual paper status/summary. It uses
    exactly the proposed live settings, strategy and account identifiers, with only `mode`

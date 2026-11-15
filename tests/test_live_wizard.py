@@ -10,6 +10,7 @@ from decimal import Decimal as D
 
 import pytest
 import yaml
+from order_rules_fixture import native_rules
 
 from glyde_mm import cli
 from glyde_mm.config import Config, MarketConfig, RiskConfig, load_config
@@ -40,7 +41,19 @@ class Public:
 
     async def meta(self):
         self.reads.append("meta")
-        return {"universe": [{"name": "BTC", "szDecimals": 4, "minOrderSize": "0.0001"}]}
+        return {
+            "universe": [
+                {
+                    "name": "BTC",
+                    "szDecimals": 4,
+                    "glydeOrderRules": native_rules(
+                        quantityStep="0.0001",
+                        priceTick="0.01",
+                        maxPriceDecimals=2,
+                    ),
+                }
+            ]
+        }
 
     async def book(self, symbol):
         self.reads.append("book")
@@ -73,6 +86,7 @@ def config_file(tmp_path):
                 "symbol": "BTC",
                 "owner": "0x" + "1" * 40,
                 "vault_address": "0x" + "2" * 40,
+                "risk": {"max_position": "1", "max_order_notional": "25"},
             }
         )
     )
@@ -328,7 +342,7 @@ async def test_real_fake_client_paper_then_signed_live_and_timer_cleanup(tmp_pat
                 actions.append(envelope["action"]["type"])
             if json.loads(request.content).get("type") == "meta":
                 metadata = fake.info({"type": "meta"})
-                metadata["universe"][0]["minOrderSize"] = "0.00001"
+                metadata["universe"][0]["glydeOrderRules"] = native_rules()
                 return httpx.Response(200, json=metadata)
             if selected.mode == "live":
                 return sequenced.http(request)
@@ -385,3 +399,37 @@ async def test_real_fake_client_paper_then_signed_live_and_timer_cleanup(tmp_pat
     result = report(tmp_path)
     assert result["outcome"] == "auto_stopped"
     assert len(result["diagnostics"]["runs"]) == 2
+
+
+async def test_native_floor_rounds_up_to_lot_without_enlarging_caps():
+    base = config()
+    selected = await conservative_config(base, client_factory=lambda _: Public())
+    amount = D(selected.strategy_config["order_amount"])
+    assert amount % D("0.0001") == 0
+    assert amount * D("99.5") >= 10
+    assert (amount - D("0.0001")) * D("99.5") < 10
+    assert selected.risk.max_order_notional == 25
+    assert selected.risk.max_position == D(".25")
+
+
+async def test_caps_below_native_floor_refuse_before_preview(tmp_path):
+    path = config_file(tmp_path)
+    values = yaml.safe_load(path.read_text())
+    values["risk"] = {"max_position": "0.01", "max_order_notional": "1"}
+    path.write_text(yaml.safe_dump(values))
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("an undersized-cap configuration cannot reach private checks or preview")
+
+    assert (
+        await first_live_session(
+            path,
+            run_session=forbidden,
+            doctor_fn=forbidden,
+            client_factory=lambda _: Public(),
+            report=lambda _: None,
+        )
+        == 1
+    )
+    result = report(tmp_path)
+    assert result["phase"] == "preflight" and result["live_requested"] is False

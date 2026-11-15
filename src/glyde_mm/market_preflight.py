@@ -10,12 +10,13 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import asdict
-from decimal import ROUND_CEILING, Decimal, DecimalException
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, DecimalException
 from pathlib import Path
 
 from .client import OneApiClient, OneApiError
-from .config import Config, decimal
+from .config import Config
 from .models import Book
+from .order_rules import order_rules
 from .risk import RiskLimits
 from .strategies.factory import validate_strategy_config
 from .strategies.grid import GridConfig
@@ -24,7 +25,7 @@ from .strategies.pure_market_making import PureMarketMakingConfig
 from .transport import ClientFactory, JsonObject
 
 RECEIPT_SECONDS = 300
-CHECK_VERSION = 1
+CHECK_VERSION = 2
 
 
 class MarketPreflightRequired(ValueError):
@@ -109,60 +110,79 @@ def _market_fixes(config: Config, market: JsonObject, book: Book) -> tuple[list[
         or not -1 <= time.time() - book.timestamp_ms / 1000 <= float(config.risk.stale_book_seconds)
     ):
         return [f"{symbol}: obtain a fresh two-sided public l2Book."], "", Decimal(0)
-    step = Decimal(1).scaleb(-size)
-    tick = _price_tick(book, size)
-    if "tickSize" in market and decimal(market["tickSize"]) != tick:
-        fixes.append(f"{symbol}: advertised tickSize must match supported runner tick {tick:f}.")
-    if "minOrderSize" not in market:
-        fixes.append(
-            f"{symbol}: public meta must advertise minOrderSize; venue minimum is unavailable."
-        )
-        minimum = step
-    else:
-        minimum = decimal(market["minOrderSize"])
-        if minimum <= 0 or minimum % step != 0:
-            fixes.append(
-                f"{symbol}: public minOrderSize must be positive and aligned to step {step:f}."
-            )
+    try:
+        rules = order_rules(market)
+    except (ValueError, DecimalException) as error:
+        return [f"{symbol}: {error}"], "", Decimal(0)
+    step, tick = rules.quantity_step, _price_tick(book, size)
     policy = validate_strategy_config(config.strategy, config.strategy_config)
     if isinstance(policy, PluginDefinition):
         raise ValueError("built-in strategy required")
     if isinstance(policy, GridConfig):
         quantities = [policy.order_amount] * policy.levels
+        spacing = (policy.upper_price - policy.lower_price) / (policy.levels - 1)
+        bids = [policy.lower_price + spacing * i for i in range(policy.levels)]
+        asks = list(bids)
         prices = [policy.upper_price] * policy.levels
     else:
         quantities = [
             policy.order_amount + policy.order_level_amount * i for i in range(policy.order_levels)
         ]
-        prices = [book.asks[0].price] * len(quantities)
-        if isinstance(policy, PureMarketMakingConfig):
-            prices = [
-                max(
-                    book.asks[0].price,
-                    book.mid
-                    * (
-                        1
-                        + max(
-                            policy.minimum_spread, policy.ask_spread + policy.order_level_spread * i
-                        )
-                    ),
+        # Public preflight checks nominal unskewed prices, not a future private/model state.
+        bids = [
+            book.mid
+            * (
+                1
+                - max(
+                    policy.minimum_spread,
+                    getattr(policy, "bid_spread", policy.minimum_spread)
+                    + policy.order_level_spread * i,
                 )
-                for i in range(len(quantities))
-            ]
-            if policy.inventory_skew_enabled:
-                quantities = [q * 2 for q in quantities]
+            )
+            for i in range(len(quantities))
+        ]
+        asks = [
+            book.mid
+            * (
+                1
+                + max(
+                    policy.minimum_spread,
+                    getattr(policy, "ask_spread", policy.minimum_spread)
+                    + policy.order_level_spread * i,
+                )
+            )
+            for i in range(len(quantities))
+        ]
+        prices = [max(book.asks[0].price, price) for price in asks]
+        if isinstance(policy, PureMarketMakingConfig) and policy.inventory_skew_enabled:
+            quantities = [q * 2 for q in quantities]
+    nominal_quantities = [
+        policy.order_amount
+        + (0 if isinstance(policy, GridConfig) else policy.order_level_amount) * i
+        for i in range(len(quantities))
+    ]
+    for i, (quantity, bid, ask) in enumerate(zip(nominal_quantities, bids, asks, strict=True), 1):
+        if quantity % step != 0:
+            fixes.append(f"{symbol}: level {i} quantity must be a multiple of {step:f} base.")
+        for side, price, rounding in (("bid", bid, ROUND_FLOOR), ("ask", ask, ROUND_CEILING)):
+            rounded = (price / tick).to_integral_value(rounding=rounding) * tick
+            if not rules.valid_price(rounded):
+                fixes.append(
+                    f"{symbol}: level {i} {side} price violates native priceTick/decimal/"
+                    "significant-figure rules; adjust quote settings."
+                )
+            if quantity * rounded < rules.minimum_notional:
+                fixes.append(
+                    f"{symbol}: level {i} {side} notional {quantity * rounded:f} is below "
+                    f"minimumNotionalUsd {rules.minimum_notional:f}; increase order_amount "
+                    "within your risk caps."
+                )
     base = policy.order_amount
     if base % step != 0:
         fixes.append(f"{symbol}: order_amount must be a multiple of {step:f} base.")
-    if base < minimum:
-        fixes.append(f"{symbol}: order_amount must be at least {minimum:f} base.")
     total = Decimal(0)
     notional = Decimal(0)
     for i, (quantity, price) in enumerate(zip(quantities, prices, strict=True), 1):
-        if quantity % step != 0:
-            fixes.append(f"{symbol}: level {i} quantity must be a multiple of {step:f} base.")
-        if quantity < minimum:
-            fixes.append(f"{symbol}: level {i} quantity must be at least {minimum:f} base.")
         reference = max(
             book.asks[0].price, (price / tick).to_integral_value(rounding=ROUND_CEILING) * tick
         )
@@ -179,10 +199,9 @@ def _market_fixes(config: Config, market: JsonObject, book: Book) -> tuple[list[
             f"{symbol}: reduce order_amount/levels; one-sided quantity {total:f} exceeds "
             f"max_position {config.risk.max_position:f} (including possible size skew)."
         )
-    minimum_label = f"{minimum:f}" if "minOrderSize" in market else "unavailable"
     details = (
-        f"{symbol}: quantity_step={step:f}, min_size={minimum_label}, "
-        f"tick={tick:f}, one_side={total:f}"
+        f"{symbol}: quantity_step={step:f}, minimum_notional_usd={rules.minimum_notional:f}, "
+        f"tick={rules.price_tick:f}, one_side={total:f} (nominal current-book check)"
     )
     return fixes, details, notional
 

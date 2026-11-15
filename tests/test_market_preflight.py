@@ -11,6 +11,7 @@ from decimal import Decimal as D
 import httpx
 import pytest
 import yaml
+from order_rules_fixture import native_rules
 
 from glyde_mm import cli, market_preflight
 from glyde_mm.client import OneApiClient
@@ -37,7 +38,7 @@ def selected():
         mode="live",
         owner="0x" + "1" * 40,
         vault_address="0x" + "2" * 40,
-        strategy_config={"order_amount": "0.1"},
+        strategy_config={"order_amount": "0.2"},
         risk=RiskConfig(max_position=D(1), max_order_notional=D(25)),
     )
 
@@ -60,7 +61,7 @@ class Public:
             if self.metadata is not None:
                 result = self.metadata
             else:
-                result["universe"][0]["minOrderSize"] = "0.001"
+                result["universe"][0]["glydeOrderRules"] = native_rules()
         return httpx.Response(200, json=result)
 
     @asynccontextmanager
@@ -87,7 +88,7 @@ async def test_public_pass_records_exact_hash_without_private_or_signing(tmp_pat
 @pytest.mark.parametrize(
     "changes,fix",
     [
-        ({"strategy_config": {"order_amount": "0.0001"}}, "order_amount must be at least"),
+        ({"strategy_config": {"order_amount": "0.0001"}}, "minimumNotionalUsd"),
         ({"strategy_config": {"order_amount": "0.001001"}}, "order_amount must be a multiple"),
         ({"strategy_config": {"order_amount": "1"}}, "max_order_notional"),
         (
@@ -121,11 +122,10 @@ async def test_exact_configuration_fixes_no_receipt(tmp_path, changes, fix):
 @pytest.mark.parametrize(
     "market,fix",
     [
-        ({"name": "BTC", "szDecimals": 5}, "minimum is unavailable"),
+        ({"name": "BTC", "szDecimals": 5}, "glydeOrderRules unavailable"),
         ({"name": "BTC", "szDecimals": True}, "szDecimals"),
-        ({"name": "BTC", "szDecimals": 5, "minOrderSize": "0"}, "minOrderSize must be positive"),
-        ({"name": "BTC", "szDecimals": 5, "minOrderSize": "0.001", "tickSize": "7"}, "tickSize"),
-        ({"name": "BTC", "szDecimals": 5, "minOrderSize": "NaN"}, "metadata"),
+        ({"name": "BTC", "szDecimals": 5, "minOrderSize": "0.001"}, "unavailable"),
+        ({"name": "BTC", "szDecimals": 5, "glydeOrderRules": {}}, "version 1 fields"),
     ],
 )
 async def test_unknown_or_invalid_venue_rules_never_guess_pass(tmp_path, market, fix):
@@ -140,8 +140,6 @@ async def test_unknown_or_invalid_venue_rules_never_guess_pass(tmp_path, market,
         == 1
     )
     assert any(fix in line for line in lines)
-    if fix == "minimum is unavailable":
-        assert any("min_size=unavailable" in line for line in lines)
     assert not list(tmp_path.glob("preflight-*.json"))
 
 
@@ -182,7 +180,7 @@ async def test_every_config_change_revokes_pass_and_failed_refresh_removes_old_p
         replace(config, owner="0x" + "3" * 40),
         replace(config, mode="paper"),
         replace(config, base_url="https://other.invalid/v1"),
-        replace(config, strategy_config={"order_amount": "0.2"}),
+        replace(config, strategy_config={"order_amount": "0.3"}),
         replace(config, risk=replace(config.risk, max_position=D(2))),
     ):
         with pytest.raises(MarketPreflightRequired):
@@ -248,7 +246,8 @@ def test_actual_cli_pass_and_changed_config_refusal(tmp_path, monkeypatch, capsy
                 "mode": "live",
                 "owner": selected().owner,
                 "vault_address": selected().vault_address,
-                "strategy_config": {"order_amount": "0.001"},
+                "strategy_config": {"order_amount": "0.2"},
+                "risk": {"max_position": "1", "max_order_notional": "25"},
             }
         )
     )
@@ -265,7 +264,7 @@ def test_actual_cli_pass_and_changed_config_refusal(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(cli, "run_with_signals", allowed)
     assert cli.main(["run", str(config)]) == 0
     assert len(seen) == 1
-    config.write_text(config.read_text() + 'risk: {max_position: "0.2"}\n')
+    config.write_text(config.read_text().replace("max_position: '1'", "max_position: '0.2'"))
     monkeypatch.setattr("builtins.input", lambda _: "BTC")
 
     async def forbidden(*args, **kwargs):
@@ -299,3 +298,143 @@ async def test_stale_public_book_cannot_issue_a_pass(tmp_path):
     )
     assert any("fresh two-sided" in line for line in lines)
     assert not list(tmp_path.glob("preflight-*.json"))
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"version": 2},
+        {"version": True},
+        {"quantityStep": 0.00002},
+        {"quantityStep": "0"},
+        {"quantityStep": "NaN"},
+        {"quantityStep": "0.000001"},
+        {"quantityStep": "0.10000000000000000000000000001"},
+        {"quantityStep": "not-a-decimal"},
+        {"minimumNotionalUsd": "0"},
+        {"minimumNotionalUsd": "11"},
+        {"minimumNotionalUsd": 10},
+        {"priceTick": "Infinity"},
+        {"priceTick": "0"},
+        {"maxPriceDecimals": True},
+        {"maxPriceDecimals": 2},
+        {"maxPriceDecimals": -1},
+        {"maxPriceSignificantFigures": 0},
+        {"maxPriceSignificantFigures": 6},
+        {"maxPriceSignificantFigures": 5.0},
+        {"integerPricesAllowed": 1},
+        {"extra": "field"},
+    ],
+)
+async def test_malformed_native_rules_refuse_without_receipt(tmp_path, changes):
+    market = {"name": "BTC", "szDecimals": 5, "glydeOrderRules": native_rules(**changes)}
+    assert (
+        await check(
+            selected(),
+            tmp_path,
+            client_factory=Public({"universe": [market]}).factory,
+            report=lambda _: None,
+        )
+        == 1
+    )
+    assert not list(tmp_path.glob("preflight-*.json"))
+
+
+async def test_bid_floor_cannot_be_satisfied_by_the_higher_ask_or_skew_budget(tmp_path):
+    config = replace(
+        selected(),
+        strategy_config={
+            "order_amount": "0.1",
+            "inventory_skew_enabled": True,
+        },
+    )
+    public, lines = Public(), []
+    assert await check(config, tmp_path, client_factory=public.factory, report=lines.append) == 1
+    assert any("bid notional 9.99 is below minimumNotionalUsd 10" in line for line in lines)
+    assert not any("ask notional" in line for line in lines)
+    assert not list(tmp_path.glob("preflight-*.json"))
+
+
+@pytest.mark.parametrize("amount,expected", [("0.20001", 1), ("0.20002", 0)])
+async def test_configured_native_lot_is_not_inferred_from_szdecimals(tmp_path, amount, expected):
+    public, lines = Public(), []
+    config = replace(selected(), strategy_config={"order_amount": amount})
+    assert (
+        await check(config, tmp_path, client_factory=public.factory, report=lines.append)
+        == expected
+    )
+    if expected:
+        assert any("multiple of 0.00002" in line for line in lines)
+    else:
+        require_preflight(config, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"priceTick": "1"}, {"maxPriceDecimals": 0}, {"maxPriceSignificantFigures": 2}],
+)
+async def test_tick_alone_does_not_satisfy_native_price_validity(tmp_path, changes):
+    market = {"name": "BTC", "szDecimals": 5, "glydeOrderRules": native_rules(**changes)}
+    lines = []
+    assert (
+        await check(
+            selected(),
+            tmp_path,
+            client_factory=Public({"universe": [market]}).factory,
+            report=lines.append,
+        )
+        == 1
+    )
+    assert any("price violates native" in line for line in lines)
+
+
+async def test_grid_minimum_uses_lowest_bid_not_only_upper_budget(tmp_path):
+    config = replace(
+        selected(),
+        strategy="grid",
+        strategy_config={
+            "order_amount": "0.1",
+            "lower_price": "90",
+            "upper_price": "110",
+            "levels": 3,
+        },
+    )
+    lines = []
+    assert await check(config, tmp_path, client_factory=Public().factory, report=lines.append) == 1
+    assert any("bid notional 9.0 is below" in line for line in lines)
+
+
+async def test_receipt_from_previous_check_version_never_authorizes_new_checks(
+    tmp_path, monkeypatch
+):
+    config = selected()
+    with monkeypatch.context() as old:
+        old.setattr(market_preflight, "CHECK_VERSION", 1)
+        market_preflight._write_receipt(config, tmp_path)
+        require_preflight(config, tmp_path)
+    with pytest.raises(MarketPreflightRequired):
+        require_preflight(config, tmp_path)
+
+
+@pytest.mark.parametrize("increment,expected", [("0.00001", 1), ("0.00002", 0)])
+async def test_skew_maximum_cannot_mask_off_lot_nominal_ladder(tmp_path, increment, expected):
+    config = replace(
+        selected(),
+        strategy_config={
+            "order_amount": "0.2",
+            "order_levels": 2,
+            "order_level_amount": increment,
+            "inventory_skew_enabled": True,
+        },
+        risk=RiskConfig(max_position=D(1), max_order_notional=D(100)),
+    )
+    lines = []
+    assert (
+        await check(config, tmp_path, client_factory=Public().factory, report=lines.append)
+        == expected
+    )
+    if expected:
+        assert any("level 2 quantity must be a multiple of 0.00002" in line for line in lines)
+        assert not list(tmp_path.glob("preflight-*.json"))
+    else:
+        require_preflight(config, tmp_path)
