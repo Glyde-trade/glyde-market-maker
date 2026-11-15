@@ -117,6 +117,22 @@ printf '\n'
 glyde-mm run live-small.yaml
 ```
 
+Every run prints a pre-flight summary of mode, symbol, position/notional caps, daily-equity-loss
+threshold and freshness bounds. Live CLI startup requires typing the exact symbol (for example
+`BTC`); EOF or a mismatched answer refuses startup before account access. Paper never prompts.
+
+Live startup also refuses an existing position or open order on the selected symbol before
+creating the managed execution/cleanup lifecycle. Review the account before explicitly accepting
+that exposure:
+
+```sh
+glyde-mm run live-small.yaml --i-understand
+```
+
+This flag only permits starting alongside existing symbol exposure. It does not bypass typed
+confirmation, risk limits, stale-data checks or an unresolved original execution intent. Pre-flight
+reads are a startup snapshot, not a cross-process lock; continue using a dedicated account.
+
 `run` uses the YAML mode; live must be selected explicitly. Confirm the current market price,
 exchange minimum order size and precision. `order_amount × price` must fit `max_order_notional`;
 an example can be too small for the exchange or too large for its configured cap. Refused quotes

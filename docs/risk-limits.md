@@ -55,6 +55,14 @@ the original execution intent and refuses new risk; it does not replace an ambig
 new ID or nonce. A report helps identify the run and exit category but is not execution proof.
 Keep the state directory and resolve the original outcome before attempting further trading.
 
+## Why does live startup refuse my existing orders or position?
+
+The retail CLI requires explicit typed-symbol confirmation, then reads account/open-order state
+before managed cleanup exists. An occupied selected symbol is refused without placing or cancelling
+orders. `--i-understand` accepts that startup exposure after review; it does not waive confirmation,
+position/notional/loss caps, freshness or unresolved-intent checks. Other symbols do not trigger this
+startup refusal. This snapshot is not a lock against another process; use a dedicated account.
+
 ## Does Ctrl-C guarantee there are no live orders?
 
 It requests cancellation and cleanup. Successful cleanup depends on transport and authoritative

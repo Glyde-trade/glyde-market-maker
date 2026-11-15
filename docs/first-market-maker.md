@@ -103,6 +103,11 @@ intend to submit real orders with the reviewed config, run:
 glyde-mm run live-small.yaml
 ```
 
+Read the printed pre-flight limits and type the exact symbol to confirm live startup. Existing
+orders or a position on that symbol refuse startup; `--i-understand` explicitly accepts that
+exposure after review, while confirmation, risk caps and unknown-outcome stops still apply.
+A refused pre-flight does not cancel those orders. The checks are a snapshot, not account locking.
+
 Watch the account and stop with Ctrl-C. Verify outstanding orders at the venue after any connection
 or cancellation failure. The bot refuses unavailable, stale or ambiguous execution; it cannot
 promise a successful cancel while disconnected. Never restart or delete risk state to escape an
