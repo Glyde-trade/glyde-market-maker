@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import signal
 import sys
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from . import __version__
 from .client import OneApiError
 from .config import load_config, write_config
 from .risk import RiskViolation
 from .runner import run as run_strategy
+from .version import build_identity
 
 
 async def run_with_signals(selected, state_directory: Path) -> None:
@@ -35,10 +35,7 @@ async def run_with_signals(selected, state_directory: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="glyde-mm", description="Glyde paper-first market maker")
-    try:
-        installed_version = version("glyde-market-maker")
-    except PackageNotFoundError:
-        installed_version = __version__
+    installed_version = build_identity()["version"]
     parser.add_argument("--version", action="version", version=f"glyde-mm {installed_version}")
     commands = parser.add_subparsers(dest="command", required=True)
     init = commands.add_parser("init", help="write a private paper configuration")
@@ -52,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
         run = commands.add_parser(name)
         run.add_argument("config_path", nargs="?")
         run.add_argument("--config", dest="config_option")
+    report = commands.add_parser("report", help="summarize private run logs for a support ticket")
+    report.add_argument("logdir", type=Path)
     for name in ("record", "replay"):
         history = commands.add_parser(name, help="capture/replay local public books in paper mode")
         history.add_argument("--config", dest="config_option", default="glyde-mm.yaml")
@@ -59,6 +58,11 @@ def main(argv: list[str] | None = None) -> int:
         history.add_argument("--book-file", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.command == "report":
+            from .report import summarize
+
+            print(json.dumps(summarize(args.logdir), indent=2, sort_keys=True))
+            return 0
         if args.command == "init":
             from .wizard import run_wizard
 

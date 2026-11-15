@@ -29,5 +29,8 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
+[tool.hatch.build]
+artifacts = ["src/glyde_mm/_build_info.json"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/glyde_mm"]

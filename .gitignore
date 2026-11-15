@@ -12,3 +12,5 @@ logs/
 glyde-mm.yaml
 
 .glyde-mm/
+
+src/glyde_mm/_build_info.json
