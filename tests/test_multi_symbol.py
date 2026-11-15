@@ -571,3 +571,17 @@ async def test_owner_refresh_waits_until_inflight_cancellation_is_resolved():
     await cancelling
     await refreshing
     assert reads == ["account"] and g.halted is None and g._execution is None
+
+
+@pytest.mark.parametrize("exposure", ["position", "pending", "open", "flat", "no_account"])
+def test_recovery_dependency_requires_actual_exposure(exposure):
+    g = guard()
+    if exposure == "position":
+        g.update_account(replace(g.account_state, positions={"ETH": D("0.1")}))
+    elif exposure == "pending":
+        g.pending["intent"] = OrderRequest("ETH", "buy", D("0.1"), D(9), "intent")
+    elif exposure == "open":
+        g.set_open_orders([OpenOrder("1", "ETH", "sell", D("0.1"), D(11))])
+    elif exposure == "no_account":
+        g.account_state = None
+    assert g.has_market_exposure("ETH") == (exposure != "flat")

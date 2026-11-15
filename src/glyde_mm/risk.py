@@ -335,6 +335,13 @@ class RiskGuard:
     def set_open_orders(self, orders: Sequence[OpenOrder | OrderRequest]) -> None:
         self.open_orders = list(orders)
 
+    def has_market_exposure(self, symbol: str) -> bool:
+        if self.account_state is None:
+            return True
+        return self.account_state.positions.get(symbol, Decimal(0)) != 0 or any(
+            order.symbol == symbol for order in (*self.pending.values(), *self.open_orders)
+        )
+
     def check_fresh(self, symbol: str) -> Book:
         if self.halted is not None:
             raise RiskViolation(self.halted)
