@@ -21,6 +21,7 @@ from glyde_mm.models import (
     OrderRequest,
     TradingClient,
 )
+from glyde_mm.risk import RiskViolation
 
 ZERO = Decimal("0")
 ONE = Decimal("1")
@@ -42,6 +43,7 @@ class StrategyContext:
     quantity_step: Decimal
     min_notional: Decimal = ZERO
     clock: Callable[[], float] = monotonic
+    quote_center: Callable[[Book], Decimal] | None = None
 
     def __post_init__(self) -> None:
         if not self.symbol:
@@ -72,8 +74,27 @@ class PureMarketMakingConfig:
     price_ceiling: Decimal | None = None
     price_floor: Decimal | None = None
     hanging_orders_enabled: bool = False
+    reference_source: str = "glyde"
+    reference_skew_bps: Decimal = ZERO
+    max_reference_deviation_bps: Decimal = Decimal("50")
+    reference_stale_seconds: Decimal = Decimal("3")
 
     def __post_init__(self) -> None:
+        if self.reference_source not in {"glyde", "hyperliquid"}:
+            raise ValueError("reference_source must be glyde or hyperliquid")
+        require_decimal(self.reference_skew_bps, "reference_skew_bps", minimum=Decimal("-1000"))
+        if self.reference_skew_bps > 1000:
+            raise ValueError("reference_skew_bps must be within -1000..1000")
+        for name, maximum in (
+            ("max_reference_deviation_bps", 1000),
+            ("reference_stale_seconds", 60),
+        ):
+            value = getattr(self, name)
+            require_decimal(value, name)
+            if not 0 < value <= maximum:
+                raise ValueError(f"{name} outside supported range")
+        if self.reference_source == "glyde" and self.reference_skew_bps != ZERO:
+            raise ValueError("fixed reference skew requires the hyperliquid reference")
         for name in (
             "bid_spread",
             "ask_spread",
@@ -184,10 +205,17 @@ class PureMarketMakingStrategy:
         self._needs_refresh = False
         self._lock = asyncio.Lock()
 
+    def _quote_mid(self, book: Book) -> Decimal | None:
+        if self.config.reference_source == "hyperliquid":
+            if self.context.quote_center is None:
+                raise RiskViolation("reference_unavailable")
+            return self.context.quote_center(book)
+        return book.mid
+
     def quotes(self, book: Book, account: Account) -> tuple[OrderRequest, ...]:
         if not valid_book(book, self.context.symbol):
             return ()
-        mid = book.mid
+        mid = self._quote_mid(book)
         assert mid is not None
         bid_ratio, ask_ratio = inventory_ratios(
             account.positions.get(book.symbol, ZERO), self.config
@@ -212,6 +240,11 @@ class PureMarketMakingStrategy:
                 price = mid * (ONE - distance if side == "buy" else ONE + distance)
                 order = quantized_order(self.context, side, price, amount * ratio)
                 if order is not None:
+                    if self.config.reference_source == "hyperliquid" and (
+                        (side == "buy" and order.price >= book.asks[0].price)
+                        or (side == "sell" and order.price <= book.bids[0].price)
+                    ):
+                        continue
                     orders.append(order)
         return tuple(orders)
 
@@ -239,7 +272,7 @@ class PureMarketMakingStrategy:
             self._needs_refresh = True
 
     def _must_replace(self, book: Book) -> bool:
-        mid = book.mid
+        mid = self._quote_mid(book)
         if mid is None:
             return True
         for order in self._active.values():

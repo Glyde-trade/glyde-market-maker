@@ -65,10 +65,12 @@ class RiskGuard:
         clock: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
         state_path: Path | None = None,
+        reference_check: Callable[[Book], Decimal] | None = None,
     ) -> None:
         self.limits = limits
         self.clock = clock
         self.wall_clock = wall_clock
+        self.reference_check = reference_check
         self.state_path = state_path
         self.books: dict[str, Book] = {}
         self.account_state: Account | None = None
@@ -244,6 +246,8 @@ class RiskGuard:
             raise RiskViolation("stale_book_source")
         if account is None or not 0 <= now - account.received_at <= self.limits.account_age_seconds:
             raise RiskViolation("stale_account")
+        if self.reference_check is not None:
+            self.reference_check(book)
         return book
 
     def validate_order(self, symbol: str, side: str, quantity: Decimal, price: Decimal) -> None:

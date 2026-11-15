@@ -82,6 +82,13 @@ def run_wizard(
         "GLYDE_API_PRIVATE_KEY",
         environment,
     )
+    reference_source = "glyde"
+    if strategy == "pure_market_making":
+        reference_source = ask(
+            "Quote center: glyde or hyperliquid public mid",
+            "glyde",
+            lambda value: choice(value, ("glyde", "hyperliquid")),
+        )
     values = {
         "mode": "paper",
         "symbol": market,
@@ -91,7 +98,12 @@ def run_wizard(
         "private_key_env": private_key_env,
         "read_api_key_env": "GLYDE_READ_API_KEY",
         "strategy_config": strategy_preset(
-            strategy, preset, Decimal(reference), Decimal(maximum_order), Decimal(maximum_position)
+            strategy,
+            preset,
+            Decimal(reference),
+            Decimal(maximum_order),
+            Decimal(maximum_position),
+            reference_source=reference_source,
         ),
         "risk": {
             "max_position": maximum_position,

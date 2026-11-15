@@ -192,6 +192,44 @@ nonzero movement; gaps reset it. Exponential sizing is adapted from
 balances. Shared risk checks, cancel-before-replace, unknown-outcome stops and
 paper limitations apply. It is not a promise of profitable or target-reaching fills.
 
+## Quote around a public Hyperliquid reference
+
+For **pure market making**, choose `hyperliquid` at the wizard's quote-center
+prompt, or try [examples/external-reference-paper.yaml](examples/external-reference-paper.yaml):
+
+```sh
+glyde-mm paper examples/external-reference-paper.yaml
+```
+
+This subscribes to the same coin's public Hyperliquid mainnet `l2Book` at
+`wss://api.hyperliquid.xyz/ws`, following its
+[public subscription protocol](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/subscriptions).
+No Glyde credential, owner address or signed action is sent to Hyperliquid.
+All orders, paper fills, balance reads and position/notional/loss caps stay on
+Glyde. This is a price-reference option, not trading or transferring on another venue.
+
+The quote center is `HL mid × (1 + reference_skew_bps / 10000)`. Zero skew centers
+on HL; positive skew shifts both quotes up, negative down. Bid/ask spreads and
+levels retain their normal fractional units. Orders stay post-only: a candidate
+that would cross the actual Glyde best bid/ask is omitted, not converted to a taker.
+Grid and Avellaneda variants retain their own pricing and refuse this option.
+
+The guard compares the **raw** mids using `abs(Glyde mid - HL mid) / HL mid × 10000`.
+Above `max_reference_deviation_bps`, missing/invalid/regressed HL data, source or
+arrival age over `reference_stale_seconds`, or a reference disconnect pulls quotes
+and stops the run. It never falls back to the Glyde mid or reconnects silently;
+inspect the cause before restarting. Freshness/deviation are checked again after
+private account/open-order awaits before reserving a new batch. Cancellation can
+fail or arrive after a fill, so this is not a loss or instantaneous-cancel guarantee.
+
+The paper wizard's Conservative/Balanced/Active reference presets use deviation
+caps of 25/50/100 bps, zero skew and a three-second reference-age bound. YAML stays
+editable and paper-only. Skew is bounded to ±1000 bps, deviation to 0–1000 bps
+(excluding zero), and reference age to 0–60 seconds (excluding zero). Use the exact
+coin name on both venues; there is no symbol inference or FX conversion. Doctor
+checks the Glyde feed, not reference availability. Single-source book replay has
+no HL history and stops with `reference_unavailable` rather than inventing it.
+
 ## Known limitations
 
 - Paper fills omit queue priority, fees, funding, margin and liquidation. Recorded-book
