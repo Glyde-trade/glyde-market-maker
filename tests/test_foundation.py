@@ -428,3 +428,34 @@ async def test_stream_can_be_closed_after_one_frame_without_exception_group():
         assert (await anext(stream))["channel"] == "trades"
         await stream.aclose()
         assert closed.is_set()
+
+async def test_paper_terminal_cancellation_requires_retained_own_proof():
+    paper = PaperExchange()
+    await paper.on_book(book())
+    placed = (await paper.place_orders([OrderRequest("BTC", "buy", D(1), D(99), CLOID)]))[0]
+    await paper.on_book(book("97", "98", time=1001))
+    for request in [
+        CancelRequest("BTC", order_id=placed.order_id),
+        CancelRequest("BTC", client_order_id=CLOID),
+    ]:
+        assert (await paper.cancel_orders([request]))[0].status == "already_closed"
+    for request in [
+        CancelRequest("BTC", order_id="paper-unknown"),
+        CancelRequest("ETH", order_id=placed.order_id),
+        CancelRequest("BTC", client_order_id="unknown"),
+    ]:
+        assert (await paper.cancel_orders([request]))[0].status == "rejected"
+
+
+async def test_paper_repeated_cancel_has_bounded_terminal_proof():
+    paper = PaperExchange()
+    await paper.on_book(book())
+    placed = (await paper.place_orders([OrderRequest("BTC", "buy", D(1), D(99))]))[0]
+    request = CancelRequest("BTC", order_id=placed.order_id)
+    assert (await paper.cancel_orders([request]))[0].status == "cancelled"
+    assert (await paper.cancel_orders([request]))[0].status == "already_closed"
+    for index in range(4097):
+        paper._remember_terminal(f"synthetic-{index}", OrderRequest("BTC", "buy", D(1), D(99)))
+    assert len(paper._terminal) == 4096
+    assert (await paper.cancel_orders([request]))[0].status == "rejected"
+
