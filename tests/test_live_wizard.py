@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import signal
 import socket
@@ -264,6 +265,22 @@ async def test_early_runner_exit_is_not_a_completed_preview(tmp_path, monkeypatc
 
     monkeypatch.setattr(cli, "run_strategy", runner)
     assert await cli.run_with_signals(config(), tmp_path, duration_seconds=120) is False
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_preview_interruption_wins_over_timer_during_cleanup(
+    tmp_path, monkeypatch, interrupted
+):
+    async def runner(*args, **kwargs):
+        if interrupted:
+            signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+        await kwargs["stop_event"].wait()
+        # Model slow cancellation/reporting; the original countdown expires here.
+        await asyncio.sleep(0.02)
+
+    monkeypatch.setattr(cli, "run_strategy", runner)
+    result = await cli.run_with_signals(config(), tmp_path, duration_seconds=0.005)
+    assert result is (not interrupted)
 
 
 def test_live_wizard_cli_routes_without_existing_run_confirmation(tmp_path, monkeypatch):
