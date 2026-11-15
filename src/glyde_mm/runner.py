@@ -15,6 +15,7 @@ from .config import Config
 from .models import Book
 from .paper import PaperExchange
 from .risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
+from .runlog import RunLog
 from .strategies import StrategyContext, create_strategy
 
 
@@ -62,6 +63,48 @@ async def run(
     strategy_factory: Callable = create_strategy,
     stop_event: asyncio.Event | None = None,
     report: Callable[[str], object] = print,
+) -> None:
+    with RunLog(state_directory / "logs", mode=config.mode, strategy=config.strategy) as journal:
+        report(f"GLYDE-MM {journal.identity['version']} commit={journal.identity['commit']}")
+        outcome = "completed"
+        try:
+            await _run_session(
+                config,
+                state_directory=state_directory,
+                client_factory=client_factory,
+                paper_factory=paper_factory,
+                strategy_factory=strategy_factory,
+                stop_event=stop_event,
+                report=report,
+                journal=journal,
+            )
+            if stop_event is not None and stop_event.is_set():
+                outcome = "stopped"
+        except BaseException as error:
+            outcome = (
+                "cancelled"
+                if isinstance(error, (asyncio.CancelledError, KeyboardInterrupt))
+                else "risk_stop"
+                if isinstance(error, RiskViolation)
+                else "transport_error"
+                if isinstance(error, OneApiError)
+                else "error"
+            )
+            raise
+        finally:
+            journal.emit("run_ended", outcome=outcome)
+
+
+async def _run_session(
+    config: Config,
+    *,
+    state_directory: Path = Path(".glyde-mm"),
+    client_factory: Callable = OneApiClient,
+    paper_factory: Callable = PaperExchange,
+    strategy_factory: Callable = create_strategy,
+    stop_event: asyncio.Event | None = None,
+    report: Callable[[str], object] = print,
+    journal: RunLog,
 ) -> None:
     if config.mode == "live":
         if not all(
@@ -130,10 +173,12 @@ async def run(
             strategy = strategy_factory(config.strategy, context, config.strategy_config)
             await strategy.on_book(initial)
             report(f"{config.mode.upper()} {config.symbol}: strategy started with risk limits")
+            journal.emit("strategy_started")
             fill_index = 0
+            book_messages = 1
 
             async def receive_books() -> None:
-                nonlocal fill_index
+                nonlocal fill_index, book_messages
                 async for frame in stream:
                     if frame.get("channel") != "l2Book":
                         continue
@@ -141,6 +186,7 @@ async def run(
                     if book.symbol != config.symbol:
                         raise OneApiError("book market mismatch")
                     guard.update_book(book)
+                    book_messages += 1
                     if config.mode == "paper":
                         await raw.on_book(book)
                         for fill in raw.fills[fill_index:]:
@@ -159,6 +205,7 @@ async def run(
             async def drive() -> None:
                 refreshed = 0.0
                 reported = None
+                logged = None
                 while not stop.is_set():
                     now = time.monotonic()
                     if now - refreshed >= min(2.0, limits.account_age_seconds / 2):
@@ -167,6 +214,14 @@ async def run(
                     if stop.is_set():
                         return
                     await strategy.on_tick()
+                    if logged is None or now - logged >= 2:
+                        journal.emit(
+                            "progress",
+                            book_messages=book_messages,
+                            pending_orders=len(guard.pending),
+                            paper_fills=len(raw.fills) if config.mode == "paper" else 0,
+                        )
+                        logged = now
                     if config.mode == "paper" and (reported is None or now - reported >= 2):
                         await report_paper_status(raw, config, report, risk_stop=guard.halted)
                         reported = now

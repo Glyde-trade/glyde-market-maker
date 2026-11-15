@@ -173,3 +173,13 @@ python -m pip install 'pip>=23' 'build>=1.2,<2'
 python -m build
 python scripts/check-wheel-install.py dist/*.whl
 ```
+
+### Run diagnostics
+
+Every paper or live run writes private, rotated JSONL diagnostics under the config
+directory's `.glyde-mm/logs/run-<id>/`. Each segment includes the package version
+and source commit (or `unknown` when the installation has no commit metadata).
+The runner prints that identity at startup. Each run keeps at most four 1 MiB
+segments; older run directories remain until you remove them. Diagnostics contain
+mode, strategy, event counts and a fixed exit category, never keys, addresses,
+balances, order bodies or raw errors. Directory permissions are 0700 and files 0600.
