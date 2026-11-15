@@ -61,12 +61,16 @@ async def run(
     stop = stop_event or asyncio.Event()
     async with client_factory(config) as source:
         raw = paper_factory(config.paper_balance) if config.mode == "paper" else source
-        managed = RiskManagedClient(raw, guard)
+        managed = RiskManagedClient(raw, guard, stop_event=stop)
         strategy = None
         stream = None
         tasks: list[asyncio.Task] = []
         try:
+            if stop.is_set():
+                return
             metadata = await source.meta()
+            if stop.is_set():
+                return
             market = next(
                 (row for row in metadata["universe"] if row["name"] == config.symbol), None
             )
@@ -81,6 +85,8 @@ async def run(
             async with asyncio.timeout(10):
                 while True:
                     frame = await anext(stream)
+                    if stop.is_set():
+                        return
                     if frame.get("channel") == "l2Book":
                         initial = book_from_wire(frame["data"])
                         if initial.symbol != config.symbol:
@@ -90,6 +96,8 @@ async def run(
             if config.mode == "paper":
                 await raw.on_book(initial)
             guard.update_account(await raw.account())
+            if stop.is_set():
+                return
             guard.check_fresh(config.symbol)
             context = StrategyContext(
                 managed,
@@ -128,11 +136,13 @@ async def run(
 
             async def drive() -> None:
                 refreshed = 0.0
-                while True:
+                while not stop.is_set():
                     now = time.monotonic()
                     if now - refreshed >= min(2.0, limits.account_age_seconds / 2):
                         guard.update_account(await raw.account())
                         refreshed = now
+                    if stop.is_set():
+                        return
                     await strategy.on_tick()
                     await asyncio.sleep(0.25)
 
@@ -150,8 +160,13 @@ async def run(
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 if task is not tasks[-1]:
-                    task.result()
-                    raise OneApiError("strategy task exited unexpectedly")
+                    try:
+                        task.result()
+                    except RiskViolation as error:
+                        if not stop.is_set() or str(error) != "client_closed":
+                            raise
+                    if not stop.is_set():
+                        raise OneApiError("strategy task exited unexpectedly")
         finally:
             for task in tasks:
                 task.cancel()

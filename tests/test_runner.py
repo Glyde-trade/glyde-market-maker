@@ -244,3 +244,41 @@ async def test_cli_installs_signal_driven_shutdown_without_sending_real_signals(
     monkeypatch.setattr(cli, "run_strategy", fake_run)
     await cli.run_with_signals(config(), tmp_path)
     assert set(restored) == {signal.SIGTERM, signal.SIGINT}
+
+
+@pytest.mark.parametrize("stage", ["preset", "initial_book", "account"])
+async def test_stop_fences_bootstrap_before_any_quote_but_preserves_cleanup(tmp_path, stage):
+    stop, placed = asyncio.Event(), asyncio.Event()
+    if stage == "preset":
+        stop.set()
+    selected = config()
+
+    class StopSource(Source):
+        async def stream(self, subscriptions):
+            async for frame in super().stream(subscriptions):
+                if stage == "initial_book" and frame.get("channel") == "l2Book":
+                    stop.set()
+                yield frame
+
+    class StopPaper(Paper):
+        async def account(self):
+            result = await super().account()
+            if stage == "account":
+                stop.set()
+            return result
+
+    source = StopSource(selected, stop=stop, placed=placed)
+    paper = StopPaper(selected.paper_balance, stop=stop, placed=placed)
+    await asyncio.wait_for(
+        run(
+            selected,
+            state_directory=tmp_path,
+            client_factory=lambda _: source,
+            paper_factory=lambda _: paper,
+            stop_event=stop,
+            report=lambda _: None,
+        ),
+        2,
+    )
+    assert paper.submissions == source.live_orders == []
+    assert paper.cancellations == 1
