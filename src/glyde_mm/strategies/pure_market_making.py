@@ -401,6 +401,7 @@ class PureMarketMakingStrategy:
                 self.config.price_floor is not None or self.config.price_ceiling is not None
             ):
                 mid = self._quote_mid(book)
+                assert mid is not None
                 band = (
                     self.config.price_floor is not None and mid <= self.config.price_floor,
                     self.config.price_ceiling is not None and mid >= self.config.price_ceiling,

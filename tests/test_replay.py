@@ -113,6 +113,18 @@ def test_window_selects_exact_last_minute_and_refuses_missing_or_wrong_data(tmp_
         read_window(path, "BTC", 1)
 
 
+@pytest.mark.parametrize("receipt", [str(BASE), BASE + 0.5, True, False])
+def test_window_refuses_coerced_receipt_timestamps(tmp_path, receipt):
+    path = recording(tmp_path / "books.jsonl")
+    lines = path.read_text().splitlines()
+    row = json.loads(lines[1])
+    row["received_at_ms"] = receipt
+    lines[1] = json.dumps(row)
+    path.write_text("\n".join(lines))
+    with pytest.raises(ValueError, match="invalid recorded timestamps"):
+        read_window(path, "BTC", 1)
+
+
 async def test_recorder_is_public_only_exclusive_and_preserves_source_times(tmp_path, monkeypatch):
     import glyde_mm.book_history as history
 

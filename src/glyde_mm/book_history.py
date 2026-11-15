@@ -82,7 +82,7 @@ async def record_books(
                         handle.write(json.dumps(row) + "\n")
                         handle.flush()
                         count += 1
-                        receipt = int(row["received_at_ms"])
+                        receipt = row["received_at_ms"]
                         if first_receipt is None:
                             first_receipt = receipt
                         if receipt - first_receipt >= minutes * 60000:
@@ -126,7 +126,7 @@ def _read_window(path: Path, symbol: str, minutes: int) -> tuple[int, int, list[
             row = json.loads(line)
             if not isinstance(row, dict) or not isinstance(row.get("book"), dict):
                 raise ValueError("malformed book recording")
-            receipt = int(row["received_at_ms"])
+            receipt = row["received_at_ms"]
             data = row["book"]
             if type(receipt) is not int or receipt < 0 or type(data["time"]) is not int:
                 raise ValueError("invalid recorded timestamps")
