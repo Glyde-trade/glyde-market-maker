@@ -170,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
             from .shutdown import stop_bot
 
             result, path = asyncio.run(stop_bot(selected, config_path.parent / ".glyde-mm"))
-            print(f"STOP {selected.symbol}: {result['outcome']} | report={path}")
+            print(f"STOP {','.join(selected.symbols)}: {result['outcome']} | report={path}")
             if result["outcome"] != "stopped":
                 print(
                     "Cancellation NOT confirmed; check the venue before restarting.",
@@ -188,11 +188,11 @@ def main(argv: list[str] | None = None) -> int:
             print("Daily loss is an equity stop threshold, not a guaranteed maximum loss.")
             print("Cleanup can cancel other orders in this account; use a dedicated account.")
             try:
-                confirmed = input(f"Type {selected.symbol} to confirm LIVE trading: ")
+                confirmed = input(f"Type {','.join(selected.symbols)} to confirm LIVE trading: ")
             except EOFError:
                 print("Live start cancelled: symbol confirmation is required.", file=sys.stderr)
                 return 1
-            if confirmed != selected.symbol:
+            if confirmed != ",".join(selected.symbols):
                 print("Live start cancelled: symbol confirmation did not match.", file=sys.stderr)
                 return 1
         asyncio.run(

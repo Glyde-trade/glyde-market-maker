@@ -14,9 +14,15 @@ class LivePreflightRefused(RiskViolation):
 
 
 def summary(config: Config) -> str:
+    caps = (
+        str(config.risk.max_position)
+        if not config.markets
+        else ",".join(f"{m.symbol}:{m.risk.max_position}" for m in config.market_configs())
+    )
     return (
-        f"PRE-FLIGHT | mode={config.mode.upper()} | symbol={config.symbol}"
-        f" | max_position={config.risk.max_position} base"
+        f"PRE-FLIGHT | mode={config.mode.upper()} | symbol={','.join(config.symbols)}"
+        f" | max_position={caps} base"
+        f" | max_total_notional={config.risk.max_total_notional or 'not configured'} USDC"
         f" | max_order_notional={config.risk.max_order_notional} USDC"
         f" | max_daily_loss={config.risk.max_daily_loss} USDC"
         f" | book_age={config.risk.stale_book_seconds}s"
@@ -25,13 +31,16 @@ def summary(config: Config) -> str:
 
 
 async def check_live_exposure(
-    source: TradingClient, symbol: str, *, allow_existing_exposure: bool = False
+    source: TradingClient, symbol: str | tuple[str, ...], *, allow_existing_exposure: bool = False
 ) -> None:
     account = await source.account()
     orders = await source.open_orders()
-    position = account.positions.get(symbol, Decimal(0))
-    if not isinstance(position, Decimal) or not position.is_finite():
+    symbols = (symbol,) if isinstance(symbol, str) else symbol
+    positions = [account.positions.get(key, Decimal(0)) for key in symbols]
+    if any(not isinstance(position, Decimal) or not position.is_finite() for position in positions):
         raise RiskViolation("invalid_account")
-    occupied = position != 0 or any(order.symbol == symbol for order in orders)
+    occupied = any(position != 0 for position in positions) or any(
+        order.symbol in symbols for order in orders
+    )
     if occupied and allow_existing_exposure is not True:
         raise LivePreflightRefused("existing_symbol_exposure")
