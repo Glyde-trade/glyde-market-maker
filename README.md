@@ -1,5 +1,7 @@
 # Glyde Market Maker
 
+[![CI](https://github.com/Glyde-trade/glyde-market-maker/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Glyde-trade/glyde-market-maker/actions/workflows/ci.yml)
+
 A paper-first market maker for Glyde's One API. Python 3.11+, one YAML file and one command.
 Strategy designs are adapted from [Hummingbot](https://github.com/hummingbot/hummingbot)
 (Apache-2.0); see [NOTICE](NOTICE).
@@ -19,6 +21,13 @@ registered account permissions and credentials. Refused or ambiguous actions sto
 Follow [Your first market maker in 10 minutes](docs/first-market-maker.md) for the paper → report →
 small-live workflow. See the [strategy chooser](docs/strategies.md#strategy-chooser) and
 [risk-limit FAQ](docs/risk-limits.md) before changing a config.
+
+Browse the five commented [paper configs in the gallery](configs/gallery/README.md), or
+[contribute a bug report, strategy idea or PR](CONTRIBUTING.md).
+
+> **Quickstart GIF — placeholder:** a captioned paper-mode `init → doctor → paper → Ctrl-C → report`
+> recording will go here. No demo recording is attached yet; use the
+> [text tutorial](docs/first-market-maker.md).
 
 ## Start in five minutes
 

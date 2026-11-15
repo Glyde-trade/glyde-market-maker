@@ -1,0 +1,22 @@
+# PAPER: 1% per-side spreads and slower refresh; zero fills may be normal.
+# Wider quotes do not guarantee lower losses or fills at the chosen prices.
+# Values are illustrative; prices move and all pending orders count toward risk caps.
+base_url: https://api.glyde.trade/v1
+mode: paper
+paper_balance: '1000'
+risk:
+  account_age_seconds: '10'
+  max_daily_loss: '5'
+  max_order_notional: '25'
+  max_position: '0.001'
+  stale_book_seconds: '5'
+strategy: pure_market_making
+strategy_config:
+  ask_spread: '0.01'
+  bid_spread: '0.01'
+  hanging_orders_enabled: false
+  minimum_spread: '0.01'
+  order_amount: '0.0001'
+  order_levels: 1
+  order_refresh_time: 90
+symbol: BTC

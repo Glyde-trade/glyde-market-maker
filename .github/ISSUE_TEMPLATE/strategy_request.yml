@@ -1,0 +1,47 @@
+name: Strategy request
+description: Propose a bounded strategy or explain a missing paper experiment.
+title: '[Strategy]: '
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with a reproducible paper experiment, not a profit promise or a funded account.
+        Please do not include credentials, private account details or signed requests.
+  - type: input
+    id: name
+    attributes:
+      label: Strategy or behavior
+      placeholder: A new quote rule, sizing rule or extension to an existing strategy
+    validations:
+      required: true
+  - type: textarea
+    id: use_case
+    attributes:
+      label: What experiment should this enable?
+      description: Explain why PMM, Avellaneda, inventory-skewed quoting or grid does not cover it.
+    validations:
+      required: true
+  - type: textarea
+    id: rules
+    attributes:
+      label: Quote and inventory rules
+      description: Describe inputs, parameters, placement, refresh and cancellation behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: risk
+    attributes:
+      label: Risk boundaries
+      description: Explain how position/notional caps, stale data and ambiguous outcomes remain bounded.
+    validations:
+      required: true
+  - type: textarea
+    id: offline_example
+    attributes:
+      label: Offline example
+      description: Give a small book/position example and expected quotes, or a public recording.
+  - type: textarea
+    id: references
+    attributes:
+      label: References and license
+      description: Link public designs or upstream code, with license/attribution when adapting code.
