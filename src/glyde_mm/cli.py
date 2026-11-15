@@ -30,6 +30,7 @@ async def run_with_signals(
     previous = {}
     timer = None
     automatic = False
+    interrupted = False
 
     def automatic_stop() -> None:
         nonlocal automatic
@@ -37,6 +38,8 @@ async def run_with_signals(
         stop.set()
 
     def request_stop(*_: object) -> None:
+        nonlocal interrupted
+        interrupted = True
         loop.call_soon_threadsafe(stop.set)
 
     try:
@@ -54,7 +57,7 @@ async def run_with_signals(
             allow_existing_exposure=allow_existing_exposure,
             **options,
         )
-        return duration_seconds is None or automatic
+        return duration_seconds is None or (automatic and not interrupted)
     finally:
         if timer is not None:
             timer.cancel()
