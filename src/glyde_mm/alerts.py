@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -123,6 +124,17 @@ async def _send(client: httpx.AsyncClient, endpoint: str, payload: dict[str, str
     return False
 
 
+def _warn(report: Callable[[str], object], message: str) -> None:
+    try:
+        report(message)
+    except Exception:
+        try:
+            print("Chat alert status unavailable; inspect local reports.", file=sys.stderr)
+        except Exception:
+            # Broken diagnostic channels must not replace the trading outcome.
+            return
+
+
 async def notify_session(
     config: Config,
     run_id: str,
@@ -137,7 +149,7 @@ async def notify_session(
         return
     endpoint = _endpoint(config)
     if endpoint is None:
-        report("Chat alerts unavailable: check the private webhook environment variable.")
+        _warn(report, "Chat alerts unavailable: check the private webhook environment variable.")
         return
     delivered = True
     try:
@@ -164,4 +176,7 @@ async def notify_session(
     except Exception:
         delivered = False
     if not delivered:
-        report("Chat alert delivery incomplete; trading outcome is unchanged. Check local reports.")
+        _warn(
+            report,
+            "Chat alert delivery incomplete; trading outcome is unchanged. Check local reports.",
+        )

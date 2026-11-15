@@ -305,3 +305,39 @@ async def test_failed_webhook_does_not_replace_original_runner_error(tmp_path, m
             Config(alerts_enabled=True), state_directory=tmp_path, report=lambda _: None
         )
     assert caught.value is original
+
+
+@pytest.mark.parametrize("missing", [False, True])
+async def test_failed_warning_sink_does_not_escape_or_print_secret(missing, monkeypatch, capsys):
+    if missing:
+        monkeypatch.delenv("GLYDE_MM_ALERT_WEBHOOK")
+
+    async def refuse(_):
+        raise httpx.ConnectError(WEBHOOK)
+
+    async def no_backoff(_):
+        pass
+
+    def broken(_):
+        raise BrokenPipeError(WEBHOOK)
+
+    monkeypatch.setattr(alerts.asyncio, "sleep", no_backoff)
+    await alerts.notify_session(
+        Config(alerts_enabled=True),
+        "run",
+        "risk_stop",
+        RiskViolation("daily_loss"),
+        transport=httpx.MockTransport(refuse),
+        report=broken,
+    )
+    output = capsys.readouterr()
+    assert "Chat alert status unavailable" in output.err
+    assert WEBHOOK not in output.out + output.err
+
+
+def test_both_diagnostic_channels_can_fail_without_masking_outcome(monkeypatch):
+    def broken(*args, **kwargs):
+        raise BrokenPipeError(WEBHOOK)
+
+    monkeypatch.setattr("builtins.print", broken)
+    alerts._warn(broken, "delivery failed")
