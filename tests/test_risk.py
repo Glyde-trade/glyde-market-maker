@@ -526,3 +526,103 @@ def test_failed_state_clear_after_reply_retains_durable_original(tmp_path, monke
         assert restarted.halted == "order_outcome_unknown"
 
     asyncio.run(scenario())
+
+
+def test_order_rate_window_counts_orders_and_survives_restart(tmp_path):
+    path = tmp_path / "risk.json"
+    g, now = guard(path)
+    g.limits = RiskLimits(max_orders_per_minute=3)
+    g.consume_order_rate(2)
+    now[1] += 30
+    now[0] += 30
+    g.consume_order_rate(1)
+    restored = RiskGuard(g.limits, wall_clock=lambda: now[1], state_path=path)
+    with pytest.raises(RiskViolation, match="order_rate_limit"):
+        restored.consume_order_rate(1)
+    # At exactly 60 seconds only the first batch expires; retained attempts still count.
+    now[1] += 30
+    restored = RiskGuard(g.limits, wall_clock=lambda: now[1], state_path=path)
+    restored.consume_order_rate(2)
+    with pytest.raises(RiskViolation, match="order_rate_limit"):
+        restored.consume_order_rate(1)
+
+
+async def test_order_rate_cap_prevents_whole_batch_dispatch_and_allows_cancel():
+    g, _ = guard()
+    g.limits = RiskLimits(max_position=D(1), max_orders_per_minute=1)
+    raw = FakeClient()
+    managed = RiskManagedClient(raw, g)
+    with pytest.raises(RiskViolation, match="order_rate_limit"):
+        await managed.place_orders([Order(quantity=D("0.01")), Order(quantity=D("0.01"))])
+    assert raw.placed == []
+    assert g.pending == {}
+    assert g.halted == "order_rate_limit"
+    assert raw.all_cancels == 1
+    await managed.cancel_orders([Cancel(order_id="known")])
+    assert raw.cancelled[-1].order_id == "known"
+
+
+async def test_rejected_orders_and_cancellations_do_not_refund_rate():
+    g, _ = guard()
+    g.limits = RiskLimits(max_position=D(1), max_orders_per_minute=1)
+    raw = FakeClient()
+    raw.result = "rejected"
+    managed = RiskManagedClient(raw, g)
+    await managed.place_orders([Order(quantity=D("0.01"))])
+    await managed.cancel_all()
+    with pytest.raises(RiskViolation, match="order_rate_limit"):
+        await managed.place_orders([Order(quantity=D("0.01"))])
+    assert len(raw.placed) == 1
+
+
+async def test_unknown_order_still_consumes_rate_and_preserves_execution_quarantine(tmp_path):
+    path = tmp_path / "risk.json"
+    g, _ = guard(path)
+    raw = FakeClient()
+    raw.result = "timeout"
+    with pytest.raises(TimeoutError):
+        await RiskManagedClient(raw, g).place_orders([Order(quantity=D("0.01"))])
+    restored = RiskGuard(g.limits, wall_clock=lambda: 1_700_000_000.0, state_path=path)
+    assert len(restored._order_attempts) == 1
+    assert restored.halted == "order_outcome_unknown"
+
+
+def test_order_rate_refuses_backwards_clock_and_invalid_saved_clock(tmp_path):
+    path = tmp_path / "risk.json"
+    g, now = guard(path)
+    g.consume_order_rate(1)
+    now[1] -= 1
+    with pytest.raises(RiskViolation, match="order_rate_clock"):
+        g.consume_order_rate(1)
+    with pytest.raises(RiskViolation, match="risk_state_unavailable"):
+        RiskGuard(g.limits, wall_clock=lambda: now[1], state_path=path)
+
+
+@pytest.mark.parametrize("cap", [True, 0, -1, 1.5, 6001, "60"])
+def test_invalid_order_rate_caps_refuse(cap):
+    with pytest.raises(ValueError, match="max_orders_per_minute"):
+        RiskLimits(max_orders_per_minute=cap)
+
+
+def test_wall_clock_jump_does_not_release_in_process_rate_budget():
+    g, now = guard()
+    g.limits = RiskLimits(max_orders_per_minute=1)
+    g.consume_order_rate(1)
+    now[1] += 3600
+    with pytest.raises(RiskViolation, match="order_rate_limit"):
+        g.consume_order_rate(1)
+
+
+async def test_rate_timestamp_is_consumed_after_private_snapshot_awaits():
+    g, now = guard()
+    raw = FakeClient()
+    original = raw.open_orders
+
+    async def delayed_snapshot():
+        now[0] += 1
+        now[1] += 1
+        return await original()
+
+    raw.open_orders = delayed_snapshot
+    await RiskManagedClient(raw, g).place_orders([Order(quantity=D("0.01"))])
+    assert g._order_attempts == [1_700_000_001.0]

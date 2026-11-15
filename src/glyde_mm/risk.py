@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import secrets
 import tempfile
@@ -40,8 +41,14 @@ class RiskLimits:
     max_daily_loss: Decimal = Decimal("5")
     stale_book_seconds: float = 3.0
     account_age_seconds: float = 10.0
+    max_orders_per_minute: int = 60
 
     def __post_init__(self) -> None:
+        if (
+            type(self.max_orders_per_minute) is not int
+            or not 1 <= self.max_orders_per_minute <= 6000
+        ):
+            raise ValueError("max_orders_per_minute must be an integer in 1..6000")
         for name in ("max_position", "max_order_notional", "max_daily_loss"):
             value = getattr(self, name)
             if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
@@ -80,6 +87,9 @@ class RiskGuard:
         self._day: str | None = None
         self._equity_start: Decimal | None = None
         self._execution: dict | None = None
+        self._order_attempts: list[float] = []
+        self._last_rate_clock: float | None = None
+        self._rate_monotonic: list[float] = []
         if state_path is not None and state_path.exists():
             try:
                 data = json.loads(state_path.read_text())
@@ -92,6 +102,22 @@ class RiskGuard:
                     data["loss_halted"] and self._equity_start is None
                 ):
                     raise ValueError("invalid risk state")
+                self._order_attempts = data.get("order_attempts", [])
+                if (
+                    not isinstance(self._order_attempts, list)
+                    or len(self._order_attempts) > 6000
+                    or any(
+                        type(stamp) not in (int, float) or not math.isfinite(stamp) or stamp < 0
+                        for stamp in self._order_attempts
+                    )
+                    or self._order_attempts != sorted(self._order_attempts)
+                    or (self._order_attempts and self._order_attempts[-1] > self.wall_clock())
+                ):
+                    raise ValueError("invalid order rate state")
+                wall, clock = self.wall_clock(), self.clock()
+                self._rate_monotonic = [
+                    clock - min(60, wall - stamp) for stamp in self._order_attempts
+                ]
                 self._execution = data.get("execution")
                 if self._execution is not None:
                     self._validate_execution(self._execution)
@@ -123,6 +149,35 @@ class RiskGuard:
                 )
             ):
                 raise ValueError("invalid execution identity")
+
+    def consume_order_rate(self, count: int) -> None:
+        if type(count) is not int or count <= 0:
+            raise ValueError("order count must be a positive integer")
+        now, clock = self.wall_clock(), self.clock()
+        if (
+            not math.isfinite(now)
+            or now < 0
+            or not math.isfinite(clock)
+            or (self._last_rate_clock is not None and clock < self._last_rate_clock)
+            or (self._order_attempts and now < self._order_attempts[-1])
+        ):
+            self.halted = "order_rate_clock"
+            raise RiskViolation(self.halted)
+        self._last_rate_clock = clock
+        retained = [
+            (wall, mono)
+            for wall, mono in zip(self._order_attempts, self._rate_monotonic, strict=True)
+            if wall > now - 60 or mono > clock - 60
+        ]
+        self._order_attempts = [wall for wall, _ in retained]
+        self._rate_monotonic = [mono for _, mono in retained]
+        if len(self._order_attempts) + count > self.limits.max_orders_per_minute:
+            self.halted = "order_rate_limit"
+            raise RiskViolation(self.halted)
+        # Persist the entire batch before dispatch; rejects and cancellations never refund it.
+        self._order_attempts.extend([now] * count)
+        self._rate_monotonic.extend([clock] * count)
+        self._persist()
 
     def begin_execution(self, reason: str, originals: Sequence) -> bool:
         if self._execution is not None:
@@ -171,6 +226,7 @@ class RiskGuard:
                         else None,
                         "loss_halted": self.halted == "daily_loss",
                         "execution": self._execution,
+                        "order_attempts": self._order_attempts,
                     },
                     handle,
                 )
@@ -381,6 +437,7 @@ class RiskManagedClient:
                 for order in prepared:
                     self.guard.reserve(order)
                     reserved.append(order.client_order_id)
+                self.guard.consume_order_rate(len(prepared))
             except BaseException:
                 for key in reserved:
                     self.guard.pending.pop(key, None)

@@ -30,6 +30,7 @@ class RiskConfig:
     max_daily_loss: Decimal = Decimal("5")
     stale_book_seconds: Decimal = Decimal("5")
     account_age_seconds: Decimal = Decimal("10")
+    max_orders_per_minute: int = 60
 
 
 @dataclass(frozen=True)
@@ -68,8 +69,13 @@ class Config:
             raise ValueError("invalid symbol")
         if self.paper_balance <= 0 or not self.paper_balance.is_finite():
             raise ValueError("paper_balance must be positive")
-        for value in vars(self.risk).values():
-            if not value.is_finite() or value <= 0:
+        cap = self.risk.max_orders_per_minute
+        if type(cap) is not int or not 1 <= cap <= 6000:
+            raise ValueError("max_orders_per_minute must be an integer in 1..6000")
+        for name, value in vars(self.risk).items():
+            if name == "max_orders_per_minute":
+                continue
+            if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
                 raise ValueError("risk limits must be finite and positive")
 
     def secret(self, name: str) -> str:
@@ -91,7 +97,12 @@ def load_config(path: str | Path) -> Config:
     risk = raw.pop("risk", {})
     if not isinstance(risk, dict) or set(risk) - set(RiskConfig.__dataclass_fields__):
         raise ValueError("invalid risk configuration")
-    raw["risk"] = RiskConfig(**{key: decimal(value) for key, value in risk.items()})
+    raw["risk"] = RiskConfig(
+        **{
+            key: value if key == "max_orders_per_minute" else decimal(value)
+            for key, value in risk.items()
+        }
+    )
     if "paper_balance" in raw:
         raw["paper_balance"] = decimal(raw["paper_balance"])
     if "mainnet" in raw and not isinstance(raw["mainnet"], bool):
@@ -110,7 +121,10 @@ def write_config(path: str | Path) -> None:
         "paper_balance": "10000",
         "private_key_env": "GLYDE_API_PRIVATE_KEY",
         "read_api_key_env": "GLYDE_READ_API_KEY",
-        "risk": {key: str(value) for key, value in vars(RiskConfig()).items()},
+        "risk": {
+            key: value if key == "max_orders_per_minute" else str(value)
+            for key, value in vars(RiskConfig()).items()
+        },
     }
     # Exclusive creation prevents overwriting an existing configuration.
     with open(path, "x", opener=lambda name, flags: os.open(name, flags, 0o600)) as target:

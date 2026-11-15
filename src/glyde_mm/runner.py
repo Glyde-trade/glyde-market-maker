@@ -134,6 +134,7 @@ async def _run_session(
         max_position=config.risk.max_position,
         max_order_notional=config.risk.max_order_notional,
         max_daily_loss=config.risk.max_daily_loss,
+        max_orders_per_minute=config.risk.max_orders_per_minute,
         stale_book_seconds=float(config.risk.stale_book_seconds),
         account_age_seconds=float(config.risk.account_age_seconds),
     )
