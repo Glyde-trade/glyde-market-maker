@@ -567,6 +567,16 @@ credential reads and private requests. See the [fixture provenance](tests/fixtur
 the initial recording is synthetic, so these checks catch client wire regressions
 without claiming the production service is reachable or qualified.
 
+## Type checking
+
+Install development tools with `python -m pip install -e '.[dev]'`, then run
+`mypy --strict src/glyde_mm`. CI checks every source module on its Python matrix;
+there are no source exclusions or per-module relaxations. Dynamic JSON/YAML values
+are typed at the wire/config boundary, while exchange models, transport injection
+and strategy callbacks retain explicit types. The untyped third-party Hyperliquid
+SDK import is the only external import exception. Wheels include the PEP 561
+`py.typed` marker, checked by the package installation script.
+
 ### PMM ping-pong, bands and ladders
 
 ```sh

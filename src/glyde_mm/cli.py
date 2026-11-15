@@ -8,17 +8,22 @@ import json
 import signal
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 from .client import OneApiError
-from .config import load_config, write_config
+from .config import Config, load_config, write_config
 from .preflight import LivePreflightRefused, summary
 from .risk import RiskViolation
 from .runner import run as run_strategy
 from .version import build_identity
 
 
+class _LogOptions(TypedDict, total=False):
+    log_directory: Path
+
+
 async def run_with_signals(
-    selected,
+    selected: Config,
     state_directory: Path,
     *,
     allow_existing_exposure: bool = False,
@@ -49,7 +54,7 @@ async def run_with_signals(
             if not 0 < duration_seconds <= 1800:
                 raise ValueError("session duration must be in 0..1800 seconds")
             timer = loop.call_later(duration_seconds, automatic_stop)
-        options = {"log_directory": log_directory} if log_directory is not None else {}
+        options: _LogOptions = {"log_directory": log_directory} if log_directory is not None else {}
         await run_strategy(
             selected,
             state_directory=state_directory,
@@ -183,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 from .replay import replay
 
-                result = asyncio.run(
+                replay_result = asyncio.run(
                     replay(
                         selected,
                         args.book_file,
@@ -192,10 +197,11 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
                 print(
-                    f"PAPER REPLAY | inventory={result.inventory:f}"
-                    f" | simulated_pnl={result.pnl:+f} USDC | fills={result.fills}"
-                    f" | risk_stop={result.risk_stop or 'none'}"
-                    f" | simulated_seconds={(result.end_ms - result.start_ms) / 1000:g}"
+                    f"PAPER REPLAY | inventory={replay_result.inventory:f}"
+                    f" | simulated_pnl={replay_result.pnl:+f} USDC | fills={replay_result.fills}"
+                    f" | risk_stop={replay_result.risk_stop or 'none'}"
+                    f" | simulated_seconds="
+                    f"{(replay_result.end_ms - replay_result.start_ms) / 1000:g}"
                 )
                 print("Quotes cancelled. Simulation excludes fees, funding and queue priority.")
             return 0
@@ -214,9 +220,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "stop":
             from .shutdown import stop_bot
 
-            result, path = asyncio.run(stop_bot(selected, config_path.parent / ".glyde-mm"))
-            print(f"STOP {','.join(selected.symbols)}: {result['outcome']} | report={path}")
-            if result["outcome"] != "stopped":
+            stop_result, path = asyncio.run(stop_bot(selected, config_path.parent / ".glyde-mm"))
+            print(f"STOP {','.join(selected.symbols)}: {stop_result['outcome']} | report={path}")
+            if stop_result["outcome"] != "stopped":
                 print(
                     "Cancellation NOT confirmed; check the venue before restarting.",
                     file=sys.stderr,

@@ -8,10 +8,12 @@ import os
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 from .client import OneApiClient, book_from_wire
 from .config import Config
 from .models import Book
+from .transport import ClientFactory
 
 
 @dataclass(frozen=True)
@@ -26,7 +28,7 @@ def check_minutes(minutes: int) -> None:
 
 
 async def record_books(
-    config: Config, output: Path, minutes: int, *, client_factory=OneApiClient
+    config: Config, output: Path, minutes: int, *, client_factory: ClientFactory = OneApiClient
 ) -> int:
     if config.markets:
         raise ValueError("record/replay requires a single-symbol configuration")
@@ -66,7 +68,7 @@ async def record_books(
                         if book.symbol != config.symbol:
                             raise ValueError("book market mismatch")
                         # Only public depth fields are retained, never arbitrary envelope metadata.
-                        row = {
+                        row: dict[str, Any] = {
                             "received_at_ms": time.time_ns() // 1_000_000,
                             "book": {
                                 "coin": book.symbol,
@@ -101,7 +103,7 @@ def _read_window(path: Path, symbol: str, minutes: int) -> tuple[int, int, list[
     check_minutes(minutes)
     if path.stat().st_size > 256 * 1024 * 1024:
         raise ValueError("book recording exceeds 256 MiB")
-    observations = []
+    observations: list[Observation] = []
     with path.open() as handle:
         header = json.loads(handle.readline(1024))
         if not isinstance(header, dict):

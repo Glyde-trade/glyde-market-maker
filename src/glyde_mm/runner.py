@@ -24,7 +24,9 @@ from .risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
 from .runlog import RunLog
 from .shutdown import RunnerControl
 from .strategies import StrategyContext, create_strategy
-from .strategies.factory import validate_strategy_config
+from .strategies.factory import Strategy, validate_strategy_config
+from .strategies.pure_market_making import PureMarketMakingConfig
+from .transport import ClientFactory, JsonObject
 
 
 def risk_state_path(config: Config, directory: Path) -> Path:
@@ -66,10 +68,10 @@ async def run(
     config: Config,
     *,
     state_directory: Path = Path(".glyde-mm"),
-    client_factory: Callable = OneApiClient,
-    reference_factory: Callable = OneApiClient,
-    paper_factory: Callable = PaperExchange,
-    strategy_factory: Callable = create_strategy,
+    client_factory: ClientFactory = OneApiClient,
+    reference_factory: ClientFactory = OneApiClient,
+    paper_factory: Callable[[Decimal], PaperExchange] = PaperExchange,
+    strategy_factory: Callable[[str, StrategyContext, JsonObject], Strategy] = create_strategy,
     stop_event: asyncio.Event | None = None,
     report: Callable[[str], object] = print,
     allow_existing_exposure: bool = False,
@@ -129,10 +131,10 @@ async def _run_session(
     config: Config,
     *,
     state_directory: Path = Path(".glyde-mm"),
-    client_factory: Callable = OneApiClient,
-    reference_factory: Callable = OneApiClient,
-    paper_factory: Callable = PaperExchange,
-    strategy_factory: Callable = create_strategy,
+    client_factory: ClientFactory = OneApiClient,
+    reference_factory: ClientFactory = OneApiClient,
+    paper_factory: Callable[[Decimal], PaperExchange] = PaperExchange,
+    strategy_factory: Callable[[str, StrategyContext, JsonObject], Strategy] = create_strategy,
     stop_event: asyncio.Event | None = None,
     report: Callable[[str], object] = print,
     journal: RunLog,
@@ -148,7 +150,7 @@ async def _run_session(
             raise ValueError(
                 "ping-pong requires paper tape fills until live fill delivery is qualified"
             )
-        if getattr(policy, "reference_source", "glyde") == "hyperliquid":
+        if isinstance(policy, PureMarketMakingConfig) and policy.reference_source == "hyperliquid":
             references[symbol] = ExternalReference(
                 symbol,
                 max_deviation_bps=policy.max_reference_deviation_bps,
@@ -173,9 +175,10 @@ async def _run_session(
         account_age_seconds=float(config.risk.account_age_seconds),
     )
 
-    def check_reference(book):
+    def check_reference(book: Book) -> Decimal:
         if book.symbol in references:
             return references[book.symbol].center(book)
+        assert book.mid is not None
         return book.mid
 
     guard = RiskGuard(
@@ -195,14 +198,15 @@ async def _run_session(
             )
             if stop.is_set():
                 return
-        raw = paper_factory(config.paper_balance) if config.mode == "paper" else source
-        if config.mode == "paper":
-            raw.use_trade_tape()
+        paper = paper_factory(config.paper_balance) if config.mode == "paper" else None
+        raw = paper if paper is not None else source
+        if paper is not None:
+            paper.use_trade_tape()
         managed = RiskManagedClient(raw, guard, stop_event=stop, cleanup_symbols=config.symbols)
-        strategies = {}
+        strategies: dict[str, Strategy] = {}
         stream = reference_stream = None
         resources = AsyncExitStack()
-        tasks: list[asyncio.Task] = []
+        tasks: list[asyncio.Task[None] | asyncio.Task[bool]] = []
         risk_stop = None
         try:
             if stop.is_set():
@@ -221,11 +225,11 @@ async def _run_session(
                     raise ValueError("market size precision is unavailable")
                 precision[symbol] = market["szDecimals"]
             subscriptions = [{"type": "l2Book", "coin": symbol} for symbol in selected]
-            if config.mode == "paper":
+            if paper is not None:
                 subscriptions += [{"type": "trades", "coin": symbol} for symbol in selected]
             stream = source.stream(subscriptions)
             resources.push_async_callback(stream.aclose)
-            initial_books = {}
+            initial_books: dict[str, Book] = {}
             async with asyncio.timeout(10):
                 while initial_books.keys() != selected.keys():
                     frame = await anext(stream)
@@ -250,7 +254,7 @@ async def _run_session(
                     [{"type": "l2Book", "coin": symbol} for symbol in references]
                 )
                 resources.push_async_callback(reference_stream.aclose)
-                received = set()
+                received: set[str] = set()
                 async with asyncio.timeout(10):
                     try:
                         while received != references.keys():
@@ -267,8 +271,8 @@ async def _run_session(
                         raise RiskViolation("reference_disconnected") from None
             for book in initial_books.values():
                 guard.update_book(book)
-                if config.mode == "paper":
-                    await raw.on_book(book)
+                if paper is not None:
+                    await paper.on_book(book)
             guard.update_account(await raw.account())
             if stop.is_set():
                 return
@@ -292,21 +296,22 @@ async def _run_session(
             fill_index = 0
             book_messages = len(initial_books)
 
-            async def deliver_fills():
+            async def deliver_fills() -> None:
                 nonlocal fill_index
-                for fill in raw.fills[fill_index:]:
+                assert paper is not None
+                for fill in paper.fills[fill_index:]:
                     await strategies[fill.symbol].on_fill(fill)
-                fill_index = len(raw.fills)
+                fill_index = len(paper.fills)
 
             async def receive_books() -> None:
                 nonlocal book_messages
                 async for frame in stream:
-                    if config.mode == "paper" and frame.get("channel") == "trades":
+                    if paper is not None and frame.get("channel") == "trades":
                         trades = trades_from_wire(frame["data"])
                         if any(trade.symbol not in selected for trade in trades):
                             raise OneApiError("trade market mismatch")
                         for trade in trades:
-                            await raw.on_trade(trade)
+                            await paper.on_trade(trade)
                         await deliver_fills()
                         guard.update_account(await raw.account())
                         continue
@@ -319,8 +324,8 @@ async def _run_session(
                     if book.symbol in references:
                         guard.check_fresh(book.symbol)
                     book_messages += 1
-                    if config.mode == "paper":
-                        await raw.on_book(book)
+                    if paper is not None:
+                        await paper.on_book(book)
                         await deliver_fills()
                     strategy = strategies[book.symbol]
                     strategy.context = replace(
@@ -330,6 +335,7 @@ async def _run_session(
                 raise OneApiError("book stream disconnected")
 
             async def receive_reference() -> None:
+                assert reference_stream is not None
                 async for frame in reference_stream:
                     if frame.get("channel") == "l2Book":
                         book = book_from_wire(frame["data"])
@@ -356,14 +362,14 @@ async def _run_session(
                             "progress",
                             book_messages=book_messages,
                             pending_orders=len(guard.pending),
-                            paper_fills=len(raw.fills) if config.mode == "paper" else 0,
+                            paper_fills=len(paper.fills) if paper is not None else 0,
                         )
-                        await observer.publish(guard, paper=raw if config.mode == "paper" else None)
+                        await observer.publish(guard, paper=paper)
                         logged = now
-                    if config.mode == "paper" and (reported is None or now - reported >= 2):
+                    if paper is not None and (reported is None or now - reported >= 2):
                         for market_config in selected.values():
                             await report_paper_status(
-                                raw, market_config, report, risk_stop=guard.halted
+                                paper, market_config, report, risk_stop=guard.halted
                             )
                         reported = now
                     await asyncio.sleep(0.25)
@@ -420,12 +426,12 @@ async def _run_session(
                     try:
                         await managed.close()
                     finally:
-                        if config.mode == "paper":
-                            await observer.publish(guard, paper=raw)
+                        if paper is not None:
+                            await observer.publish(guard, paper=paper)
                             reason = risk_stop or guard.halted
                             for market_config in selected.values():
                                 await report_paper_status(
-                                    raw,
+                                    paper,
                                     market_config,
                                     report,
                                     summary=True,

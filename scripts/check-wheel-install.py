@@ -25,6 +25,8 @@ def check(wheel: Path, expected_commit: str | None = None) -> None:
         ]
         if len(metadata_paths) != 1:
             raise ValueError("expected one wheel metadata record")
+        if "glyde_mm/py.typed" not in archive.namelist():
+            raise ValueError("wheel is missing the PEP 561 typing marker")
         metadata = BytesParser().parsebytes(archive.read(metadata_paths[0]))
     if metadata["Name"] != "glyde-market-maker" or not metadata["Version"]:
         raise ValueError("unexpected wheel metadata")

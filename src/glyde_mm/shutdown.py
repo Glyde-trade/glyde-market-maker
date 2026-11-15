@@ -7,14 +7,16 @@ import fcntl
 import hashlib
 import json
 import os
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, Self
 from uuid import uuid4
 
 from .client import OneApiClient
 from .config import Config
-from .models import CancelRequest
+from .models import CancelRequest, TradingClient
 from .risk import RiskGuard, RiskViolation
 
 
@@ -28,11 +30,14 @@ def _paths(config: Config, directory: Path) -> tuple[Path, Path, Path]:
     )
     digest = hashlib.sha256(json.dumps(identity).encode()).hexdigest()[:24]
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    return tuple(directory / f"control-{digest}.{kind}" for kind in ("operation", "run", "stop"))
+    operation, session, request = (
+        directory / f"control-{digest}.{kind}" for kind in ("operation", "run", "stop")
+    )
+    return operation, session, request
 
 
 @contextmanager
-def _lock(path: Path):
+def _lock(path: Path) -> Iterator[int]:
     descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
         try:
@@ -45,11 +50,11 @@ def _lock(path: Path):
 
 
 class RunnerControl:
-    def __init__(self, config: Config, directory: Path, stop: asyncio.Event):
+    def __init__(self, config: Config, directory: Path, stop: asyncio.Event) -> None:
         self.operation, self.session, self.request = _paths(config, directory)
         self.stop = stop
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Self:
         with _lock(self.operation):
             self.ownership = _lock(self.session)
             self.ownership.__enter__()
@@ -61,20 +66,20 @@ class RunnerControl:
         self.monitor = asyncio.create_task(self._monitor())
         return self
 
-    async def _monitor(self):
+    async def _monitor(self) -> None:
         while not self.stop.is_set():
             if self.request.exists():
                 self.stop.set()
                 return
             await asyncio.sleep(0.1)
 
-    async def __aexit__(self, *_):
+    async def __aexit__(self, *args: object) -> None:
         self.monitor.cancel()
         await asyncio.gather(self.monitor, return_exceptions=True)
         self.ownership.__exit__(None, None, None)
 
 
-async def _wait_for_runner(path: Path):
+async def _wait_for_runner(path: Path) -> AbstractContextManager[int]:
     while True:
         ownership = _lock(path)
         try:
@@ -105,7 +110,7 @@ def _originals(config: Config, directory: Path) -> list[CancelRequest]:
     ]
 
 
-def _write_report(path: Path, result: dict) -> None:
+def _write_report(path: Path, result: dict[str, Any]) -> None:
     with open(path, "x", opener=lambda name, flags: os.open(name, flags, 0o600)) as handle:
         json.dump(result, handle, indent=2)
         handle.write("\n")
@@ -117,11 +122,11 @@ async def stop_bot(
     config: Config,
     directory: Path,
     *,
-    client_factory=OneApiClient,
+    client_factory: Callable[[Config], AbstractAsyncContextManager[TradingClient]] = OneApiClient,
     wait_seconds: float = 15,
-) -> tuple[dict, Path]:
+) -> tuple[dict[str, Any], Path]:
     operation, session, request = _paths(config, directory)
-    result = {
+    result: dict[str, Any] = {
         "time": datetime.now(UTC).isoformat(),
         "mode": config.mode,
         "symbol": ",".join(config.symbols),

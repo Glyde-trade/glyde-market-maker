@@ -6,15 +6,18 @@ import asyncio
 import json
 import os
 import time
+from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 from .book_history import check_minutes
 from .client import OneApiClient, book_from_wire, trades_from_wire
 from .config import Config
 from .models import Book, Trade
 from .reference import HYPERLIQUID_PUBLIC_URL
+from .transport import ClientFactory, JsonObject
 
 
 @dataclass(frozen=True)
@@ -25,7 +28,7 @@ class TapeEvent:
     trades: tuple[Trade, ...] = ()
 
 
-def decode_event(row: dict, symbol: str) -> TapeEvent:
+def decode_event(row: dict[str, Any], symbol: str) -> TapeEvent:
     if set(row) != {"received_at_ms", "source", "channel", "data"}:
         raise ValueError("invalid tape event")
     receipt, source, channel, data = (
@@ -64,7 +67,7 @@ def read_tape(path: Path, symbol: str) -> tuple[int, list[TapeEvent]]:
                 or not 0 <= header["size_decimals"] <= 6
             ):
                 raise ValueError("incompatible public tape")
-            events = []
+            events: list[TapeEvent] = []
             cuts: dict[str, int] = {}
             for line in handle:
                 if len(line) > 1024 * 1024 or len(events) >= 100000:
@@ -93,7 +96,7 @@ def read_tape(path: Path, symbol: str) -> tuple[int, list[TapeEvent]]:
         raise ValueError("malformed public tape") from None
 
 
-def _wire(event: TapeEvent) -> dict:
+def _wire(event: TapeEvent) -> dict[str, Any]:
     book = event.book
     return {
         "received_at_ms": event.received_at_ms,
@@ -128,16 +131,16 @@ async def record_tape(
     minutes: int,
     *,
     include_hl: bool = False,
-    client_factory=OneApiClient,
+    client_factory: ClientFactory = OneApiClient,
 ) -> int:
     check_minutes(minutes)
     if config.markets:
         raise ValueError("tape recording requires a single-symbol config")
-    queue: asyncio.Queue = asyncio.Queue(maxsize=128)
+    queue: asyncio.Queue[tuple[str, int, JsonObject | None]] = asyncio.Queue(maxsize=128)
     tasks = []
     streams = []
 
-    async def receive(source, stream):
+    async def receive(source: str, stream: AsyncGenerator[JsonObject, None]) -> None:
         try:
             async for frame in stream:
                 if frame.get("channel") in {"l2Book", "trades"}:

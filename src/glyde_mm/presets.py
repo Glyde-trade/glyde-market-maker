@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import ROUND_DOWN, Decimal
+from typing import Any
 
 STRATEGIES = ("pure_market_making", "avellaneda_market_making", "grid", "inventory_skewed")
 TRADEOFFS = {
@@ -21,7 +22,7 @@ def strategy_preset(
     *,
     reference_source: str = "glyde",
     ping_pong_enabled: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     if type(ping_pong_enabled) is not bool or (
         ping_pong_enabled and strategy != "pure_market_making"
     ):
@@ -53,7 +54,7 @@ def strategy_preset(
     amount = amount.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
     if amount <= 0:
         raise ValueError("These caps are too small for a preset; no configuration was written.")
-    values = {"order_amount": str(amount), "order_refresh_time": refresh}
+    values: dict[str, Any] = {"order_amount": str(amount), "order_refresh_time": refresh}
     if strategy == "grid":
         values.update(
             lower_price=str(reference_price * Decimal("0.9")),

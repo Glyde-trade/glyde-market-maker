@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from decimal import Decimal
 from time import time_ns
+from typing import Literal
 
 from .client import wire_decimal
 from .models import (
@@ -270,7 +271,7 @@ class PaperExchange:
             remaining = self._match(oid, order, budgets[key]) if crosses else order.quantity
             if remaining and order.time_in_force != "Ioc":
                 self._rest(oid, replace(order, quantity=remaining))
-                status = "resting"
+                status: Literal["resting", "filled"] = "resting"
             elif remaining == order.quantity:
                 self._remember_terminal(oid, order)
                 result.append(
@@ -299,8 +300,14 @@ class PaperExchange:
                     ),
                     None,
                 )
-            found = oid in self._orders and self._orders[oid].symbol == request.symbol
+            found = (
+                oid is not None
+                and oid in self._orders
+                and self._orders[oid].symbol == request.symbol
+            )
+            status: Literal["cancelled", "already_closed", "rejected"]
             if found:
+                assert oid is not None
                 self._remember_terminal(oid, self._remove(oid))
                 status = "cancelled"
             else:
@@ -314,7 +321,7 @@ class PaperExchange:
                         ),
                         None,
                     )
-                terminal = self._terminal.get(oid)
+                terminal = self._terminal.get(oid) if oid is not None else None
                 status = (
                     "already_closed"
                     if terminal is not None and terminal.symbol == request.symbol

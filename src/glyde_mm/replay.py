@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .book_history import read_window
 from .config import Config
+from .models import Account, Book
 from .paper import PaperExchange
 from .risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
 from .runlog import RunLog
@@ -62,17 +63,12 @@ async def _replay(
     now = start / 1000
 
     class ReplayPaper(PaperExchange):
-        async def account(self):
+        async def account(self) -> Account:
             return replace(await super().account(), received_at=now)
 
     paper = ReplayPaper(config.paper_balance)
     guard = RiskGuard(
-        RiskLimits(
-            **{
-                key: float(value) if key.endswith("seconds") else value
-                for key, value in vars(config.risk).items()
-            }
-        ),
+        RiskLimits.from_config(config.risk),
         clock=lambda: now,
         wall_clock=lambda: now,
     )
@@ -95,7 +91,7 @@ async def _replay(
     if journal is not None:
         journal.emit("strategy_started")
 
-    async def observe(book):
+    async def observe(book: Book) -> None:
         nonlocal fill_index, observed
         observed += 1
         guard.update_book(book)
@@ -106,7 +102,7 @@ async def _replay(
         strategy.context = replace(strategy.context, price_tick=_price_tick(book, size))
         await strategy.on_book(book)
 
-    async def tick():
+    async def tick() -> None:
         guard.update_account(await paper.account())
         guard.check_fresh(config.symbol)
         await strategy.on_tick()
