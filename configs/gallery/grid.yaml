@@ -1,0 +1,21 @@
+# PAPER: replace the 90000–110000 BTC band around your current market before use.
+# Five levels span the whole fixed band, not five per side; it never re-centers itself.
+# Quotes retire out of band. All levels/pending orders share the same position cap.
+mode: paper
+base_url: https://api.glyde.trade/v1
+symbol: BTC
+paper_balance: '1000'
+strategy: grid
+strategy_config:
+  lower_price: '90000'
+  upper_price: '110000'
+  order_amount: '0.0001'
+  levels: 5
+  order_refresh_time: 30
+  minimum_spread: '0.001'
+risk:
+  max_position: '0.001'
+  max_order_notional: '25'
+  max_daily_loss: '5'
+  stale_book_seconds: '5'
+  account_age_seconds: '10'

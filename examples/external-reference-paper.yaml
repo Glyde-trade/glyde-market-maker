@@ -1,0 +1,26 @@
+# Glyde orders/fills/risk use the Glyde book; quote center uses the public HL mid.
+# Missing/stale HL data or >25 bps raw-mid disagreement cancels quotes and stops.
+# No trading key is needed. Orders and balances are simulated against the public book.
+mode: paper
+base_url: https://api.glyde.trade/v1
+symbol: BTC
+paper_balance: '1000'
+strategy: pure_market_making
+strategy_config:
+  reference_source: hyperliquid
+  reference_skew_bps: '0'
+  max_reference_deviation_bps: '25'
+  reference_stale_seconds: '3'
+  bid_spread: '0.002'
+  ask_spread: '0.002'
+  order_amount: '0.0001'
+  order_refresh_time: 30
+  order_levels: 1
+  minimum_spread: '0.001'
+  hanging_orders_enabled: false
+risk:
+  max_position: '0.001'
+  max_order_notional: '25'
+  max_daily_loss: '5'
+  stale_book_seconds: '5'
+  account_age_seconds: '10'
