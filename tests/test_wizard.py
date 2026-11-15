@@ -25,10 +25,12 @@ def test_interactive_validation_repompts_without_printing_input(tmp_path):
         [
             "bad symbol",
             "ETH",
+            "bad strategy",
+            "3",
+            "bad preset",
+            "active",
             "NaN",
-            "0.001",
-            "1",
-            "0.003",
+            "2000",
             "20",
             "0.01",
             "5",
@@ -43,7 +45,10 @@ def test_interactive_validation_repompts_without_printing_input(tmp_path):
     data = yaml.safe_load(path.read_text())
     assert data["symbol"] == "ETH"
     assert data["private_key_env"] == "MY_SIGNING_KEY"
-    assert data["strategy_config"]["order_amount"] == "0.001"
+    assert data["strategy"] == "grid"
+    assert data["strategy_config"]["levels"] == 7
+    assert "Active:" in " ".join(printed)
+    assert data["mode"] == "paper"
     assert private_looking not in path.read_text()
     assert private_looking not in " ".join(printed)
 
@@ -62,9 +67,9 @@ def test_existing_file_and_symlink_are_never_overwritten(tmp_path):
 
 
 def test_invalid_combined_limits_do_not_write_a_partial_file(tmp_path):
-    answers = iter(["", "1", "", "", "0.1", "", ""])
+    answers = iter(["", "", "", "1e20", "", "", "", ""])
     path = tmp_path / "bot.yaml"
-    with pytest.raises(ValueError, match="exceeds"):
+    with pytest.raises(ValueError, match="too small"):
         run_wizard(path, input_fn=lambda _: next(answers), print_fn=lambda _: None)
     assert not path.exists()
 
