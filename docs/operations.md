@@ -158,3 +158,37 @@ not accounting/settlement proof. Inventory/headroom are cached and refreshed wit
 the runner's progress publication (normally every two seconds); consult stream
 age before interpreting them. A failed or stopped process is an absent endpoint,
 not a healthy zero balance. Metrics never alter raw risk or stream admission.
+
+## A bounded first paper run
+
+```sh
+glyde-mm paper examples/paper-btc.yaml --duration 10m --report btc-paper-result.json
+glyde-mm paper examples/paper-eth.yaml --duration 10m --report eth-paper-result.json
+```
+
+Duration accepts seconds (`20s` or `20`), minutes (`10m`) or hours (`1h`), up to
+24 hours for paper. The deadline requests orderly stop; it does not skip cleanup.
+Ctrl-C also stops cleanly and labels the result as interrupted. Both examples
+use public book/trade data only: no read credential or signing wallet is needed,
+and all orders/collateral/fills are simulated. Keep one session active per shared
+config/state identity; run these examples sequentially or use separate owned
+config directories. There is no live trading or automatic funding.
+
+The report path must be new, with an existing parent directory. It is created
+privately (0600) before startup and never overwrites an existing file or symlink.
+After cleanup the JSON records actual uptime, accepted/cancelled quote receipts,
+refusals by fixed reason, partial-fill event count, inventory changes, realized
+and unrealized simulated USDC PnL, and maximum observed peak-to-trough equity
+loss. Sampling follows actual book/fill/quote events, not a scrape timer. The
+inventory path retains at most 10,000 points and flags truncation; drawdown still
+uses every observation. The maximum drawdown is sampled, not an intra-event or
+live loss guarantee; the paper model excludes fees/funding and approximates queues.
+
+Read `outcome`, `termination`, `cleanup_confirmed` and `open_quotes_at_end`
+first. `stopped` with `duration_elapsed` and confirmed zero quotes means the
+requested local session finished normally; it is not a live execution claim.
+A source gap or stale book stops this runner rather than silently resuming;
+`pause_counts` records those stop episodes, not invented reconnect durations.
+Transport/setup failures return nonzero and the result remains failed or
+unobserved. A signal is distinct from completing the requested duration. Disk
+write failure also returns nonzero; do not treat a missing/partial JSON as success.
