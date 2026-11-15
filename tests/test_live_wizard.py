@@ -300,16 +300,17 @@ async def test_real_fake_client_paper_then_signed_live_and_timer_cleanup(tmp_pat
 
     import httpx
     from eth_account import Account as Wallet
+    from live_fake import SequencedFake
 
     from glyde_mm import doctor
     from glyde_mm.client import OneApiClient
     from glyde_mm.runner import run
-    from glyde_mm.testing import FakeOneApiServer
 
     wallet = Wallet.create()
     monkeypatch.setenv("GLYDE_API_PRIVATE_KEY", wallet.key.hex())
     monkeypatch.setenv("GLYDE_READ_API_KEY", "synthetic-read-only")
-    fake = FakeOneApiServer(timestamp_ms=time.time_ns() // 1_000_000)
+    sequenced = SequencedFake(read_credential="synthetic-read-only")
+    fake = sequenced.ledger
     fake.set_book("BTC", bids=[("99", "2")], asks=[("101", "2")])
     actions, stages = [], []
 
@@ -323,11 +324,15 @@ async def test_real_fake_client_paper_then_signed_live_and_timer_cleanup(tmp_pat
                 envelope = json.loads(request.content)
                 assert envelope["signature"] and envelope["vaultAddress"] == selected.vault_address
                 actions.append(envelope["action"]["type"])
+            if selected.mode == "live":
+                return sequenced.http(request)
             return await transport.handle_async_request(request)
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(observe)) as http:
             async with OneApiClient(
-                selected, http_client=http, connect_ws=fake.connect_ws
+                selected,
+                http_client=http,
+                connect_ws=sequenced.connect if selected.mode == "live" else fake.connect_ws,
             ) as client:
                 yield client
 
@@ -362,6 +367,14 @@ async def test_real_fake_client_paper_then_signed_live_and_timer_cleanup(tmp_pat
     )
     assert stages == ["paper", "live"]
     assert actions == ["order", "cancel", "cancel"]
+    assert sequenced.sequence == 4  # Baseline plus each signed order/cancel commit.
+    assert {sub["type"] for sub in sequenced.socket.subscriptions} == {
+        "l2Book",
+        "clearinghouseState",
+        "openOrders",
+        "orderUpdates",
+        "userFills",
+    }
     assert not fake.info({"type": "openOrders", "user": fake.user})
     result = report(tmp_path)
     assert result["outcome"] == "auto_stopped"
