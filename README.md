@@ -4,6 +4,13 @@ A paper-first market maker for Glyde's One API. Python 3.11+, one YAML file and 
 Strategy designs are adapted from [Hummingbot](https://github.com/hummingbot/hummingbot)
 (Apache-2.0); see [NOTICE](NOTICE).
 
+## Current status
+
+The quickstart below defines the CLI contract being shipped. The initial foundation currently
+observes public books in paper mode; quoting through strategies/risk and the live runner are still
+being integrated. Until that integration lands, paper does not place quotes and live `run` refuses.
+Do not treat an observing book stream as trading or end-to-end qualification.
+
 ## Start in five minutes
 
 **1. Install in a virtual environment.** Until a package release is published, install from this repo:
@@ -59,7 +66,7 @@ exchange minimum order size and precision. `order_amount × price` must fit `max
 an example can be too small for the exchange or too large for its configured cap. Refused quotes
 must be corrected in the config, not retried with larger limits automatically.
 
-The defaults cap one order at **10 USDC**, absolute position at **0.001 BTC** and daily account equity
+The defaults cap one order at **25 USDC**, absolute position at **0.001 BTC** and daily account equity
 loss at **5 USDC**. These are local guardrails, not a loss guarantee. Daily equity changes include
 transfers as well as trading PnL. Use a dedicated trading account: cancel-all on disconnect or exit
 can cancel other orders in the same account. Review remaining orders in your account if cancellation

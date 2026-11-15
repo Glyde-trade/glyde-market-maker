@@ -14,7 +14,7 @@ strategy_config:
   hanging_orders_enabled: false
 risk:
   max_position: '0.001'
-  max_order_notional: '10'
+  max_order_notional: '25'
   max_daily_loss: '5'
   stale_book_seconds: '5'
   account_age_seconds: '10'
