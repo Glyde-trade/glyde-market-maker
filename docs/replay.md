@@ -35,3 +35,9 @@ Open quotes are cancelled before replay returns. Avellaneda still needs its
 consecutive-sample warmup. All paper limitations apply: queue priority, fees,
 funding and liquidation are not simulated, and historical hypothetical fills
 are not proof that a real order would have filled or made money.
+
+The CLI also writes private diagnostic logs beside the config, under
+`.glyde-mm/logs`. Run `glyde-mm report <that-logdir>` after replay to summarize
+its build, final counters and outcome. Replay continues to keep its risk state
+in memory; these logs do not alter the persistent live/paper streaming loss latch.
+See the [fully offline sample session](paper-session.md) for expected output.
