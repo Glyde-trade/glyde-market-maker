@@ -15,11 +15,12 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .models import CancelRequest
+
 if TYPE_CHECKING:
     from .models import (
         Account,
         Book,
-        CancelRequest,
         CancelResult,
         OpenOrder,
         OrderRequest,
@@ -233,10 +234,55 @@ class RiskManagedClient:
         if self._closed or (self._stop_event is not None and self._stop_event.is_set()):
             raise RiskViolation("client_closed")
 
+    async def _cancel_before_discovery(self, symbol: str | None = None) -> None:
+        ids = {key: oid for oid, key in self._order_ids.items()}
+        requests = [
+            CancelRequest(
+                order.symbol, order_id=ids.get(key), client_order_id=None if key in ids else key
+            )
+            for key, order in self.guard.pending.items()
+            if symbol is None or order.symbol == symbol
+        ]
+        failure: Exception | None = None
+        for request in requests:
+            try:
+                results = await self.client.cancel_orders([request])
+                if len(results) != 1:
+                    raise RiskViolation("cancel_outcome_unknown")
+                result = results[0]
+                if result.status not in ("cancelled", "already_closed"):
+                    raise RiskViolation("cancel_outcome_unknown")
+                if getattr(result, "order_id", None) not in (None, request.order_id) or getattr(
+                    result, "client_order_id", None
+                ) not in (
+                    None,
+                    request.client_order_id or self._order_ids.get(request.order_id or ""),
+                ):
+                    raise RiskViolation("cancel_identity_mismatch")
+            except Exception as error:
+                failure = failure or error
+        try:
+            await self.client.cancel_all(symbol)
+        except Exception as error:
+            failure = failure or error
+        if failure is not None:
+            raise RiskViolation("cancel_outcome_unknown") from failure
+
+        self.guard.pending = {
+            key: order
+            for key, order in self.guard.pending.items()
+            if symbol is not None and order.symbol != symbol
+        }
+        self.guard.open_orders = [
+            order
+            for order in self.guard.open_orders
+            if symbol is not None and order.symbol != symbol
+        ]
+
     async def _cancel_and_halt(self, reason: str) -> None:
         self.guard.halted = self.guard.halted or reason
-        # Do not erase reservations: cancellation may itself be ambiguous.
-        await self.client.cancel_all()
+        # Reservations clear only after known cancels and discovery both succeed.
+        await self._cancel_before_discovery()
 
     async def place_orders(self, orders: Sequence[OrderRequest]) -> list[OrderResult]:
         async with self._lock:
@@ -309,20 +355,10 @@ class RiskManagedClient:
     async def cancel_all(self, symbol: str | None = None) -> None:
         async with self._lock:
             try:
-                await self.client.cancel_all(symbol)
+                await self._cancel_before_discovery(symbol)
             except BaseException:
                 self.guard.halted = self.guard.halted or "cancel_outcome_unknown"
                 raise
-            self.guard.pending = {
-                key: order
-                for key, order in self.guard.pending.items()
-                if symbol is not None and order.symbol != symbol
-            }
-            self.guard.open_orders = [
-                order
-                for order in self.guard.open_orders
-                if symbol is not None and order.symbol != symbol
-            ]
 
     async def account(self) -> Account:
         self._ensure_running()
