@@ -104,6 +104,36 @@ def trades_from_wire(data: object) -> tuple[Trade, ...]:
         raise OneApiError("invalid public trades") from None
 
 
+def account_from_wire(state: dict[str, Any]) -> Account:
+    return Account(
+        decimal(state["marginSummary"]["accountValue"]),
+        {
+            row["position"]["coin"]: decimal(row["position"]["szi"])
+            for row in state["assetPositions"]
+        },
+        decimal(state["withdrawable"]),
+    )
+
+
+def orders_from_wire(rows: list[dict[str, Any]]) -> list[OpenOrder]:
+    result = []
+    for row in rows:
+        if row["side"] not in {"B", "A"}:
+            raise OneApiError("unknown open-order side")
+        result.append(
+            OpenOrder(
+                str(row["oid"]),
+                row["coin"],
+                "buy" if row["side"] == "B" else "sell",
+                decimal(row["sz"]),
+                decimal(row["limitPx"]),
+                row.get("cloid"),
+                row.get("reduceOnly", False),
+            )
+        )
+    return result
+
+
 class OneApiClient:
     def __init__(
         self,
@@ -185,34 +215,12 @@ class OneApiClient:
         }
 
     async def account(self) -> Account:
-        state = await self.info({"type": "clearinghouseState", "user": self.config.owner})
-        return Account(
-            decimal(state["marginSummary"]["accountValue"]),
-            {
-                row["position"]["coin"]: decimal(row["position"]["szi"])
-                for row in state["assetPositions"]
-            },
-            decimal(state["withdrawable"]),
+        return account_from_wire(
+            await self.info({"type": "clearinghouseState", "user": self.config.owner})
         )
 
     async def open_orders(self) -> list[OpenOrder]:
-        rows = await self.info({"type": "openOrders", "user": self.config.owner})
-        result = []
-        for row in rows:
-            if row["side"] not in {"B", "A"}:
-                raise OneApiError("unknown open-order side")
-            result.append(
-                OpenOrder(
-                    str(row["oid"]),
-                    row["coin"],
-                    "buy" if row["side"] == "B" else "sell",
-                    decimal(row["sz"]),
-                    decimal(row["limitPx"]),
-                    row.get("cloid"),
-                    row.get("reduceOnly", False),
-                )
-            )
-        return result
+        return orders_from_wire(await self.info({"type": "openOrders", "user": self.config.owner}))
 
     async def _asset(self, symbol: str) -> tuple[int, int]:
         if not self._assets:
@@ -414,7 +422,10 @@ class OneApiClient:
                 "",
             )
         )
-        private = any(row.get("type") in {"orderUpdates", "userFills"} for row in subscriptions)
+        private = any(
+            row.get("type") in {"orderUpdates", "userFills", "clearinghouseState", "openOrders"}
+            for row in subscriptions
+        )
         headers = (
             {"X-Glyde-API-Key": self.config.secret(self.config.read_api_key_env)} if private else {}
         )

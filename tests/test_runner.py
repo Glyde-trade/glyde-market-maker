@@ -22,6 +22,8 @@ class Source:
         self.wire_time = time.time_ns() // 1_000_000
         self.live_orders = []
         self.cancellations = 0
+        self.owner_queue = asyncio.Queue()
+        self.owner_sequence = 1
 
     async def __aenter__(self):
         return self
@@ -36,9 +38,7 @@ class Source:
         expected = [{"type": "l2Book", "coin": "BTC"}]
         if self.config.mode == "paper":
             expected.append({"type": "trades", "coin": "BTC"})
-        assert subscriptions == expected
-        yield {"channel": "subscriptionResponse", "data": {}}
-        yield {
+        frame = {
             "channel": "l2Book",
             "data": {
                 "coin": "BTC",
@@ -46,6 +46,27 @@ class Source:
                 "levels": [[{"px": "99", "sz": "2"}], [{"px": "101", "sz": "2"}]],
             },
         }
+        if self.config.mode == "live":
+            from live_wire import batch, owner_roots
+
+            assert {row["type"] for row in subscriptions} == {
+                "l2Book",
+                "clearinghouseState",
+                "openOrders",
+                "orderUpdates",
+                "userFills",
+            }
+            for row in batch("mm-book-0", {"l2Book": frame["data"]}):
+                yield row
+            for row in batch("mm-owner", owner_roots(self.config.owner), owner=self.config.owner):
+                yield row
+            while True:
+                for row in await self.owner_queue.get():
+                    yield row
+        else:
+            assert subscriptions == expected
+            yield {"channel": "subscriptionResponse", "data": {}}
+            yield frame
         await self.placed.wait()
         if self.disconnected:
             raise ConnectionError("synthetic disconnect")
@@ -63,11 +84,51 @@ class Source:
     async def place_orders(self, orders):
         assert self.config.mode == "live", "paper must never reach the signing transport"
         self.live_orders.extend(orders)
+        from live_wire import batch, owner_roots
+
+        self.owner_sequence += 1
+        self.owner_queue.put_nowait(
+            batch(
+                "mm-owner",
+                owner_roots(
+                    self.config.owner,
+                    orders=[
+                        {
+                            "oid": i + 1,
+                            "coin": row.symbol,
+                            "side": "B" if row.side == "buy" else "A",
+                            "sz": str(row.quantity),
+                            "limitPx": str(row.price),
+                            "cloid": row.client_order_id,
+                        }
+                        for i, row in enumerate(orders)
+                    ],
+                ),
+                owner=self.config.owner,
+                sequence=self.owner_sequence,
+                previous=self.owner_sequence - 1,
+            )
+        )
         self.placed.set()
         self.stop.set()
-        return [OrderResult("resting", str(i), row.client_order_id) for i, row in enumerate(orders)]
+        return [
+            OrderResult("resting", str(i + 1), row.client_order_id) for i, row in enumerate(orders)
+        ]
 
     async def cancel_orders(self, orders):
+        from live_wire import batch, owner_roots
+
+        self.owner_sequence += 1
+        self.owner_queue.put_nowait(
+            batch(
+                "mm-owner",
+                owner_roots(self.config.owner),
+                owner=self.config.owner,
+                sequence=self.owner_sequence,
+                previous=self.owner_sequence - 1,
+            )
+        )
+        self.cancellations += 1
         return [CancelResult("cancelled", row.order_id, row.client_order_id) for row in orders]
 
     async def cancel_all(self, symbol=None):
