@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import replace
 from decimal import Decimal
@@ -34,6 +35,7 @@ class PaperExchange:
         self._positions: dict[str, Decimal] = {}
         self._entries: dict[str, Decimal] = {}
         self._orders: dict[str, OrderRequest] = {}
+        self._terminal: OrderedDict[str, OrderRequest] = OrderedDict()
         self._next_id = 0
         self.fills: list[Fill] = []
 
@@ -52,9 +54,15 @@ class PaperExchange:
                 continue
             remaining = self._match(oid, request, asks if request.side == "buy" else bids)
             if remaining == 0:
+                self._remember_terminal(oid, request)
                 del self._orders[oid]
             else:
                 self._orders[oid] = replace(request, quantity=remaining)
+
+    def _remember_terminal(self, oid: str, request: OrderRequest) -> None:
+        self._terminal[oid] = request
+        while len(self._terminal) > 4096:
+            self._terminal.popitem(last=False)
 
     def _match(self, oid: str, order: OrderRequest, levels: list[list[Decimal]]) -> Decimal:
         remaining = order.quantity
@@ -162,11 +170,13 @@ class PaperExchange:
                 self._orders[oid] = replace(order, quantity=remaining)
                 status = "resting"
             elif remaining == order.quantity:
+                self._remember_terminal(oid, order)
                 result.append(
                     OrderResult("rejected", oid, order.client_order_id, "no executable liquidity")
                 )
                 continue
             else:
+                self._remember_terminal(oid, order)
                 status = "filled"
             result.append(OrderResult(status, oid, order.client_order_id))
         return result
@@ -189,23 +199,39 @@ class PaperExchange:
                 )
             found = oid in self._orders and self._orders[oid].symbol == request.symbol
             if found:
-                del self._orders[oid]
+                self._remember_terminal(oid, self._orders.pop(oid))
+                status = "cancelled"
+            else:
+                if oid is None:
+                    oid = next(
+                        (
+                            key
+                            for key in reversed(self._terminal)
+                            if self._terminal[key].symbol == request.symbol
+                            and self._terminal[key].client_order_id == request.client_order_id
+                        ),
+                        None,
+                    )
+                terminal = self._terminal.get(oid)
+                status = (
+                    "already_closed"
+                    if terminal is not None and terminal.symbol == request.symbol
+                    else "rejected"
+                )
             results.append(
                 CancelResult(
-                    "cancelled" if found else "rejected",
+                    status,
                     oid,
                     request.client_order_id,
-                    None if found else "order not found",
+                    "order not found" if status == "rejected" else None,
                 )
             )
         return results
 
     async def cancel_all(self, symbol: str | None = None) -> None:
-        self._orders = {
-            key: row
-            for key, row in self._orders.items()
-            if symbol is not None and row.symbol != symbol
-        }
+        for oid, request in list(self._orders.items()):
+            if symbol is None or request.symbol == symbol:
+                self._remember_terminal(oid, self._orders.pop(oid))
 
     async def open_orders(self) -> list[OpenOrder]:
         return [

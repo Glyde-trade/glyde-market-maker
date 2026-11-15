@@ -103,7 +103,9 @@ def config(mode="paper", stale="5"):
     )
 
 
-async def scenario(tmp_path, *, mode="paper", disconnected=False, stale="5", old_book=False):
+async def scenario(
+    tmp_path, *, mode="paper", disconnected=False, stale="5", old_book=False, report=lambda _: None
+):
     stop, placed = asyncio.Event(), asyncio.Event()
     selected = config(mode, stale)
     source = Source(selected, stop=stop, placed=placed)
@@ -122,7 +124,7 @@ async def scenario(tmp_path, *, mode="paper", disconnected=False, stale="5", old
         client_factory=lambda _: source,
         paper_factory=lambda _: paper,
         stop_event=stop,
-        report=lambda _: None,
+        report=report,
     )
     return task, source, paper
 
@@ -285,3 +287,42 @@ async def test_stop_fences_bootstrap_before_any_quote_but_preserves_cleanup(tmp_
     )
     assert paper.submissions == source.live_orders == []
     assert paper.cancellations == 1
+
+
+async def test_paper_status_shows_active_quotes_and_final_cleanup(tmp_path):
+    messages = []
+    task, source, _ = await scenario(tmp_path, report=messages.append)
+    await asyncio.wait_for(task, 2)
+    status = next(row for row in messages if row.startswith("PAPER BTC |"))
+    assert "inventory=0" in status and "simulated_pnl=+0 USDC" in status
+    assert "fills=0 | open_quotes=2 | risk_stop=none" in status
+    assert messages[-1].startswith("PAPER SUMMARY BTC |")
+    assert "open_quotes=0 | risk_stop=none" in messages[-1]
+    assert source.live_orders == []
+
+
+async def test_paper_risk_stop_is_visible_after_quotes_are_cancelled(tmp_path):
+    messages = []
+    task, _, _ = await scenario(tmp_path, stale="0.1", report=messages.append)
+    with pytest.raises(RiskViolation, match="stale"):
+        await asyncio.wait_for(task, 2)
+    summary = messages[-1]
+    assert summary.startswith("PAPER SUMMARY BTC |")
+    assert "open_quotes=0" in summary and "risk_stop=stale" in summary
+
+
+async def test_paper_status_uses_simulated_equity_and_fill_ledger():
+    from glyde_mm.models import Book, Level, OrderRequest
+    from glyde_mm.runner import report_paper_status
+
+    selected = config()
+    paper = PaperExchange(selected.paper_balance)
+    await paper.on_book(Book("BTC", (Level(D(99), D(2)),), (Level(D(101), D(2)),), 1))
+    await paper.place_orders([OrderRequest("BTC", "buy", D("0.5"), D(101), time_in_force="Ioc")])
+    messages = []
+    await report_paper_status(paper, selected, messages.append)
+    assert messages == [
+        "PAPER BTC | inventory=0.5 | simulated_pnl=-0.5 USDC"
+        " | fills=1 | open_quotes=0 | risk_stop=none"
+    ]
+    assert (await paper.account()).equity == selected.paper_balance - D("0.5")
