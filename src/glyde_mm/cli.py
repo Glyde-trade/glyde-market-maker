@@ -76,8 +76,48 @@ def main(argv: list[str] | None = None) -> int:
         history.add_argument("--config", dest="config_option", default="glyde-mm.yaml")
         history.add_argument("--minutes", type=int, default=5)
         history.add_argument("--book-file", required=True, type=Path)
+    compare = commands.add_parser(
+        "compare", help="compare paper strategies on a recorded public tape"
+    )
+    compare.add_argument("--config", dest="config_option", default="glyde-mm.yaml")
+    compare.add_argument("--tape-file", required=True, type=Path)
+    compare.add_argument(
+        "--preset", choices=("conservative", "balanced", "active"), default="balanced"
+    )
+    tape = commands.add_parser(
+        "record-tape", help="capture public Glyde books/trades for comparison"
+    )
+    tape.add_argument("--config", dest="config_option", default="glyde-mm.yaml")
+    tape.add_argument("--tape-file", required=True, type=Path)
+    tape.add_argument("--minutes", type=int, default=5)
+    tape.add_argument(
+        "--include-hl", action="store_true", help="also record public HL reference books"
+    )
     args = parser.parse_args(argv)
     try:
+        if args.command == "compare":
+            from .compare import compare_strategies, format_comparison
+
+            result = asyncio.run(
+                compare_strategies(
+                    load_config(args.config_option), args.tape_file, preset=args.preset
+                )
+            )
+            print(format_comparison(result))
+            return 0
+        if args.command == "record-tape":
+            from .public_tape import record_tape
+
+            count = asyncio.run(
+                record_tape(
+                    load_config(args.config_option),
+                    args.tape_file,
+                    args.minutes,
+                    include_hl=args.include_hl,
+                )
+            )
+            print(f"Recorded {count} public tape events; no private data or orders accessed.")
+            return 0
         if args.command == "report":
             from .report import summarize
 
