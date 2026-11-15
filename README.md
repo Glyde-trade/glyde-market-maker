@@ -32,7 +32,7 @@ python -m pip install 'git+https://github.com/Glyde-trade/glyde-market-maker.git
 If environment creation reports that `ensurepip` is unavailable on Debian/Ubuntu, install the
 matching `python3-venv` package before continuing.
 
-**2. Create a paper config.** The wizard asks for a market, order size and limits. It never asks for
+**2. Create a paper config.** The wizard asks for a market, strategy, beginner preset, reference price and limits. It never asks for
 or stores a private key, never enables live mode, and refuses to overwrite an existing file.
 
 ```sh
@@ -41,7 +41,7 @@ glyde-mm init
 
 Or copy [examples/paper.yaml](examples/paper.yaml) to `glyde-mm.yaml`.
 Amounts are base units; spread fractions use `0.002` for **0.2%**. The default is one bid and one ask,
-refreshed every 30 seconds. Hanging orders are off.
+refreshed every 60 seconds with the Conservative preset. Hanging orders are off.
 
 **3. Run paper first.** Quotes and fills are simulated against the public live book. No trading key
 or funded account is needed; paper fills are not a prediction of live execution.
@@ -111,6 +111,33 @@ moves quotes outside the band. Grid uses the same risk limits and cancel-before-
 ```sh
 glyde-mm paper examples/grid-paper.yaml
 ```
+
+## Inventory-skewed quoting
+
+Try [examples/inventory-skewed-paper.yaml](examples/inventory-skewed-paper.yaml)
+for Avellaneda-style prices plus smaller quotes on the side that increases
+inventory away from your target. Long above target: smaller bids; short below
+target: smaller asks. The side moving toward target keeps its configured size;
+this strategy never enlarges an order to chase the target.
+
+```sh
+glyde-mm paper examples/inventory-skewed-paper.yaml
+```
+
+`inventory_target_position` is a signed base position (zero means flat),
+`risk_factor` shifts reservation prices, and `order_amount_shape_factor` controls
+how strongly the away-from-target side shrinks (a Decimal from 0 to 100). Higher factors suppress it
+more; zero keeps Avellaneda's original sizes. Sizes round down to the market step;
+a quote below the minimum is omitted. A target is a preference, not an order or
+a risk-limit override. Existing/open orders still count toward the same caps.
+
+The wizard's Conservative, Balanced and Active presets include this strategy and
+always write paper YAML. Warmup needs 31 consecutive one-second samples with
+nonzero movement; gaps reset it. Exponential sizing is adapted from
+[Hummingbot's Avellaneda strategy](https://github.com/hummingbot/hummingbot/blob/9af100d6822da7d2d0291a906c730ef172284ee2/hummingbot/strategy/avellaneda_market_making/avellaneda_market_making.pyx)
+(Apache-2.0; see NOTICE), using signed perpetual exposure rather than spot wallet
+balances. Shared risk checks, cancel-before-replace, unknown-outcome stops and
+paper limitations apply. It is not a promise of profitable or target-reaching fills.
 
 ## Configuration
 

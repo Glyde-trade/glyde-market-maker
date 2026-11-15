@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from decimal import ROUND_DOWN, Decimal
 
-STRATEGIES = ("pure_market_making", "avellaneda_market_making", "grid")
+STRATEGIES = ("pure_market_making", "avellaneda_market_making", "grid", "inventory_skewed")
 TRADEOFFS = {
     "conservative": "Wider quotes and slower refresh: fewer fills, less quote turnover.",
     "balanced": "Moderate spacing and refresh: a middle ground for paper experiments.",
@@ -74,4 +74,6 @@ def strategy_preset(
                 volatility_samples=30,
                 sample_interval_ms=1000,
             )
+    if strategy == "inventory_skewed":
+        values["order_amount_shape_factor"] = ("2", "1", "0.5")[index]
     return values

@@ -66,7 +66,7 @@ def run_wizard(
             raise ValueError("Choose a listed name or number.")
         return selected
 
-    print_fn("Strategies: 1 pure_market_making, 2 avellaneda_market_making, 3 grid")
+    print_fn("Strategies: " + ", ".join(f"{i} {name}" for i, name in enumerate(STRATEGIES, 1)))
     strategy = ask("Strategy", STRATEGIES[0], lambda value: choice(value, STRATEGIES))
     for index, (name, explanation) in enumerate(TRADEOFFS.items(), 1):
         print_fn(f"{index} {name.title()}: {explanation}")
@@ -122,6 +122,6 @@ def run_wizard(
     )
     print_fn("Amounts share the position cap across levels; PMM sizing allows for twofold skew.")
     print_fn("Prices and venue minimums can refuse quotes; presets never raise your risk caps.")
-    if strategy == "avellaneda_market_making":
+    if strategy in {"avellaneda_market_making", "inventory_skewed"}:
         print_fn("Avellaneda waits for 31 consecutive one-second samples with price movement.")
     return path
