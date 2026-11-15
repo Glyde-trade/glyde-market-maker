@@ -367,6 +367,35 @@ ruff check .
 
 Tests use fake One API clients/servers and require no network or credentials.
 
+## Optional chat alerts
+
+Alerts are **off by default**. To opt in, put only the enable flag and environment
+variable **name** in your YAML:
+
+```yaml
+alerts_enabled: true
+alert_webhook_env: GLYDE_MM_ALERT_WEBHOOK
+```
+
+Set that variable to your chat webhook URL in the private `0600` env file; never put
+the URL in YAML, command arguments, screenshots or issues. The endpoint must accept a
+JSON POST with `text`, `event`, `mode`, `run_id` and `outcome` fields; use a local adapter
+if your chat provider requires another schema. HTTPS is required except loopback HTTP
+for local adapters/tests. Redirects are refused and proxy environment settings are ignored.
+
+The hook sends risk-stop, unconfirmed order/cancel, daily-equity-loss and session-end
+events for paper and live sessions **after trading cleanup**. Messages contain no raw exceptions, keys, balances,
+account addresses or order IDs. Webhook URLs and reflected HTTP diagnostics are not logged.
+Each event gets at most three attempts (0.2/0.4-second backoff for network errors, 429 or 5xx);
+requests time out after 1.5 seconds and the whole delivery batch has an 8-second deadline.
+Other 4xx responses are not retried. Missing/invalid configuration and failed delivery print
+a fixed warning without the URL; they never change the trading outcome or trigger order retries.
+
+Alerts are best effort, may duplicate after a lost response, and can be absent during a
+network/process failure. They are not a safety controller or proof that cancellation
+succeeded. Check local reports and the venue. Nothing is sent merely by adding an env var
+while `alerts_enabled` is false. This feature requires current source after v0.4.0.
+
 ## Package releases
 
 The maintainer updates `project.version` in `pyproject.toml`, then creates the matching `v<version>`
