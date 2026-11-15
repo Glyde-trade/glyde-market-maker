@@ -16,6 +16,10 @@ Offline CLI tests exercise paper fills, signed live placement/cancellation and r
 submission. They do not qualify a deployed account: live use still requires the API capabilities,
 registered account permissions and credentials. Refused or ambiguous actions stop quoting.
 
+Follow [Your first market maker in 10 minutes](docs/first-market-maker.md) for the paper → report →
+small-live workflow. See the [strategy chooser](docs/strategies.md#strategy-chooser) and
+[risk-limit FAQ](docs/risk-limits.md) before changing a config.
+
 ## Start in five minutes
 
 **1. Install.** Once the `v0.1.0` GitHub Release is published, install its wheel with
