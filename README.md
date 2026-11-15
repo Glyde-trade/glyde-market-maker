@@ -670,3 +670,28 @@ glyde-mm paper examples/plugin-paper.yaml
 See [the base class, lifecycle and config contract](docs/plugins.md) and the
 [included example](src/glyde_mm/strategies/example_plugin.py). Only import code
 you trust: local Python plugins run with your process permissions, not in a sandbox.
+
+## Push-only live state
+
+Live runs subscribe to `l2Book` plus authenticated `clearinghouseState`,
+`openOrders`, `orderUpdates` and `userFills`. The private channels share one
+sequenced One API group; account, orders and fills become visible together only
+at `glydeBatchEnd`. HTTP `/info` reads are limited to startup metadata and the
+existing exposure preflight. Quote refresh, pretrade checks and cleanup never
+poll account or order endpoints. Paper accounts continue to use the local
+simulator, fed by public WS books and trades.
+
+Missing/duplicate/reordered parts, sequence gaps, changed session/epoch, unsafe
+controls, queue overflow or stale source/local account times stop quoting.
+Pings and cache reads never refresh account timestamps. A partial batch has a
+two-second deadline. A server without these sequenced channels refuses the run;
+there is no HTTP fallback. Initial subscription snapshots must cover all private
+roots before quoting. Earlier private fill rows are not replayed as new fills.
+
+Disconnect stops the session and attempts cancellation of recorded original IDs,
+even if read authority has expired. Failed or unconfirmed cleanup stays an error;
+the bot does not claim that unknown orders disappeared. There is no automatic
+reconnect, and lost actions are never re-signed or replayed. A manual restart repeats startup exposure
+checks and requires a fresh WS snapshot; it cannot resume from a delta or gap.
+The durable risk/unknown-outcome fence remains in force. Private evidence caches
+are bounded; exhausting them stops the session rather than dropping evidence.

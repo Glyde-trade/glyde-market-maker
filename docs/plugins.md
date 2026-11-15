@@ -75,7 +75,7 @@ validated independently; plugins cannot change the configured risk limits.
 | --- | --- |
 | `async on_start(context)` | Once before the first valid book hook. |
 | `async on_book(book)` | Accepted same-symbol book updates; source times preserved. |
-| `async on_fill(fill)` | Fill notifications available to the runner (currently paper tape fills; live private fill hooks are not yet qualified). |
+| `async on_fill(fill)` | Identified paper fills or live `userFills` committed with the owner account/order batch; initial live baseline fills are not replayed as new callbacks. |
 | `async on_tick(now)` | Periodic monotonic runner tick, for local state only. |
 | `quotes(context, book, account)` | Synchronous complete desired quote set at the host's current execution cut. Return a list/tuple of at most 100 `Quote` objects; `[]` pulls quotes at the next refresh. |
 | `async on_stop()` | After host cancellation is attempted, including error shutdown. |
@@ -98,6 +98,6 @@ force an earlier refresh. Plugins cannot directly cancel, submit, select another
 symbol, set IDs or choose a taker order type through this interface.
 
 For advanced explicit live use, follow the ordinary live startup and exposure
-checks. Paper fills are simulation evidence; do not assume the same private
-fill callback is available in live mode. Each configured market gets its own
+checks. Paper fills are simulation evidence. Live mode requires the complete,
+sequenced private WS projection; missing coverage stops the session. Each configured market gets its own
 plugin instance and the existing shared account risk boundary.

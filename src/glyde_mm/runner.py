@@ -16,6 +16,7 @@ from .alerts import notify_session
 from .client import OneApiClient, OneApiError, book_from_wire, trades_from_wire
 from .config import Config
 from .dashboard import SnapshotPublisher
+from .live_state import LiveStateClient
 from .models import Book
 from .paper import PaperExchange
 from .preflight import check_live_exposure
@@ -208,7 +209,10 @@ async def _run_session(
             if stop.is_set():
                 return
         paper = paper_factory(config.paper_balance) if config.mode == "paper" else None
-        raw = paper if paper is not None else source
+        live = LiveStateClient(source, config) if paper is None else None
+        raw = paper if paper is not None else live
+        assert raw is not None
+        cleanup_allowed = paper is not None
         if paper is not None:
             paper.use_trade_tape()
         managed = RiskManagedClient(raw, guard, stop_event=stop, cleanup_symbols=config.symbols)
@@ -236,7 +240,7 @@ async def _run_session(
             subscriptions = [{"type": "l2Book", "coin": symbol} for symbol in selected]
             if paper is not None:
                 subscriptions += [{"type": "trades", "coin": symbol} for symbol in selected]
-            stream = source.stream(subscriptions)
+            stream = live.stream() if live is not None else source.stream(subscriptions)
             resources.push_async_callback(stream.aclose)
             initial_books: dict[str, Book] = {}
             async with asyncio.timeout(10):
@@ -282,6 +286,11 @@ async def _run_session(
                 guard.update_book(book)
                 if paper is not None:
                     await paper.on_book(book)
+            if live is not None:
+                await check_live_exposure(
+                    live, config.symbols, allow_existing_exposure=allow_existing_exposure
+                )
+                cleanup_allowed = True
             guard.update_account(await raw.account())
             if stop.is_set():
                 return
@@ -315,6 +324,12 @@ async def _run_session(
             async def receive_books() -> None:
                 nonlocal book_messages
                 async for frame in stream:
+                    if live is not None and frame.get("channel") == "mmOwner":
+                        guard.update_account(await live.account())
+                        guard.set_open_orders(await live.open_orders())
+                        for fill in frame["fills"]:
+                            await strategies[fill.symbol].on_fill(fill)
+                        continue
                     if paper is not None and frame.get("channel") == "trades":
                         trades = trades_from_wire(frame["data"])
                         if any(trade.symbol not in selected for trade in trades):
@@ -362,7 +377,9 @@ async def _run_session(
                 reported = logged = None
                 while not stop.is_set():
                     now = time.monotonic()
-                    if now - refreshed >= min(2.0, limits.account_age_seconds / 2):
+                    if paper is not None and now - refreshed >= min(
+                        2.0, limits.account_age_seconds / 2
+                    ):
                         guard.update_account(await raw.account())
                         refreshed = now
                     for strategy in strategies.values():
@@ -388,6 +405,8 @@ async def _run_session(
 
             async def watchdog() -> None:
                 while True:
+                    if live is not None:
+                        live.check()
                     for symbol in selected:
                         guard.check_fresh(symbol)
                     await managed.check_liveness()
@@ -436,8 +455,11 @@ async def _run_session(
                         raise failure
                 finally:
                     try:
-                        await managed.close()
+                        if cleanup_allowed:
+                            await managed.close()
                     finally:
+                        if live is not None:
+                            await live.close()
                         if paper is not None:
                             await observer.publish(guard, paper=paper)
                             reason = risk_stop or guard.halted
