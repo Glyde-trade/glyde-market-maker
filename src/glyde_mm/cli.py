@@ -117,8 +117,17 @@ def main(argv: list[str] | None = None) -> int:
     tape.add_argument(
         "--include-hl", action="store_true", help="also record public HL reference books"
     )
+    reconciliation = commands.add_parser(
+        "reconcile", help="compare recorded private fills with paper on the same tape"
+    )
+    reconciliation.add_argument("--session-file", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.command == "reconcile":
+            from .reconciliation import reconcile_session
+
+            print(json.dumps(asyncio.run(reconcile_session(args.session_file)), indent=2))
+            return 0
         if args.command == "compare":
             from .compare import compare_strategies, format_comparison
 
