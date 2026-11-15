@@ -41,6 +41,8 @@ class PaperExchange:
         old = self._books.get(book.symbol)
         if old is not None and book.timestamp_ms < old.timestamp_ms:
             raise ValueError("paper book timestamp regressed")
+        if old is not None and book.timestamp_ms == old.timestamp_ms:
+            return
         self._books[book.symbol] = book
         # One observed depth budget is shared across all local orders.
         bids = [[level.price, level.quantity] for level in book.bids]

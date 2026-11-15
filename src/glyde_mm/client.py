@@ -41,7 +41,8 @@ class OutcomeUnknown(OneApiError):
 def wire_decimal(value: Decimal) -> str:
     if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
         raise ValueError("price and quantity must be finite positive Decimals")
-    return format(value.normalize(), "f")
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
 
 
 def book_from_wire(data: dict[str, Any]) -> Book:
@@ -251,31 +252,57 @@ class OneApiClient:
             raise OneApiError("exchange refused the action")
         try:
             statuses = result["response"]["data"]["statuses"]
-            if len(statuses) != count:
+            if not isinstance(statuses, list) or len(statuses) != count:
                 raise ValueError
             return statuses
         except (KeyError, TypeError, ValueError):
             raise OutcomeUnknown("exchange receipt does not match the submitted batch") from None
 
+    @staticmethod
+    def _receipt_order_id(value: object) -> str:
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise OutcomeUnknown("invalid order receipt identity")
+        text = str(value)
+        if not re.fullmatch(r"[1-9][0-9]{0,19}", text) or int(text) > 2**64 - 1:
+            raise OutcomeUnknown("invalid order receipt identity")
+        return text
+
     def _order_results(self, result: dict, orders: Sequence[OrderRequest]) -> list[OrderResult]:
         responses = []
         for request, status in zip(orders, self._statuses(result, len(orders)), strict=True):
-            if isinstance(status, dict) and "resting" in status:
-                responses.append(
-                    OrderResult("resting", str(status["resting"]["oid"]), request.client_order_id)
-                )
-            elif isinstance(status, dict) and "filled" in status:
-                responses.append(
-                    OrderResult("filled", str(status["filled"]["oid"]), request.client_order_id)
-                )
-            elif isinstance(status, dict) and "error" in status:
+            if not isinstance(status, dict) or len(status) != 1:
+                raise OutcomeUnknown("unrecognized or contradictory order receipt")
+            if "error" in status and isinstance(status["error"], str):
                 responses.append(
                     OrderResult(
                         "rejected", client_order_id=request.client_order_id, error="order refused"
                     )
                 )
-            else:
+                continue
+            kind = next(iter(status))
+            if kind not in {"resting", "filled"} or not isinstance(status[kind], dict):
                 raise OutcomeUnknown("unrecognized order receipt")
+            row = status[kind]
+            required = {"oid"} if kind == "resting" else {"oid", "totalSz", "avgPx"}
+            if not required <= row.keys() or row.keys() - required - {"cloid"}:
+                raise OutcomeUnknown("invalid order receipt shape")
+            oid = self._receipt_order_id(row["oid"])
+            if "cloid" in row and row["cloid"] != request.client_order_id:
+                raise OutcomeUnknown("order receipt client identity mismatch")
+            if kind == "filled":
+                try:
+                    if not isinstance(row["totalSz"], str) or not isinstance(row["avgPx"], str):
+                        raise ValueError
+                    size, price = decimal(row["totalSz"]), decimal(row["avgPx"])
+                    if not 0 < size <= request.quantity or price <= 0:
+                        raise ValueError
+                    if (request.side == "buy" and price > request.price) or (
+                        request.side == "sell" and price < request.price
+                    ):
+                        raise ValueError
+                except ValueError:
+                    raise OutcomeUnknown("invalid filled-order receipt economics") from None
+            responses.append(OrderResult(kind, oid, request.client_order_id))
         return responses
 
     async def modify_orders(self, orders: Sequence[ModifyRequest]) -> list[OrderResult]:
