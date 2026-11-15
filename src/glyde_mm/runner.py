@@ -72,9 +72,14 @@ async def run(
     stop_event: asyncio.Event | None = None,
     report: Callable[[str], object] = print,
     allow_existing_exposure: bool = False,
+    log_directory: Path | None = None,
 ) -> None:
     stop = stop_event or asyncio.Event()
-    with RunLog(state_directory / "logs", mode=config.mode, strategy=config.strategy) as journal:
+    with RunLog(
+        log_directory if log_directory is not None else state_directory / "logs",
+        mode=config.mode,
+        strategy=config.strategy,
+    ) as journal:
         report(f"GLYDE-MM {journal.identity['version']} commit={journal.identity['commit']}")
         outcome = "completed"
         observer = SnapshotPublisher(journal.directory / "dashboard.json", config, journal.run_id)

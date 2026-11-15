@@ -106,6 +106,10 @@ failures return a nonzero exit code.
 
 ## Go live with small, explicit limits
 
+For a guided current-source first session, see [live-wizard](docs/first-live-session.md):
+doctor → two-minute paper preview → typed confirmation → Conservative live run with a
+30-minute auto-stop and private final report. It currently supports one symbol.
+
 Create/authorize an API wallet for your Glyde trading account using Glyde's account controls. Use its
 **trading key**, not a main wallet seed phrase. Use the exact account and any assigned vault/namespace
 from your account's discovery data. A trading key is not a read credential; provide the separate read
