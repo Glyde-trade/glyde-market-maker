@@ -1,0 +1,18 @@
+# Copy the example class to an importable Python module and edit strategy below.
+mode: paper
+symbol: BTC
+strategy: plugin:glyde_mm.strategies.example_plugin:SymmetricQuotes
+strategy_config:
+  order_refresh_time: 30
+  max_order_age: 300
+  parameters:
+    spread: '0.002'
+    amount: '0.0001'
+paper_balance: '10000'
+risk:
+  max_position: '0.001'
+  max_order_notional: '25'
+  max_daily_loss: '5'
+  max_orders_per_minute: 60
+  stale_book_seconds: '5'
+  account_age_seconds: '10'

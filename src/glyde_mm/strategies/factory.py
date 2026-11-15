@@ -9,6 +9,7 @@ from typing import Any, TypeAlias, TypeVar, cast
 from .avellaneda_market_making import AvellanedaConfig, AvellanedaMarketMakingStrategy
 from .grid import GridConfig, GridStrategy
 from .inventory_skewed import InventorySkewedConfig, InventorySkewedStrategy
+from .plugin import PluginDefinition, PluginStrategy, load_plugin
 from .pure_market_making import (
     PureMarketMakingConfig,
     PureMarketMakingStrategy,
@@ -58,7 +59,11 @@ _CONFIGS: dict[str, type[StrategyConfig]] = {
 }
 
 
-def validate_strategy_config(name: str, values: dict[str, Any]) -> StrategyConfig:
+def validate_strategy_config(
+    name: str, values: dict[str, Any]
+) -> StrategyConfig | PluginDefinition:
+    if name.startswith("plugin:"):
+        return load_plugin(name, values)
     try:
         config_type = _CONFIGS[name]
     except KeyError:
@@ -68,6 +73,8 @@ def validate_strategy_config(name: str, values: dict[str, Any]) -> StrategyConfi
 
 def create_strategy(name: str, context: StrategyContext, values: dict[str, Any]) -> Strategy:
     selected = validate_strategy_config(name, values)
+    if isinstance(selected, PluginDefinition):
+        return PluginStrategy(context, selected)
     if isinstance(selected, InventorySkewedConfig):
         return InventorySkewedStrategy(context, selected)
     if isinstance(selected, AvellanedaConfig):

@@ -602,3 +602,17 @@ quantities and actual USDC fee impact, with missing evidence refused or unavaila
 A complete execution capture is required; ordinary diagnostic logs are insufficient.
 See [capture format and limitations](docs/reconciliation.md). No trading or state reset
 is performed.
+
+## Your own strategy plugin
+
+Advanced users can select `plugin:module:Class` and a frozen, typed dataclass of
+parameters. Plugins return passive `Quote` intents; the host owns order IDs,
+cancel-before-replace, and every risk check. Start with:
+
+```sh
+glyde-mm paper examples/plugin-paper.yaml
+```
+
+See [the base class, lifecycle and config contract](docs/plugins.md) and the
+[included example](src/glyde_mm/strategies/example_plugin.py). Only import code
+you trust: local Python plugins run with your process permissions, not in a sandbox.
