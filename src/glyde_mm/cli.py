@@ -45,6 +45,11 @@ def main(argv: list[str] | None = None) -> int:
         run = commands.add_parser(name)
         run.add_argument("config_path", nargs="?")
         run.add_argument("--config", dest="config_option")
+    for name in ("record", "replay"):
+        history = commands.add_parser(name, help="capture/replay local public books in paper mode")
+        history.add_argument("--config", dest="config_option", default="glyde-mm.yaml")
+        history.add_argument("--minutes", type=int, default=5)
+        history.add_argument("--book-file", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
@@ -55,6 +60,25 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "config":
             write_config(args.output)
             print("Paper configuration created; API keys belong in environment variables.")
+            return 0
+        if args.command in {"record", "replay"}:
+            selected = load_config(args.config_option)
+            if args.command == "record":
+                from .book_history import record_books
+
+                count = asyncio.run(record_books(selected, args.book_file, args.minutes))
+                print(f"Recorded {count} public books; no private account or orders accessed.")
+            else:
+                from .replay import replay
+
+                result = asyncio.run(replay(selected, args.book_file, args.minutes))
+                print(
+                    f"PAPER REPLAY | inventory={result.inventory:f}"
+                    f" | simulated_pnl={result.pnl:+f} USDC | fills={result.fills}"
+                    f" | risk_stop={result.risk_stop or 'none'}"
+                    f" | simulated_seconds={(result.end_ms - result.start_ms) / 1000:g}"
+                )
+                print("Quotes cancelled. Simulation excludes fees, funding and queue priority.")
             return 0
         if args.config_path and args.config_option:
             parser.error("use either a positional config or --config")
