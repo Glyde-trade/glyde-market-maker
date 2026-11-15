@@ -10,6 +10,8 @@ from pathlib import Path
 
 import yaml
 
+from .presets import STRATEGIES, TRADEOFFS, strategy_preset
+
 
 def _decimal(value: str, *, maximum: Decimal | None = None) -> str:
     try:
@@ -55,11 +57,22 @@ def run_wizard(
 
     print_fn("Start in PAPER mode: orders and balances are simulated; no trading key is needed.")
     market = ask("Market", "BTC", symbol)
-    amount = ask("Order amount in base units (check the current market price)", "0.0001", _decimal)
-    spread = ask(
-        "Bid/ask spread fraction (0.002 = 0.2%)",
-        "0.002",
-        lambda value: _decimal(value, maximum=Decimal("1")),
+
+    def choice(value: str, options: tuple[str, ...]) -> str:
+        selected = value.lower()
+        if selected.isdigit() and 1 <= int(selected) <= len(options):
+            selected = options[int(selected) - 1]
+        if selected not in options:
+            raise ValueError("Choose a listed name or number.")
+        return selected
+
+    print_fn("Strategies: 1 pure_market_making, 2 avellaneda_market_making, 3 grid")
+    strategy = ask("Strategy", STRATEGIES[0], lambda value: choice(value, STRATEGIES))
+    for index, (name, explanation) in enumerate(TRADEOFFS.items(), 1):
+        print_fn(f"{index} {name.title()}: {explanation}")
+    preset = ask("Preset", "conservative", lambda value: choice(value, tuple(TRADEOFFS)))
+    reference = ask(
+        "Reference market price in USDC (update this to today's price)", "100000", _decimal
     )
     maximum_order = ask("Maximum notional per order in USDC", "25", _decimal)
     maximum_position = ask("Maximum absolute position in base units", "0.001", _decimal)
@@ -73,18 +86,13 @@ def run_wizard(
         "mode": "paper",
         "symbol": market,
         "base_url": "https://api.glyde.trade/v1",
-        "strategy": "pure_market_making",
+        "strategy": strategy,
         "paper_balance": "1000",
         "private_key_env": private_key_env,
         "read_api_key_env": "GLYDE_READ_API_KEY",
-        "strategy_config": {
-            "order_amount": amount,
-            "bid_spread": spread,
-            "ask_spread": spread,
-            "order_refresh_time": 30,
-            "order_levels": 1,
-            "hanging_orders_enabled": False,
-        },
+        "strategy_config": strategy_preset(
+            strategy, preset, Decimal(reference), Decimal(maximum_order), Decimal(maximum_position)
+        ),
         "risk": {
             "max_position": maximum_position,
             "max_order_notional": maximum_order,
@@ -93,12 +101,16 @@ def run_wizard(
             "account_age_seconds": "10",
         },
     }
-    if Decimal(amount) > Decimal(maximum_position):
-        raise ValueError("Order amount exceeds maximum position; no configuration was written.")
     # Exclusive open also closes the check/create race without following a new symlink.
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(descriptor, "w") as handle:
+            handle.write(
+                f"# {preset.title()} paper preset; sizing reference price {reference} USDC.\n"
+            )
+            handle.write(
+                "# Prices move: runtime risk caps still apply. Edit this YAML to customize.\n"
+            )
             yaml.safe_dump(values, handle, sort_keys=False)
             handle.flush()
             os.fsync(handle.fileno())
@@ -108,7 +120,8 @@ def run_wizard(
     print_fn(
         "Paper configuration saved. Keep keys in your environment; never paste them into YAML."
     )
-    print_fn(
-        "Size limits can refuse quotes. Check exchange minimum size and current notional first."
-    )
+    print_fn("Amounts share the position cap across levels; PMM sizing allows for twofold skew.")
+    print_fn("Prices and venue minimums can refuse quotes; presets never raise your risk caps.")
+    if strategy == "avellaneda_market_making":
+        print_fn("Avellaneda waits for 31 consecutive one-second samples with price movement.")
     return path
