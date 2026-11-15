@@ -3,7 +3,8 @@
 Use Glyde's One API for public market data, owner reads and signed trading.
 Start with public reads or a paper bot; authorize trading separately.
 
-This guide targets `hyperliquid-python-sdk==0.24.0`. Public SDK calls below were
+Python examples target `hyperliquid-python-sdk==0.24.0`; the TypeScript public
+example pins `@nktkas/hyperliquid@0.33.3`. Public Python calls below were
 observed against an owned local Glyde paper stack on 2026-11-15; see the
 [verification notes](#verification-and-compatibility-gaps)
 for scope and limitations. Private examples are checked against the
@@ -76,6 +77,87 @@ finally:
 `l2Book` messages are full books. The stock SDK suppresses empty `trades` arrays;
 zero callbacks can mean no executions, not a disconnected stream. Its callback
 dispatcher also does not expose Glyde batch-end/ACK frames as market callbacks.
+
+### TypeScript public-read alternative
+
+Use Node.js 24 for the directly runnable TypeScript example below. Pin the
+community-supported `@nktkas/hyperliquid` SDK to **0.33.3**, published
+2026-08-02 (more than two weeks before this 2026-11-15 check):
+
+```sh
+mkdir glyde-public-read
+cd glyde-public-read
+yarn init -y
+yarn add --exact @nktkas/hyperliquid@0.33.3
+# Save the TypeScript below as public-one-api.mts, then:
+node public-one-api.mts
+```
+
+`HttpTransport.apiUrl` takes the One API base including `/v1`;
+`WebSocketTransport.url` takes the complete socket URL including `/v1/ws`.
+Changing `isTestnet` alone selects HL endpoints, not Glyde. No wallet, signing
+package or read credential is needed for these public calls.
+
+```ts
+import {
+  HttpRequestError, HttpTransport, InfoClient, SubscriptionClient,
+  WebSocketTransport, type ISubscription,
+} from "@nktkas/hyperliquid";
+
+const base = process.env.GLYDE_ONE_API_BASE ?? "https://api.glyde.trade/v1";
+const info = new InfoClient({ transport: new HttpTransport({ apiUrl: base, timeout: 5000 }) });
+console.log(await info.meta());
+console.log(await info.l2Book({ coin: "BTC" }));
+console.log(await info.allMids());
+try {
+  console.log(await info.candleSnapshot({
+    coin: "BTC", interval: "1m", startTime: Date.now() - 60_000, endTime: Date.now(),
+  }));
+} catch (error) {
+  if (!(error instanceof HttpRequestError)) throw error;
+  console.error("Candle read refused:", error.response?.status, error.message);
+}
+
+const url = new URL(base);
+url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+url.pathname = url.pathname.replace(/\/$/, "") + "/ws";
+const transport = new WebSocketTransport({
+  url, timeout: 5000, resubscribe: false, reconnect: { maxRetries: 0 },
+});
+const subscriptions = new SubscriptionClient({ transport });
+const handles: ISubscription[] = [];
+try {
+  await transport.ready(AbortSignal.timeout(5000));
+  handles.push(await subscriptions.l2Book({ coin: "BTC" }, console.log));
+  handles.push(await subscriptions.trades({ coin: "BTC" }, console.log));
+  handles.push(await subscriptions.allMids(console.log));
+  await new Promise((resolve) => setTimeout(resolve, 5000));
+} finally {
+  const results = await Promise.allSettled(handles.map((handle) => handle.unsubscribe()));
+  transport.close();
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
+}
+```
+
+This exact module ran locally through the unchanged SDK against an owned
+loopback **fake**, using retained public HTTP values and synthetic socket
+ACKs/book/mid/trade frames. It did not contact production or exercise a native
+engine. Meta, book, mids, three subscriptions, a nonempty synthetic trade and
+unsubscribe ACKs passed; empty trade arrays produced no callback. Candle/context
+503 responses were deliberately modeled unavailable cases, not new service
+observations. The SDK returned `HttpRequestError` with status 503; no empty
+history was substituted.
+
+For this version, HTTP `/v1/` also normalizes to `/v1/info`, whereas a bare
+origin still targets `/info` and fails the fixture's route. Keep the canonical
+base for portability with Python. The SDK's book schema permits mantissa 2 or 5
+only: `mantissa:1` throws `ValidationError` before any request, even though One
+API accepts it with `nSigFigs:5`. Default WS book requests include explicit null
+aggregation options; ACKs must preserve them. SDK response types are not a
+runtime guarantee of complete native facts. This public example disables
+automatic reconnect/resubscription and does not implement private authentication,
+Glyde atomic batch reduction or recovery after a gap.
 
 ## 3. Obtain two separate credentials
 
