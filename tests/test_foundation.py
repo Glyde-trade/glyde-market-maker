@@ -99,7 +99,7 @@ async def test_info_exact_decimals_and_private_header(client):
         assert ("x-glyde-api-key" in request.headers) == private
 
 
-async def test_order_signature_uses_explicit_mainnet_and_exact_strings(client):
+async def test_order_signature_uses_glyde_realm_b_and_exact_strings(client):
     api, server = client
     result = await api.place_orders(
         [OrderRequest("BTC", "buy", D("0.00001"), D("100.00000001"), CLOID)]
@@ -117,11 +117,11 @@ async def test_order_signature_uses_explicit_mainnet_and_exact_strings(client):
         "c": CLOID,
     }
     signer = recover_agent_or_user_from_l1_action(
-        envelope["action"], envelope["signature"], OWNER, envelope["nonce"], None, True
+        envelope["action"], envelope["signature"], OWNER, envelope["nonce"], None, False
     )
     assert signer == EthAccount.from_key(TEST_KEY).address
     wrong_domain = recover_agent_or_user_from_l1_action(
-        envelope["action"], envelope["signature"], OWNER, envelope["nonce"], None, False
+        envelope["action"], envelope["signature"], OWNER, envelope["nonce"], None, True
     )
     assert wrong_domain != signer
 

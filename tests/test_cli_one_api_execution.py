@@ -148,7 +148,7 @@ def exercise_cli(
                     assert config.mode == "live"
                     assert body["vaultAddress"] == VAULT
                     signer = recover_agent_or_user_from_l1_action(
-                        body["action"], body["signature"], VAULT, body["nonce"], None, True
+                        body["action"], body["signature"], VAULT, body["nonce"], None, False
                     )
                     assert signer == wallet.address
                     actions.append(body)

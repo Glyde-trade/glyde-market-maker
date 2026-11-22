@@ -420,8 +420,10 @@ class OneApiClient:
             self._agent_wallet()
             nonce = max(time.time_ns() // 1_000_000, self._last_nonce + 1)
             self._last_nonce = nonce
+            # Glyde verifies L1 actions in realm/source "b" on every network, production included;
+            # config.mainnet only selects the Glyde grant/read-session chain (42161 vs 421614).
             signature = sign_l1_action(
-                self._wallet, action, self.config.vault_address, nonce, None, self.config.mainnet
+                self._wallet, action, self.config.vault_address, nonce, None, False
             )
             envelope = {
                 "action": action,
