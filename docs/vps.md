@@ -47,8 +47,10 @@ in an editor, using the names referenced by your config, not `export` commands:
 
 ```text
 GLYDE_API_PRIVATE_KEY=<trading API key>
-GLYDE_READ_API_KEY=<read credential>
 ```
+
+The bot mints its own short-lived read credentials from the trading key; set
+`GLYDE_READ_API_KEY` only to override that with a credential you minted elsewhere.
 
 Keep that file outside the repository/build context. Never paste actual keys into YAML,
 Compose arguments, screenshots or issues. Do not post `docker compose config` output:

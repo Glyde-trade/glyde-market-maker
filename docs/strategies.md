@@ -251,7 +251,7 @@ uses percentage points (`0.1 = 0.1%`). Defaults are not reviewed trading sizes.
 | `vault_address` | null | Discovered signed trading namespace; required for live, distinct from owner. |
 | `mainnet` | true | Signing source/network selection; not permission or account discovery. |
 | `private_key_env` | `GLYDE_API_PRIVATE_KEY` | Trading-key environment variable name, never its value. |
-| `read_api_key_env` | `GLYDE_READ_API_KEY` | Private-read environment variable name, never its value. |
+| `read_api_key_env` | `GLYDE_READ_API_KEY` | Optional private-read override variable name, never its value; when unset, reads are minted from the trading key. |
 | `paper_balance` | `10000` | Positive simulated starting equity, in USDC. |
 | `strategy` | `pure_market_making` | A chooser key above, or a trusted [plugin](plugins.md). |
 | `strategy_config` | empty | The selected strategy's keys below. |
