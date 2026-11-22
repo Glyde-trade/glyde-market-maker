@@ -16,6 +16,7 @@ from test_multi_market_live import MarketWire
 from glyde_mm import runner
 from glyde_mm.client import OneApiClient
 from glyde_mm.config import Config, MarketConfig, RiskConfig
+from glyde_mm.models import BOT_CLOID_PREFIX, bot_client_order_id, is_bot_order
 from glyde_mm.risk import RiskViolation
 from glyde_mm.runner import risk_state_path, run
 
@@ -111,7 +112,7 @@ async def until(wire, predicate):
 
 
 @asynccontextmanager
-async def episode(wire, selected, directory):
+async def episode(wire, selected, directory, **options):
     stop = asyncio.Event()
     approved_market(selected, directory)  # This test isolates post-preflight lifecycle.
     async with httpx.AsyncClient(transport=httpx.MockTransport(wire.http)) as http:
@@ -123,6 +124,7 @@ async def episode(wire, selected, directory):
                 client_factory=lambda _: source,
                 stop_event=stop,
                 report=lambda _: None,
+                **options,
             )
         )
         try:
@@ -180,25 +182,26 @@ async def test_socket_drop_reconciles_venue_orders_before_requoting(tmp_path, mo
         await wire.socket.close()
         await until(wire, lambda: not wire.orders())
         dropped = len(wire.actions)
-        # Venue state the dead session cannot see, e.g. an order from a lost receipt.
-        stray = wire.ledger.exchange(
-            {
-                "action": {
-                    "type": "order",
-                    "orders": [
-                        {
-                            "a": 0,
-                            "b": True,
-                            "p": "90",
-                            "s": "0.01",
-                            "r": False,
-                            "t": {"limit": {"tif": "Gtc"}},
-                        }
-                    ],
-                }
-            }
-        )["response"]["data"]["statuses"][0]["resting"]["oid"]
-        await until(wire, lambda: len(wire.orders()) == 4 and str(stray) not in wire.orders())
+
+        def rest(price, **tag):
+            wire_order = {"a": 0, "b": True, "p": price, "s": "0.01", "r": False}
+            wire_order |= {"t": {"limit": {"tif": "Gtc"}}, **tag}
+            action = {"type": "order", "orders": [wire_order]}
+            return str(
+                wire.ledger.exchange({"action": action})["response"]["data"]["statuses"][0][
+                    "resting"
+                ]["oid"]
+            )
+
+        # A bot order the dead session cannot see, e.g. from a lost receipt.
+        stray = rest("90", c=bot_client_order_id())
+        # The account holder's own manual order: never the bot's to cancel.
+        manual = rest("80")
+        await until(
+            wire,
+            lambda: len(wire.orders()) == 5 and stray not in wire.orders(),
+        )
+        assert manual in wire.orders()
         assert set(wire.orders()).isdisjoint(originals)
         assert wire.connections == 2 and not task.done()
         after = [action for _, action in wire.actions[dropped:]]
@@ -209,10 +212,12 @@ async def test_socket_drop_reconciles_venue_orders_before_requoting(tmp_path, mo
             if action["type"] == "cancel"
             for row in action["cancels"]
         }
-        assert stray in reconciled
+        assert int(stray) in reconciled
         stop.set()
         await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
-    assert not wire.orders()
+    assert set(wire.orders()) == {manual}
+    cancelled = {row["o"] for _, a in wire.actions if a["type"] == "cancel" for row in a["cancels"]}
+    assert int(manual) not in cancelled
     wire.assert_no_duplicate_cancels()
     state = json.loads(risk_state_path(selected, tmp_path).read_text())
     assert state["execution"] is None
@@ -305,3 +310,23 @@ async def test_lost_cancel_receipt_keeps_originals_fenced_despite_empty_venue(tm
             await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
     assert sum(action["type"] == "order" for _, action in wire.actions) == placements
     assert json.loads(risk_state_path(selected, tmp_path).read_text())["execution"] is not None
+
+
+async def test_manual_order_survives_live_start_quoting_and_shutdown(tmp_path):
+    wire, selected = ResilienceWire(), config()
+    wire.ledger.now_ms = time.time_ns() // 1_000_000
+    manual_wire = {"a": 0, "b": True, "p": "80", "s": "0.01", "r": False}
+    manual_wire["t"] = {"limit": {"tif": "Gtc"}}
+    receipt = wire.ledger.exchange({"action": {"type": "order", "orders": [manual_wire]}})
+    manual = str(receipt["response"]["data"]["statuses"][0]["resting"]["oid"])
+    async with episode(wire, selected, tmp_path, allow_existing_exposure=True) as (task, stop):
+        await until(wire, lambda: len(wire.orders()) == 5)
+        assert manual in wire.orders() and not task.done()
+        stop.set()
+        await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
+    assert set(wire.orders()) == {manual}
+    placed = [row for _, a in wire.actions if a["type"] == "order" for row in a["orders"]]
+    assert len(placed) >= 4 and all(is_bot_order(row["c"]) for row in placed)
+    assert all(row["c"].startswith(BOT_CLOID_PREFIX) and len(row["c"]) == 34 for row in placed)
+    cancels = [a for _, a in wire.actions if a["type"] in {"cancel", "cancelByCloid"}]
+    assert cancels and all(row.get("o") != int(manual) for a in cancels for row in a["cancels"])

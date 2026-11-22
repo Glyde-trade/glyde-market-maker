@@ -14,7 +14,7 @@ from eth_account import Account as Wallet
 from glyde_mm import cli
 from glyde_mm.client import OneApiClient, OneApiError
 from glyde_mm.config import Config
-from glyde_mm.models import Account, CancelResult, OpenOrder, OrderRequest
+from glyde_mm.models import Account, CancelResult, OpenOrder, OrderRequest, bot_client_order_id
 from glyde_mm.paper import PaperExchange
 from glyde_mm.risk import RiskViolation
 from glyde_mm.runner import risk_state_path, run
@@ -38,7 +38,7 @@ def selected():
 class Source:
     def __init__(self):
         self.events = []
-        self.rows = [OpenOrder("1", "BTC", "buy", D("0.1"), D(99))]
+        self.rows = [OpenOrder("1", "BTC", "buy", D("0.1"), D(99), bot_client_order_id())]
 
     async def __aenter__(self):
         return self
@@ -86,8 +86,10 @@ async def test_crashed_runner_stop_cancels_only_symbol_and_preserves_positions(
     async with factory(config) as client:
         await client.place_orders(
             [
-                OrderRequest("BTC", "buy", D("0.1"), D(98)),
-                OrderRequest("ETH", "buy", D("0.1"), D(8)),
+                OrderRequest("BTC", "buy", D("0.1"), D(98), bot_client_order_id()),
+                OrderRequest("ETH", "buy", D("0.1"), D(8), bot_client_order_id()),
+                # The account holder's own BTC order, untagged and without a cloid.
+                OrderRequest("BTC", "buy", D("0.1"), D(97)),
             ]
         )
         before = await client.account()
@@ -99,7 +101,8 @@ async def test_crashed_runner_stop_cancels_only_symbol_and_preserves_positions(
     assert json.loads(path.read_text()) == result
     assert path.stat().st_mode & 0o777 == 0o600
     async with factory(config) as client:
-        assert [row.symbol for row in await client.open_orders()] == ["ETH"]
+        left = await client.open_orders()
+        assert sorted((row.symbol, row.price) for row in left) == [("BTC", 97), ("ETH", 8)]
         assert (await client.account()).positions == before.positions
     assert writes == ["cancel"]
     again, _ = await stop_bot(config, tmp_path, client_factory=factory)

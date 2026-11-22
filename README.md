@@ -205,9 +205,11 @@ must be corrected in the config, not retried with larger limits automatically.
 
 The defaults cap one order at **25 USDC**, absolute position at **0.001 BTC** and daily account equity
 loss at **5 USDC**. These are local guardrails, not a loss guarantee. Daily equity changes include
-transfers as well as trading PnL. Use a dedicated trading account: cancel-all on disconnect or exit
-can cancel other orders in the same account. Review remaining orders in your account if cancellation
-fails; loss of connectivity cannot guarantee a successful cancel.
+transfers as well as trading PnL. Cleanup on disconnect or exit cancels only glyde-mm's own orders: every
+order it places carries a client order id tagged `0x676d6d31` ("gmm1"). Your other orders stay
+resting but still count toward its risk limits. A dedicated trading account is still recommended.
+Review remaining orders in your account if cancellation fails; loss of connectivity cannot guarantee
+a successful cancel.
 
 Unknown order/cancel outcomes stop new orders and retain the original identity. The bot does not
 resend an ambiguous order or replace it with a new nonce/ID. A stale book pauses that market
@@ -321,9 +323,9 @@ glyde-mm stop configs/live.yaml
 ```
 
 This requests a local runner stop, waits for its cleanup to finish, then cancels and
-verifies all open orders on the configured account **and symbol**, including orders
-placed manually on that symbol. Use a dedicated account. Positions are **not** closed;
-other symbols are not canceled. A paper config stops only its local paper runner and
+verifies glyde-mm's own tagged open orders on the configured account **and symbol**. Orders
+you placed yourself stay open. A dedicated account is still recommended. Positions are
+**not** closed; other symbols are not canceled. A paper config stops only its local paper runner and
 does not load keys or contact the exchange.
 
 The config must use the same `.glyde-mm` directory beside the config file as the running
@@ -356,9 +358,8 @@ For diagnostic logs, use `glyde-mm report path/to/.glyde-mm/logs`.
   against a UTC-day baseline, including unrealized changes and transfers; it does not
   flatten existing positions. Run one bot process per dedicated account: the local state
   file is not a cross-process coordinator.
-- Disconnects, stale data and ambiguous writes stop quoting. Cleanup attempts cancellation,
-  but cannot guarantee success while disconnected and can affect other orders in the same
-  account. Keep persistent risk state and reconcile original orders after an unknown outcome;
+- Disconnects, stale data and ambiguous writes stop quoting. Cleanup attempts cancellation
+  of the bot's own tagged orders only, but cannot guarantee success while disconnected. Keep persistent risk state and reconcile original orders after an unknown outcome;
   restarting or deleting state is not reconciliation. Ambiguous order submissions are not
   automatically resubmitted.
 - Strategies provide quoting logic, not a profit guarantee. The fixed grid does not manage
@@ -641,9 +642,9 @@ If the stale market has a position, new quotes that require its notional valuati
 until that book is fresh; stale prices never become an assumed account-level bound.
 
 A private/account stream failure, continuity gap, unknown cancellation, disconnect,
-daily-loss stop or other risk violation still stops the shared session. Shutdown attempts
-**every configured symbol**, including manual orders on those symbols, while leaving other
-symbols and all positions untouched.
+daily-loss stop or other risk violation still stops the shared session. Shutdown cancels the
+bot's own tagged orders on **every configured symbol**, leaving manual orders, other symbols and
+all positions untouched.
 Use a dedicated account and only one runner for it. Paper status lines show each market's
 inventory/fills/quotes; their PnL is the **same account-wide PnL**, not additive market PnL.
 `stop <config>` coordinates and verifies the full configured set; retain the exact config

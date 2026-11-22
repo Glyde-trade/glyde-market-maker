@@ -146,7 +146,8 @@ def main(argv: list[str] | None = None) -> int:
                 "--i-understand",
                 action="store_true",
                 help=(
-                    "allow existing symbol orders/positions; confirmation and risk caps still apply"
+                    "allow existing symbol orders/positions; they are never cancelled, and "
+                    "confirmation and risk caps still apply"
                 ),
             )
         if name == "doctor":
@@ -287,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
                     file=sys.stderr,
                 )
                 return 1
-            print("No positions closed. Other symbols are unchanged.")
+            print("No positions closed. Your own orders and other symbols are unchanged.")
             return 0
         if args.command == "paper":
             from dataclasses import replace
@@ -296,7 +297,10 @@ def main(argv: list[str] | None = None) -> int:
         print(summary(selected), flush=True)
         if selected.mode == "live":
             print("Daily loss is an equity stop threshold, not a guaranteed maximum loss.")
-            print("Cleanup can cancel other orders in this account; use a dedicated account.")
+            print(
+                "Cleanup cancels only glyde-mm's own tagged orders; your other orders stay open "
+                "and count toward its risk limits. A dedicated account is still recommended."
+            )
             try:
                 confirmed = input(f"Type {','.join(selected.symbols)} to confirm LIVE trading: ")
             except EOFError:
@@ -337,7 +341,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except LivePreflightRefused:
         print(
-            "Live start refused: existing orders or a position on this symbol. "
+            "Live start refused: existing orders or a position on this symbol. glyde-mm "
+            "never cancels orders it did not place, but they count toward its risk limits. "
             "Review the account and use --i-understand only to accept that exposure.",
             file=sys.stderr,
         )

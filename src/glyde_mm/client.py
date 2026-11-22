@@ -35,6 +35,7 @@ from .models import (
     OrderRequest,
     OrderResult,
     Trade,
+    is_bot_order,
 )
 from .transport import WebSocketFactory
 
@@ -547,19 +548,19 @@ class OneApiClient:
         return results
 
     async def cancel_all(self, symbol: str | None = None) -> None:
+        """Cancel the bot's tagged orders; the account's other orders are left resting."""
+
+        def owned(row: OpenOrder) -> bool:
+            return is_bot_order(row.client_order_id) and symbol in (None, row.symbol)
+
         rows = await self.open_orders()
         results = await self.cancel_orders(
-            [
-                CancelRequest(row.symbol, row.order_id)
-                for row in rows
-                if symbol is None or row.symbol == symbol
-            ]
+            [CancelRequest(row.symbol, row.order_id) for row in rows if owned(row)]
         )
         if any(result.status != "cancelled" for result in results):
             raise OneApiError("one or more cancel-all requests were refused")
-        remaining = await self.open_orders()
-        if any(symbol is None or row.symbol == symbol for row in remaining):
-            raise OneApiError("cancel-all could not confirm an empty open-order snapshot")
+        if any(owned(row) for row in await self.open_orders()):
+            raise OneApiError("cancel-all could not confirm the bot's orders are gone")
 
     @asynccontextmanager
     async def _admitted_socket(self, url: str, **options: Any) -> AsyncIterator[Any]:

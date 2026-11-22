@@ -22,7 +22,16 @@ from .client import (
     subscription_refusal,
 )
 from .config import Config, decimal
-from .models import Account, CancelRequest, CancelResult, Fill, OpenOrder, OrderRequest, OrderResult
+from .models import (
+    Account,
+    CancelRequest,
+    CancelResult,
+    Fill,
+    OpenOrder,
+    OrderRequest,
+    OrderResult,
+    is_bot_order,
+)
 from .transport import JsonObject, MarketClient
 
 OWNER_CHANNELS = ("clearinghouseState", "openOrders", "orderUpdates", "userFills")
@@ -227,9 +236,12 @@ class LiveStateClient:
                 results.extend(reply)
         return results
 
+    def _owned(self, row: OpenOrder) -> bool:
+        return is_bot_order(row.client_order_id) or row.order_id in self._known
+
     async def cancel_all(self, symbol: str | None = None) -> None:
         # Retain original IDs for cleanup even after read authority or continuity is lost.
-        known = {row.order_id: row.symbol for row in self._orders}
+        known = {row.order_id: row.symbol for row in self._orders if self._owned(row)}
         known.update({oid: order.symbol for oid, order in self._known.items()})
         requests = [
             CancelRequest(coin, oid)
@@ -245,7 +257,7 @@ class LiveStateClient:
             return
         await self._current()
         async with asyncio.timeout(2):
-            while any(symbol is None or row.symbol == symbol for row in self._orders):
+            while any(symbol in (None, row.symbol) and self._owned(row) for row in self._orders):
                 self.check()
                 self._changed.clear()
                 await self._changed.wait()

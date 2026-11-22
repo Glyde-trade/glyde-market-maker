@@ -24,8 +24,9 @@ Use the same config location and state volume after upgrading. Do not use Compos
 - Existing orders or positions on the selected symbol refuse startup before managed cleanup.
   `--i-understand` is a deliberate exposure override, not a waiver of the other guards.
 - `glyde-mm stop <config>` works with the updated local runner and the same state directory.
-  It cancels all orders on the configured symbol, including manual orders, but leaves positions
-  and other symbols unchanged. Keep a dedicated account and inspect any failure report.
+  It cancels only glyde-mm's own tagged orders on the configured symbol, never manual
+  orders, and leaves positions and other symbols unchanged. A dedicated account is still
+  recommended; inspect any failure report.
 - `risk.max_orders_per_minute` defaults to `60`; it must be an unquoted integer in `1..6000`.
   It counts attempted order submissions, including multi-order batches. A rate refusal stops
   quoting rather than automatically raising the budget or resending ambiguous submissions.

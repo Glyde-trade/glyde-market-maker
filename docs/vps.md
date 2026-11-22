@@ -9,6 +9,8 @@ grant credentials or qualify a host for live trading.
 ## Safety checklist
 
 - Use a dedicated account, an authorized trading API key and the separate read credential.
+  Cleanup cancels only the bot's own tagged orders; other account orders stay open but
+  count toward its risk limits.
   Never use a main-wallet seed phrase. Keep key **values only in the private env file**,
   mode `0600`; YAML contains public settings and environment-variable names only.
 - Set exact owner/vault addresses from account discovery. Review order size, position,

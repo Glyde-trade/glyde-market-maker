@@ -1,6 +1,7 @@
 # Operating a market maker
 
-Use a dedicated account and one runner per account. Paper results, doctor success
+Use a dedicated account and one runner per account. The bot cancels only its own
+tagged orders, but other orders in the account still count toward its risk limits. Paper results, doctor success
 and a local dashboard do not authorize live trading. Start with a copied paper
 config and review [all strategy/risk keys](strategies.md).
 

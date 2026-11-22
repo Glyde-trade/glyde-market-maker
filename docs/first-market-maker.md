@@ -97,7 +97,8 @@ simulated cancellation within two seconds, not a production SLA or hard-kill cle
 Only continue when Glyde serves your requested capabilities and you have a registered trading
 account, its exact owner and vault/namespace addresses, a trading API key and a read credential.
 This runner requires both addresses; if either is unavailable, stop rather than guessing one.
-Use a dedicated account: cleanup can cancel other orders in the same account.
+Cleanup cancels only glyde-mm's own tagged orders, never ones you placed yourself;
+a dedicated account is still recommended.
 
 ```sh
 cp glyde-mm.yaml live-small.yaml
@@ -142,7 +143,8 @@ does not prove your endpoint serves the required rules.
 Read the printed pre-flight limits and type the exact symbol to confirm live startup. Existing
 orders or a position on that symbol refuse startup; `--i-understand` explicitly accepts that
 exposure after review, while confirmation, risk caps and unknown-outcome stops still apply.
-A refused pre-flight does not cancel those orders. The checks are a snapshot, not account locking.
+A refused pre-flight does not cancel those orders, and an accepted one never cancels
+orders the bot did not place; they still count toward its risk caps. The checks are a snapshot, not account locking.
 
 Watch the account and stop with Ctrl-C. Verify outstanding orders at the venue after any connection
 or cancellation failure. The bot refuses unavailable, stale or ambiguous execution; it cannot

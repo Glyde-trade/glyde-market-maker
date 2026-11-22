@@ -22,7 +22,7 @@ Neither check proves signing permission or guarantees that a live order will wor
 | Symbol, precision or size refusal | Check the exact metadata symbol and quantity step. `order_amount` is base units, not USDC. Rounding can produce zero; a cap can also be below a venue minimum. Do not automatically increase caps. |
 | Stale book, reference or account | A stale book pauses that market and resumes on fresh data; it stops the run only after `risk.max_stale_pause_seconds`. A stale reference or account stops quoting: restore the relevant connection. Receiving an old snapshot again does not make it fresh. Increasing freshness limits does not repair the source. |
 | `stream disconnected (PROJECTION_UNAVAILABLE, retry after Ns)` or `connect N attempt failed (...)` | The server deferred a subscription. The bot retires quotes, waits at least the server's `retryAfter`, resubscribes and reconciles before quoting again; no action is needed unless it repeats for minutes. A refusal without `retryAfter` still stops the run: check the read key and subscription permissions. |
-| Existing orders or position at live startup | Inspect the selected symbols at the venue. Prefer a dedicated account. `--i-understand` accepts existing exposure; it does not bypass risk checks or typed confirmation. |
+| Existing orders or position at live startup | Inspect the selected symbols at the venue. Prefer a dedicated account. `--i-understand` accepts existing exposure (the bot never cancels orders it did not place); it does not bypass risk checks or typed confirmation. |
 | No paper fills | Passive orders need qualifying later public trade prints. Paper queue priority is approximate; no fills can be a valid result. See [paper fills](paper-fills.md). |
 | Grid or adaptive strategy stays quiet | A grid retires quotes outside its band; adaptive strategies need source-time warmup. Inspect configured bands and the terminal's risk reason before changing anything. |
 | Paper ping-pong refuses live or replay | Ping-pong currently needs identified streaming paper fills. Live and book-only replay deliberately refuse it. See [strategy capabilities](strategies.md). |
@@ -44,7 +44,8 @@ glyde-mm stop path/to/live.yaml
 
 Use the same config location and state directory as the runner. Stop coordinates
 an updated local runner and verifies cancellation, but it can fail if reads or
-receipts are unavailable. It may cancel other orders on those symbols. It never
+receipts are unavailable. It cancels only the bot's own tagged orders, never manual
+orders on those symbols. It never
 closes positions; inspect remaining exposure separately at the venue.
 
 ## Read the right report

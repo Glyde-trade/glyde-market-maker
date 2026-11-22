@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from glyde_mm.models import BOT_CLOID_PREFIX, OpenOrder, bot_client_order_id
 from glyde_mm.risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
 
 
@@ -650,3 +651,22 @@ async def test_disk_and_transport_wait_do_not_expire_dispatched_rate_early():
     now[1] += 31
     with pytest.raises(RiskViolation, match="order_rate_limit"):
         g.consume_order_rate(1)
+
+
+def test_cleanup_cancels_only_bot_orders_and_keeps_foreign_exposure():
+    async def scenario():
+        g, _ = guard()
+        raw = FakeClient()
+        manual = OpenOrder("77", "BTC", "sell", D("0.01"), D("120"))
+        leftover = OpenOrder("78", "BTC", "buy", D("0.01"), D("90"), bot_client_order_id())
+        raw.orders = [manual, leftover]
+        client = RiskManagedClient(raw, g, cleanup_symbol="BTC")
+        await client.place_orders([Order()])
+        placed = raw.placed[0].client_order_id
+        assert placed.startswith(BOT_CLOID_PREFIX) and len(placed) == 34
+        await client.close()
+        cancelled = {(row.order_id, row.client_order_id) for row in raw.cancelled}
+        assert cancelled == {("78", None), ("0", None)}
+        assert g.open_orders == [manual] and not g.pending
+
+    asyncio.run(scenario())
