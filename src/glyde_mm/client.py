@@ -37,7 +37,6 @@ from .models import (
 )
 from .transport import WebSocketFactory
 
-
 # A minted read credential is fresh for 60 s and its socket lease ends 5 min
 # after minting; the bot re-mints before either deadline.
 READ_CREDENTIAL_MARGIN_SECONDS = 10

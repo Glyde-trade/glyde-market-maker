@@ -114,9 +114,7 @@ async def check(
                     await client.account()
                     await client.open_orders()
                 except (OneApiError, ValueError, TypeError, KeyError, AttributeError):
-                    report(
-                        "Private reads: FAIL (account or open-orders permission unavailable)"
-                    )
+                    report("Private reads: FAIL (account or open-orders permission unavailable)")
                     healthy = False
                 else:
                     report("Private reads: OK (account and open orders)")
