@@ -340,9 +340,8 @@ async def test_bounded_delivery_queue_refuses_instead_of_dropping_fill_updates()
     seed(state)
     with pytest.raises(OneApiError, match="overflow"):
         for i in range(2, 35):
-            for frame in batch(
-                "mm-owner", owner_roots(OWNER), owner=OWNER, sequence=i, previous=i - 1
-            ):
+            roots = owner_roots(OWNER, fills=[fill(tid=i)])
+            for frame in batch("mm-owner", roots, owner=OWNER, sequence=i, previous=i - 1):
                 state.consume(frame)
     with pytest.raises(OneApiError):
         await state.account()

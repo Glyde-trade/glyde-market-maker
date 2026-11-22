@@ -111,6 +111,12 @@ class LiveStateClient:
 
     def _emit(self, frame: JsonObject) -> None:
         if self._events.full():
+            # Books are full snapshots and empty owner cuts are already applied to account
+            # state, so a busy consumer may skip them; fills must never be dropped.
+            if frame.get("channel") == "l2Book" or (
+                frame.get("channel") == "mmOwner" and not frame.get("fills")
+            ):
+                return
             raise OneApiError("live stream consumer overflow")
         self._events.put_nowait(frame)
 
