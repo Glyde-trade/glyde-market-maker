@@ -113,13 +113,14 @@ shell history (use the names from your config if you changed them):
 read -r -s -p 'Trading API key: ' GLYDE_API_PRIVATE_KEY
 export GLYDE_API_PRIVATE_KEY
 printf '\n'
-read -r -s -p 'Read credential: ' GLYDE_READ_API_KEY
-export GLYDE_READ_API_KEY
-printf '\n'
 glyde-mm doctor live-small.yaml
 glyde-mm doctor live-small.yaml --private
 glyde-mm paper live-small.yaml
 ```
+
+The trading key is an approved Glyde API wallet. Without `GLYDE_READ_API_KEY`, the bot signs a
+short-lived read session with that key (`POST /v1/one-api/session/agent`) and re-mints before each
+credential expires, so no app session is needed. Revoking the API wallet ends its reads too.
 
 The explicit `--private` check reads account and open orders; it does not sign or test order
 permissions. That last command still forces paper mode. Stop it and inspect the summary. When you deliberately

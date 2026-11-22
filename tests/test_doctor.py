@@ -102,7 +102,7 @@ def test_live_missing_keys_fails_but_still_checks_public_connectivity(
     assert main(["doctor", "--config", str(configuration)]) == 1
     output = capsys.readouterr().out
     assert "Trading key: absent (required in live mode)" in output
-    assert "Read key: absent (required in live mode)" in output
+    assert "Read key: absent (optional: minted from the trading key when absent)" in output
     assert "Public info: OK" in output
     assert len(calls) == 2
 

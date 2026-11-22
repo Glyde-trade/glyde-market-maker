@@ -225,7 +225,6 @@ async def _run_session(
             raise ValueError("live mode requires registered account and vault addresses")
         require_preflight(config, state_directory)
         config.secret(config.private_key_env)
-        config.secret(config.read_api_key_env)
     limits = RiskLimits(
         max_position=config.risk.max_position,
         max_order_notional=config.risk.max_order_notional,

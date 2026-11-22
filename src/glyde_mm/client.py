@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
+import secrets
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
@@ -16,6 +18,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 import websockets
 from eth_account import Account as EthAccount
+from eth_account.messages import encode_typed_data
 from hyperliquid.utils.signing import sign_l1_action
 from websockets.exceptions import ConnectionClosed, InvalidStatus, WebSocketException
 
@@ -33,6 +36,11 @@ from .models import (
     Trade,
 )
 from .transport import WebSocketFactory
+
+# A minted read credential is fresh for 60 s and its socket lease ends 5 min
+# after minting; the bot re-mints before either deadline.
+READ_CREDENTIAL_MARGIN_SECONDS = 10
+READ_SOCKET_ROTATE_SECONDS = 270
 
 
 class OneApiError(RuntimeError):
@@ -189,6 +197,8 @@ class OneApiClient:
         self._last_nonce = 0
         self._sign_lock = asyncio.Lock()
         self.public_clock: tuple[float, float, float] | None = None
+        self._read_credential: tuple[str, float] | None = None
+        self._read_lock = asyncio.Lock()
 
     async def __aenter__(self) -> OneApiClient:
         return self
@@ -200,12 +210,86 @@ class OneApiClient:
         if self._owns_http:
             await self._http.aclose()
 
+    def _agent_wallet(self) -> Any:
+        if self._wallet is None:
+            try:
+                self._wallet = EthAccount.from_key(self.config.secret(self.config.private_key_env))
+            except (ValueError, TypeError):
+                raise ValueError("invalid API wallet key environment configuration") from None
+        return self._wallet
+
+    def minted_reads(self) -> bool:
+        """Without a configured read key, the agent key mints short-lived read credentials."""
+        return not os.environ.get(self.config.read_api_key_env)
+
+    async def read_key(self, *, fresh: bool = False) -> str:
+        """The configured read key, or one the approved agent minted for its owner.
+
+        A socket consumes its credential, so pass ``fresh`` for every connect.
+        """
+        if not self.minted_reads():
+            return self.config.secret(self.config.read_api_key_env)
+        async with self._read_lock:
+            cached = self._read_credential
+            if not fresh and cached is not None and time.time() < cached[1]:
+                return cached[0]
+            credential, expires_at = await self._mint_read_credential()
+            self._read_credential = credential, expires_at - READ_CREDENTIAL_MARGIN_SECONDS
+            return credential
+
+    async def _mint_read_credential(self) -> tuple[str, float]:
+        if not self.config.owner or not self.config.vault_address:
+            raise ValueError("agent read sessions require the registered owner and vault_address")
+        wallet = self._agent_wallet()
+        message = {
+            "owner": self.config.owner.lower(),
+            "agentAddress": wallet.address.lower(),
+            "issuedAt": time.time_ns() // 1_000_000,
+            "nonce": secrets.randbits(63) or 1,
+        }
+        typed = {
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "version", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"},
+                ],
+                "GlydeReadSession": [
+                    {"name": "owner", "type": "address"},
+                    {"name": "agentAddress", "type": "address"},
+                    {"name": "issuedAt", "type": "uint64"},
+                    {"name": "nonce", "type": "uint64"},
+                ],
+            },
+            "primaryType": "GlydeReadSession",
+            "domain": {
+                "name": "Glyde",
+                "version": "1",
+                "chainId": 42161 if self.config.mainnet else 421614,
+                "verifyingContract": self.config.vault_address.lower(),
+            },
+            "message": message,
+        }
+        signed = wallet.sign_message(encode_typed_data(full_message=typed))
+        body = {
+            **message,
+            "signature": {"r": hex(signed.r), "s": hex(signed.s), "v": signed.v},
+        }
+        result = await self._post("/one-api/session/agent", body)
+        try:
+            data = result["data"]
+            credential, expires_ms = data["readCredential"], data["expiresAt"]
+            if not isinstance(credential, str) or not credential or type(expires_ms) is not int:
+                raise TypeError
+        except (KeyError, TypeError):
+            raise OneApiError("agent read session returned an invalid credential") from None
+        return credential, expires_ms / 1000
+
     async def _post(
         self, path: str, body: dict[str, Any], *, private: bool = False, action: bool = False
     ) -> Any:
-        headers = (
-            {"X-Glyde-API-Key": self.config.secret(self.config.read_api_key_env)} if private else {}
-        )
+        headers = {"X-Glyde-API-Key": await self.read_key()} if private else {}
         sent_at = time.time()
         try:
             response = await self._http.post(
@@ -305,13 +389,7 @@ class OneApiClient:
             raise ValueError("live mode requires the registered owner and vault_address namespace")
         # Only nonce allocation/signing is serialized; unrelated provider calls can proceed.
         async with self._sign_lock:
-            if self._wallet is None:
-                try:
-                    self._wallet = EthAccount.from_key(
-                        self.config.secret(self.config.private_key_env)
-                    )
-                except (ValueError, TypeError):
-                    raise ValueError("invalid API wallet key environment configuration") from None
+            self._agent_wallet()
             nonce = max(time.time_ns() // 1_000_000, self._last_nonce + 1)
             self._last_nonce = nonce
             signature = sign_l1_action(
@@ -493,8 +571,11 @@ class OneApiClient:
             row.get("type") in {"orderUpdates", "userFills", "clearinghouseState", "openOrders"}
             for row in subscriptions
         )
-        headers = (
-            {"X-Glyde-API-Key": self.config.secret(self.config.read_api_key_env)} if private else {}
+        headers = {"X-Glyde-API-Key": await self.read_key(fresh=True)} if private else {}
+        rotate_at = (
+            time.monotonic() + READ_SOCKET_ROTATE_SECONDS
+            if private and self.minted_reads()
+            else None
         )
         async with self._admitted_socket(
             url,
@@ -530,6 +611,9 @@ class OneApiClient:
                     if not isinstance(frame, dict) or frame.get("channel") == "error":
                         raise OneApiError("WebSocket subscription refused")
                     yield frame
+                    if rotate_at is not None and time.monotonic() >= rotate_at:
+                        # Reconnect with a fresh credential before the server ends the lease.
+                        raise StreamDisconnected("read credential rotation")
             except (ConnectionClosed, OSError):
                 raise StreamDisconnected("WebSocket disconnected") from None
             finally:

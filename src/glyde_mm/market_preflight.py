@@ -229,7 +229,7 @@ async def check(
             fixes.append("Use uppercase credential environment-variable names in the config.")
             continue
         details.append(f"{name}={'present' if name in present else 'absent'}")
-        if config.mode == "live" and name not in present:
+        if config.mode == "live" and name not in present and name != config.read_api_key_env:
             fixes.append(
                 f"Set environment variable {name} before a live run (value is never inspected)."
             )

@@ -178,7 +178,7 @@ Bash can read the trading key without echoing it:
 read -r -s -p 'Trading API key: ' GLYDE_API_PRIVATE_KEY
 export GLYDE_API_PRIVATE_KEY
 printf '\n'
-# Set GLYDE_READ_API_KEY separately when your account requires private read authorization.
+# Private reads are minted from the trading key; GLYDE_READ_API_KEY only overrides that.
 glyde-mm run live-small.yaml
 ```
 
