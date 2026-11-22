@@ -26,6 +26,16 @@ from .models import Account, CancelRequest, CancelResult, Fill, OpenOrder, Order
 from .transport import JsonObject, MarketClient
 
 OWNER_CHANNELS = ("clearinghouseState", "openOrders", "orderUpdates", "userFills")
+# HL reports many terminal statuses (marginCanceled, reduceOnlyRejected, ...) plus Glyde's
+# internalCancel; anything outside these families still fails closed.
+LIVE_ORDER_STATUSES = frozenset({"open", "triggered", "pending"})
+TERMINAL_ORDER_STATUSES = frozenset({"filled", "canceled", "rejected", "expired"})
+
+
+def terminal_order_status(status: object) -> bool:
+    return isinstance(status, str) and (
+        status in TERMINAL_ORDER_STATUSES or status.endswith(("Canceled", "Cancel", "Rejected"))
+    )
 
 
 def counter(value: object) -> int:
@@ -432,9 +442,9 @@ class LiveStateClient:
         for row in updates:
             oid = str(row["order"]["oid"])
             counter(oid)
-            if row["status"] in {"filled", "canceled", "rejected", "expired"}:
+            if terminal_order_status(row["status"]):
                 terminal.add(oid)
-            elif row["status"] != "open":
+            elif row["status"] not in LIVE_ORDER_STATUSES:
                 raise OneApiError("unknown streamed order status")
         fill_rows = roots["userFills"]["fills"]
         if not isinstance(fill_rows, list) or len(fill_rows) > 4096:
