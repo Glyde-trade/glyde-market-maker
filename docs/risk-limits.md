@@ -58,6 +58,9 @@ Stop and reconcile the original order/client IDs against authoritative venue sta
 the original execution intent and refuses new risk; it does not replace an ambiguous order with a
 new ID or nonce. A report helps identify the run and exit category but is not execution proof.
 Keep the state directory and resolve the original outcome before attempting further trading.
+A live restart clears a `cancel_outcome_unknown` latch by itself when the venue's open orders omit,
+and its order history shows a terminal status for, every listed original; without that proof the
+latch stays and the run stops.
 
 ## Why does live startup refuse my existing orders or position?
 

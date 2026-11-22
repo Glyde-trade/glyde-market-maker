@@ -765,16 +765,20 @@ roots before quoting. Earlier private fill rows are not replayed as new fills.
 A socket drop retires quotes and attempts cancellation of recorded original IDs,
 even if read authority has expired. Confirmed terminal/cancel receipts retire tracked IDs once,
 without waiting for a dead read stream; the old session still refuses reads and new orders.
-The runner then reconnects with jittered exponential backoff (1s to 30s, until stopped),
-resubscribes, waits for fresh complete WS snapshots and cancels every open order that snapshot
-shows before quoting again. `disconnected`/`reconnected` events record each episode.
+The runner then reconnects with jittered exponential backoff (1s to 30s), resubscribes, waits for
+fresh complete WS snapshots and cancels every open order that snapshot shows before quoting again.
+Transient transport and projection failures, including a reconcile sweep whose snapshot does not
+arrive, keep retrying for `max_stale_pause_seconds` (default 300) before the run stops.
+`disconnected`/`reconnected` events record each episode.
 A stale book while connected pauses only that market: its quotes are retired, and the next fresh
 book cancels whatever the venue still shows for it before quoting resumes. `book_stale`/`book_fresh`
 events (market index, reason, pause length) and `glyde_mm_stale_pauses_total` record each pause. Gaps,
 refusals, unknown outcomes and risk halts never reconnect; they stop the session. Restart
 repeats exposure checks while retaining durable loss, rate and unknown-outcome state. Lost or refused
 cancel receipts stay an error, even if the venue might already be empty; no order is re-signed
-to escape uncertainty. Private evidence caches are bounded; exhaustion stops the session.
+to escape uncertainty. At the next live startup, a `cancel_outcome_unknown` latch clears itself
+only when the venue's `openOrders` omits and `historicalOrders` shows a terminal status for every
+listed original; otherwise it stays. A cancel latch listing no original is never written. Private evidence caches are bounded; exhaustion stops the session.
 
 ### Offline quote-resilience checks
 
@@ -783,5 +787,6 @@ and runner against the offline matching ledger. It covers WS disconnect/gap, sil
 ETH/BTC staleness flips, cooperative interruption and restart with the same state directory.
 Quotes retire within a two-second **test** bound with responsive simulated cancellation;
 confirmed IDs are never cancelled twice, and recovery installs fresh quotes. Lost cancel
-receipts keep the durable original-ID fence even when the simulated venue is already empty.
+receipts keep the durable original-ID fence until the simulated venue's order history proves
+every original closed.
 These checks do not establish a production latency SLA or SIGKILL/venue-outage cleanup.

@@ -152,3 +152,13 @@ class OpenOrder:
     price: Decimal
     client_order_id: str | None = None
     reduce_only: bool = False
+
+
+@dataclass(frozen=True)
+class HistoricalOrder:
+    """One venue historicalOrders row: an order and its latest status."""
+
+    order_id: str
+    symbol: str
+    status: str
+    client_order_id: str | None = None

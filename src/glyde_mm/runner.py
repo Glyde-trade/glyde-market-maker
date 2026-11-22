@@ -34,14 +34,21 @@ from .paper import PaperExchange
 from .paper_result import PaperResult
 from .preflight import check_live_exposure
 from .reference import HYPERLIQUID_PUBLIC_URL, ExternalReference
-from .risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation, StaleMarket
+from .risk import (
+    RiskGuard,
+    RiskLimits,
+    RiskManagedClient,
+    RiskViolation,
+    StaleMarket,
+    VenueSweepDeferred,
+)
 from .runlog import RunLog
 from .shutdown import RunnerControl
 from .strategies import StrategyContext, create_strategy
 from .strategies.avellaneda_market_making import AvellanedaConfig, AvellanedaMarketMakingStrategy
 from .strategies.factory import Strategy, validate_strategy_config
 from .strategies.pure_market_making import PureMarketMakingConfig
-from .transport import ClientFactory, JsonObject
+from .transport import ClientFactory, JsonObject, MarketClient
 
 RECONNECT_INITIAL_SECONDS = 1.0
 RECONNECT_MAX_SECONDS = 30.0
@@ -93,6 +100,26 @@ def _price_tick(book: Book, size_decimals: int) -> Decimal:
         raise RiskViolation("invalid_book")
     # Perpetual prices use at most five significant figures and 6-szDecimals places.
     return max(Decimal(1).scaleb(mid.adjusted() - 4), Decimal(1).scaleb(-max(0, 6 - size_decimals)))
+
+
+async def _resolve_cancel_latch(
+    source: MarketClient, guard: RiskGuard, report: Callable[[str], object]
+) -> None:
+    """Clear a prior run's cancel latch when the venue proves every original terminal."""
+    if guard.halted != "cancel_outcome_unknown":
+        return
+    try:
+        open_orders = await source.open_orders()
+        history = await source.historical_orders()
+    except OneApiError as error:
+        reason = type(error).__name__
+        report(f"LIVE: cancel_outcome_unknown kept; order history unavailable ({reason})")
+        return
+    if guard.resolve_cancel_latch(open_orders, history):
+        await guard.flush_state()
+        report("LIVE: cancel_outcome_unknown resolved; order history shows every original closed")
+    else:
+        report("LIVE: cancel_outcome_unknown kept; order history lacks proof for an original")
 
 
 async def report_paper_status(
@@ -265,6 +292,7 @@ async def _run_session(
         if config.mode == "live":
             if stop.is_set():
                 return
+            await _resolve_cancel_latch(source, guard, report)
             # All selected markets must pass before cleanup gains cancellation authority.
             await check_live_exposure(
                 source, config.symbols, allow_existing_exposure=allow_existing_exposure
@@ -648,13 +676,27 @@ async def _run_session(
                 if paper_result is not None:
                     paper_result.resume("stale")  # Reconnect restarts every market fresh.
                 await resources.aclose()
-                for symbol in config.symbols:
-                    await managed.cancel_all(symbol)
+                await sweep()
                 if live is not None:
                     await live.close()
                 await observer.publish(guard, paper=paper)
 
-            first, attempts, dropped_at = True, 0, 0.0
+            async def sweep() -> None:
+                for symbol in config.symbols:
+                    # The next connection's reconcile repeats a deferred sweep before quoting.
+                    with suppress(VenueSweepDeferred):
+                        await managed.cancel_all(symbol)
+
+            def give_up_after_window(attempt: str) -> bool:
+                if time.monotonic() - dropped_at <= max_pause:
+                    return False
+                report(
+                    f"{config.mode.upper()}: {attempt} failed past the {max_pause:g}s "
+                    "reconnect window; stopping"
+                )
+                return True
+
+            first, attempts, dropped_at = True, 0, time.monotonic()
             retry_after: float | None = None  # Set once a connection must be retried.
             while True:
                 if retry_after is not None:
@@ -678,6 +720,8 @@ async def _run_session(
                     report(
                         f"{config.mode.upper()}: {attempt} attempt failed ({_failure_label(error)})"
                     )
+                    if give_up_after_window(attempt):
+                        raise
                     await resources.aclose()
                     if live is not None:
                         await live.close()
@@ -697,13 +741,14 @@ async def _run_session(
                     report(
                         f"{config.mode.upper()}: {attempt} attempt failed ({_failure_label(error)})"
                     )
+                    if give_up_after_window(attempt):
+                        raise
                     for strategy in strategies.values():
                         await strategy.stop()
                     strategies.clear()
                     await resources.aclose()
-                    if cleanup_allowed:
-                        for symbol in config.symbols:
-                            await managed.cancel_all(symbol)
+                    if cleanup_allowed and not isinstance(error, VenueSweepDeferred):
+                        await sweep()
                     if live is not None:
                         await live.close()
                     retry_after = _retry_floor(error)

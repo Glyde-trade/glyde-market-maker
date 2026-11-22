@@ -31,6 +31,7 @@ class ResilienceWire(MarketWire):
         super().__init__()
         self.actions = []
         self.lose_cancel_receipts = False
+        self.refuse_history = False
         self.changed = asyncio.Event()
 
     def connect(self, url, **kwargs):
@@ -42,6 +43,8 @@ class ResilienceWire(MarketWire):
         envelope = json.loads(request.content)
         if "action" in envelope:
             self.actions.append((time.monotonic(), envelope["action"]))
+        if self.refuse_history and envelope.get("type") == "historicalOrders":
+            return httpx.Response(400, text="Glyde: unsupported request")
         response = super().http(request)
         self.changed.set()
         if self.lose_cancel_receipts and envelope.get("action", {}).get("type") == "cancel":
@@ -123,8 +126,7 @@ async def episode(wire, selected, directory, **options):
                 state_directory=directory,
                 client_factory=lambda _: source,
                 stop_event=stop,
-                report=lambda _: None,
-                **options,
+                **{"report": lambda _: None, **options},
             )
         )
         try:
@@ -289,9 +291,8 @@ async def test_new_process_objects_reuse_durable_state_without_orphan_or_duplica
     wire.assert_no_duplicate_cancels()
 
 
-async def test_lost_cancel_receipt_keeps_originals_fenced_despite_empty_venue(tmp_path):
-    wire, selected = ResilienceWire(), config()
-    async with episode(wire, selected, tmp_path) as (task, _):
+async def lose_cancel_receipts(wire, selected, directory):
+    async with episode(wire, selected, directory) as (task, _):
         await until(wire, lambda: len(wire.orders()) == 4)
         originals = set(wire.orders())
         wire.lose_cancel_receipts = True
@@ -299,17 +300,38 @@ async def test_lost_cancel_receipt_keeps_originals_fenced_despite_empty_venue(tm
         with pytest.raises(RiskViolation, match="cancel_outcome_unknown"):
             await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
     assert not wire.orders()  # Ledger applied cancel; the bot has no confirming receipts.
-    state = json.loads(risk_state_path(selected, tmp_path).read_text())
+    state = json.loads(risk_state_path(selected, directory).read_text())
     assert state["execution"]["reason"] == "cancel_outcome_unknown"
     assert {row["order_id"] for row in state["execution"]["originals"]} == originals
-    placements = sum(action["type"] == "order" for _, action in wire.actions)
     wire.lose_cancel_receipts = False
     wire.ledger.now_ms = time.time_ns() // 1_000_000
-    async with episode(wire, selected, tmp_path) as (task, _):
+    return originals
+
+
+async def test_lost_cancel_receipt_keeps_originals_fenced_without_venue_history(tmp_path):
+    wire, selected, lines = FreshWire(), config(), []
+    await lose_cancel_receipts(wire, selected, tmp_path)
+    placements = sum(action["type"] == "order" for _, action in wire.actions)
+    wire.refuse_history = True
+    async with episode(wire, selected, tmp_path, report=lines.append) as (task, _):
         with pytest.raises(RiskViolation, match="cancel_outcome_unknown"):
             await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
     assert sum(action["type"] == "order" for _, action in wire.actions) == placements
     assert json.loads(risk_state_path(selected, tmp_path).read_text())["execution"] is not None
+    assert any("cancel_outcome_unknown kept" in line for line in lines)
+
+
+async def test_lost_cancel_receipt_resolves_at_startup_when_venue_history_proves_closed(tmp_path):
+    wire, selected, lines = FreshWire(), config(), []
+    originals = await lose_cancel_receipts(wire, selected, tmp_path)
+    async with episode(wire, selected, tmp_path, report=lines.append) as (task, stop):
+        await until(wire, lambda: len(wire.orders()) == 4)
+        assert set(wire.orders()).isdisjoint(originals) and not task.done()
+        stop.set()
+        await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
+    assert not wire.orders()
+    assert json.loads(risk_state_path(selected, tmp_path).read_text())["execution"] is None
+    assert any("cancel_outcome_unknown resolved" in line for line in lines)
 
 
 async def test_manual_order_survives_live_start_quoting_and_shutdown(tmp_path):
