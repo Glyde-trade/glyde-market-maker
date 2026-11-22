@@ -685,7 +685,29 @@ async def _run_session(
                     continue
                 if books is None or stop.is_set():
                     return
-                await start_quoting(books, first)
+                try:
+                    await start_quoting(books, first)
+                except Exception as error:
+                    # A deferral can arrive after the books, while waiting for the account cut.
+                    if not reconnectable(error) or (
+                        first and not isinstance(error, SubscriptionDeferred)
+                    ):
+                        raise
+                    attempt = f"connect {attempts + 1}" if first else f"reconnect {attempts}"
+                    report(
+                        f"{config.mode.upper()}: {attempt} attempt failed ({_failure_label(error)})"
+                    )
+                    for strategy in strategies.values():
+                        await strategy.stop()
+                    strategies.clear()
+                    await resources.aclose()
+                    if cleanup_allowed:
+                        for symbol in config.symbols:
+                            await managed.cancel_all(symbol)
+                    if live is not None:
+                        await live.close()
+                    retry_after = _retry_floor(error)
+                    continue
                 if stop.is_set():
                     return
                 if not first:
