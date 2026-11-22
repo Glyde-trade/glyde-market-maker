@@ -1,4 +1,4 @@
-# Set this explicit price band around the current BTC book before starting.
+# This 52000–68000 band brackets BTC near 59000 (Nov 2026); re-centre it if BTC leaves it.
 # Or choose grid in `glyde-mm init` for a cap-budgeted beginner preset.
 # Levels span the whole fixed band; they do not re-center with the market.
 mode: paper
@@ -7,8 +7,8 @@ symbol: BTC
 paper_balance: '1000'
 strategy: grid
 strategy_config:
-  lower_price: '90000'
-  upper_price: '110000'
+  lower_price: '52000'
+  upper_price: '68000'
   order_amount: '0.0002'
   levels: 5
   order_refresh_time: 30

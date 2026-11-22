@@ -1,4 +1,4 @@
-# PAPER: replace the 90000–110000 BTC band around your current market before use.
+# PAPER: the 52000–68000 band brackets BTC near 59000 (Nov 2026); re-centre it if BTC leaves it.
 # Five levels span the whole fixed band, not five per side; it never re-centers itself.
 # Quotes retire out of band. All levels/pending orders share the same position cap.
 mode: paper
@@ -7,8 +7,8 @@ symbol: BTC
 paper_balance: '1000'
 strategy: grid
 strategy_config:
-  lower_price: '90000'
-  upper_price: '110000'
+  lower_price: '52000'
+  upper_price: '68000'
   order_amount: '0.0002'
   levels: 5
   order_refresh_time: 30
