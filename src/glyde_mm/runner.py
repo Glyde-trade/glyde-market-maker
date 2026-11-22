@@ -19,6 +19,7 @@ from .client import (
     OneApiClient,
     OneApiError,
     StreamDisconnected,
+    SubscriptionDeferred,
     book_from_wire,
     reconnectable,
     trades_from_wire,
@@ -45,6 +46,17 @@ from .transport import ClientFactory, JsonObject
 RECONNECT_INITIAL_SECONDS = 1.0
 RECONNECT_MAX_SECONDS = 30.0
 _T = TypeVar("_T")
+
+
+def _retry_floor(error: BaseException) -> float:
+    return error.retry_after if isinstance(error, SubscriptionDeferred) else 0.0
+
+
+def _failure_label(error: BaseException) -> str:
+    # reasonCode is a sanitized constant; raw frames are never logged.
+    if isinstance(error, SubscriptionDeferred):
+        return f"{error.reason_code}, retry after {error.retry_after:g}s"
+    return type(error).__name__
 
 
 async def _stopped_within(stop: asyncio.Event, seconds: float) -> bool:
@@ -643,12 +655,13 @@ async def _run_session(
                 await observer.publish(guard, paper=paper)
 
             first, attempts, dropped_at = True, 0, 0.0
+            retry_after: float | None = None  # Set once a connection must be retried.
             while True:
-                if not first:
+                if retry_after is not None:
                     attempts += 1
                     delay = RECONNECT_INITIAL_SECONDS * 2 ** min(attempts - 1, 16)
                     delay = min(delay, RECONNECT_MAX_SECONDS) * random.uniform(0.5, 1)
-                    if await _stopped_within(stop, delay):
+                    if await _stopped_within(stop, max(delay, retry_after)):
                         return
                     if live is not None:
                         live = LiveStateClient(source, config, metrics=metrics)
@@ -656,15 +669,19 @@ async def _run_session(
                 try:
                     books = await _unless_stopped(stop, open_streams())
                 except Exception as error:
-                    if first or not reconnectable(error):
+                    # A deferred subscription is retried even before the first quote.
+                    if not reconnectable(error) or (
+                        first and not isinstance(error, SubscriptionDeferred)
+                    ):
                         raise
+                    attempt = f"connect {attempts + 1}" if first else f"reconnect {attempts}"
                     report(
-                        f"{config.mode.upper()}: reconnect attempt {attempts} failed "
-                        f"({type(error).__name__})"
+                        f"{config.mode.upper()}: {attempt} attempt failed ({_failure_label(error)})"
                     )
                     await resources.aclose()
                     if live is not None:
                         await live.close()
+                    retry_after = _retry_floor(error)
                     continue
                 if books is None or stop.is_set():
                     return
@@ -684,7 +701,11 @@ async def _run_session(
                 dropped_at = time.monotonic()
                 journal.emit("disconnected")
                 await retire(dropped)
-                report(f"{config.mode.upper()}: stream disconnected; quotes retired, reconnecting")
+                retry_after = _retry_floor(dropped)
+                report(
+                    f"{config.mode.upper()}: stream disconnected ({_failure_label(dropped)}); "
+                    "quotes retired, reconnecting"
+                )
         except BaseException as error:
             if isinstance(error, RiskViolation):
                 risk_stop = str(error)

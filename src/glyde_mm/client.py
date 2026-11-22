@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
 import secrets
@@ -63,8 +64,35 @@ class StreamDisconnected(OneApiError):
     """The socket closed or its transport failed; resubscribe from a fresh snapshot."""
 
 
+class SubscriptionDeferred(StreamDisconnected):
+    """The server refused a subscription for now; resubscribe no sooner than retry_after."""
+
+    def __init__(self, reason_code: str, retry_after: float) -> None:
+        self.reason_code, self.retry_after = reason_code, retry_after
+        super().__init__(f"subscription deferred ({reason_code})")
+
+
+RETRYABLE_REFUSALS = frozenset({"PROJECTION_UNAVAILABLE"})
+REFUSAL_RETRY_MAX_SECONDS = 60.0
+_REASON_CODE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+
+
+def subscription_refusal(frame: dict[str, Any]) -> OneApiError:
+    """Classify an error frame: retryAfter or a known transient reasonCode defers, else refuses."""
+    code = frame.get("reasonCode")
+    reason = code if isinstance(code, str) and _REASON_CODE.fullmatch(code) else "UNSPECIFIED"
+    hint = frame.get("retryAfter")
+    if isinstance(hint, (int, float)) and not isinstance(hint, bool):
+        retry_after = float(hint)
+        if math.isfinite(retry_after) and retry_after >= 0:
+            return SubscriptionDeferred(reason, min(retry_after, REFUSAL_RETRY_MAX_SECONDS))
+    if reason in RETRYABLE_REFUSALS:
+        return SubscriptionDeferred(reason, 0.0)
+    return OneApiError("WebSocket subscription refused")
+
+
 def reconnectable(error: BaseException) -> bool:
-    """Socket drops and transient admission failures; never protocol or subscription refusals."""
+    """Socket drops, deferred subscriptions and transient admission failures; never refusals."""
     if isinstance(error, OneApiHTTPError):
         return error.status_code == 429 or error.status_code >= 500
     return isinstance(error, (StreamDisconnected, OSError, TimeoutError, WebSocketException))
@@ -608,8 +636,10 @@ class OneApiClient:
                         frame = json.loads(raw)
                     except ValueError:
                         raise OneApiError("invalid WebSocket JSON") from None
-                    if not isinstance(frame, dict) or frame.get("channel") == "error":
+                    if not isinstance(frame, dict):
                         raise OneApiError("WebSocket subscription refused")
+                    if frame.get("channel") == "error":
+                        raise subscription_refusal(frame)
                     yield frame
                     if rotate_at is not None and time.monotonic() >= rotate_at:
                         # Reconnect with a fresh credential before the server ends the lease.
