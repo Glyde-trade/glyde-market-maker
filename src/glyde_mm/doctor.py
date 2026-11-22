@@ -70,11 +70,14 @@ async def check(
         ("Read key", selected.read_api_key_env),
     ):
         present = bool(os.environ.get(name))
-        requirement = (
-            "required in live mode" if selected.mode == "live" else "optional in paper mode"
-        )
+        if selected.mode != "live":
+            requirement = "optional in paper mode"
+        elif name == selected.read_api_key_env:
+            requirement = "optional: minted from the trading key when absent"
+        else:
+            requirement = "required in live mode"
         report(f"{label}: {'present' if present else 'absent'} ({requirement}) [variable: {name}]")
-        if selected.mode == "live" and not present:
+        if selected.mode == "live" and not present and name != selected.read_api_key_env:
             healthy = False
     try:
         async with OneApiClient(selected) as client:
@@ -107,20 +110,16 @@ async def check(
                 report(f"Runner price tick at current midpoint: {tick:f}")
                 report("Venue minimum order size/notional: unavailable in public metadata")
             if private:
-                if not os.environ.get(selected.read_api_key_env):
-                    report("Private reads: FAIL (read key absent)")
+                try:
+                    await client.account()
+                    await client.open_orders()
+                except (OneApiError, ValueError, TypeError, KeyError, AttributeError):
+                    report(
+                        "Private reads: FAIL (account or open-orders permission unavailable)"
+                    )
                     healthy = False
                 else:
-                    try:
-                        await client.account()
-                        await client.open_orders()
-                    except (OneApiError, ValueError, TypeError, KeyError, AttributeError):
-                        report(
-                            "Private reads: FAIL (account or open-orders permission unavailable)"
-                        )
-                        healthy = False
-                    else:
-                        report("Private reads: OK (account and open orders)")
+                    report("Private reads: OK (account and open orders)")
     except (
         OneApiError,
         httpx.InvalidURL,
