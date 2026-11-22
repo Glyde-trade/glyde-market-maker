@@ -596,7 +596,7 @@ strategy_config: {order_refresh_time: 30}
 markets:
   - symbol: BTC
     max_position: '0.001'
-    strategy_config: {order_amount: '0.0001', bid_spread: '0.01', ask_spread: '0.01'}
+    strategy_config: {order_amount: '0.0002', bid_spread: '0.01', ask_spread: '0.01'}
   - symbol: ETH
     strategy: inventory_skewed
     max_position: '0.02'

@@ -9,7 +9,7 @@ strategy: grid
 strategy_config:
   lower_price: '90000'
   upper_price: '110000'
-  order_amount: '0.0001'
+  order_amount: '0.0002'
   levels: 5
   order_refresh_time: 30
   minimum_spread: '0.001'

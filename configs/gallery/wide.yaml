@@ -16,7 +16,7 @@ strategy_config:
   bid_spread: '0.01'
   hanging_orders_enabled: false
   minimum_spread: '0.01'
-  order_amount: '0.0001'
+  order_amount: '0.0002'
   order_levels: 1
   order_refresh_time: 90
 symbol: BTC

@@ -11,7 +11,7 @@ from .plugin import PluginContext, Quote, StrategyPlugin
 @dataclass(frozen=True)
 class SymmetricConfig:
     spread: Decimal = Decimal("0.002")
-    amount: Decimal = Decimal("0.0001")
+    amount: Decimal = Decimal("0.0002")
 
     def __post_init__(self) -> None:
         if not 0 < self.spread < 1 or self.amount <= 0:

@@ -13,7 +13,7 @@ strategy_config:
   reference_stale_seconds: '3'
   bid_spread: '0.002'
   ask_spread: '0.002'
-  order_amount: '0.0001'
+  order_amount: '0.0002'
   order_refresh_time: 30
   order_levels: 1
   minimum_spread: '0.001'

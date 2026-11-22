@@ -6,8 +6,8 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import AsyncGenerator, Sequence
-from contextlib import suppress
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from decimal import Decimal
 from email.utils import parsedate_to_datetime
 from typing import Any, cast
@@ -17,6 +17,7 @@ import httpx
 import websockets
 from eth_account import Account as EthAccount
 from hyperliquid.utils.signing import sign_l1_action
+from websockets.exceptions import InvalidStatus
 
 from .config import Config, decimal
 from .models import (
@@ -48,6 +49,19 @@ class OneApiHTTPError(OneApiError):
 
 class OutcomeUnknown(OneApiError):
     """A submitted action may have committed; reconcile, do not blindly re-sign/retry."""
+
+
+# Socket admission retries must finish inside the runner's 10s first-book window.
+SOCKET_ADMISSION_SECONDS = 8.0
+SOCKET_RETRY_MAX_DELAY = 4.0
+
+
+def _retry_after_seconds(value: str | None) -> float:
+    try:
+        seconds = float(value or "")
+    except ValueError:
+        return 0.0
+    return min(max(seconds, 0.0), SOCKET_RETRY_MAX_DELAY)
 
 
 def wire_decimal(value: Decimal) -> str:
@@ -428,6 +442,29 @@ class OneApiClient:
         if any(symbol is None or row.symbol == symbol for row in remaining):
             raise OneApiError("cancel-all could not confirm an empty open-order snapshot")
 
+    @asynccontextmanager
+    async def _admitted_socket(self, url: str, **options: Any) -> AsyncIterator[Any]:
+        """Open a socket, backing off on HTTP 429 admission refusals within a bounded window."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + SOCKET_ADMISSION_SECONDS
+        delay = 1.0
+        while True:
+            stack = AsyncExitStack()
+            try:
+                socket = await stack.enter_async_context(self._connect_ws(url, **options))
+            except InvalidStatus as error:
+                status = error.response.status_code
+                remaining = deadline - loop.time()
+                if status != 429 or remaining <= 0:
+                    raise OneApiHTTPError(status) from None
+                retry_after = _retry_after_seconds(error.response.headers.get("Retry-After"))
+                await asyncio.sleep(min(max(retry_after, delay), remaining))
+                delay = min(delay * 2, SOCKET_RETRY_MAX_DELAY)
+                continue
+            async with stack:
+                yield socket
+            return
+
     async def stream(
         self, subscriptions: Sequence[dict[str, Any]]
     ) -> AsyncGenerator[dict[str, Any], None]:
@@ -448,7 +485,7 @@ class OneApiClient:
         headers = (
             {"X-Glyde-API-Key": self.config.secret(self.config.read_api_key_env)} if private else {}
         )
-        async with self._connect_ws(
+        async with self._admitted_socket(
             url,
             additional_headers=headers,
             max_size=512 * 1024,

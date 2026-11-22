@@ -26,7 +26,7 @@ from glyde_mm.strategies.plugin import StrategyPlugin, Quote
 @dataclass(frozen=True)
 class Settings:
     spread: Decimal = Decimal("0.002")
-    amount: Decimal = Decimal("0.0001")
+    amount: Decimal = Decimal("0.0002")
 
     def __post_init__(self):
         if not 0 < self.spread < 1 or self.amount <= 0:
@@ -57,7 +57,7 @@ strategy_config:
   refresh_tolerance_pct: null
   parameters:
     spread: '0.002'
-    amount: '0.0001'
+    amount: '0.0002'
 ```
 
 Keep the symbol and risk settings from `examples/plugin-paper.yaml`. `parameters`
