@@ -14,6 +14,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .client import StreamDisconnected
 from .config import RiskConfig
 from .models import CancelRequest
 from .risk_state import RiskStateStore
@@ -586,6 +587,10 @@ class RiskManagedClient:
                 failure = failure or error
         try:
             await self.client.cancel_all(symbol)
+        except StreamDisconnected as error:
+            # Nothing known is outstanding; the reconnect reconciles the venue before quoting.
+            if requests or failure is not None:
+                failure = failure or error
         except Exception as error:
             failure = failure or error
         if failure is not None:
