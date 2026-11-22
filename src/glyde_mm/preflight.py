@@ -27,6 +27,7 @@ def summary(config: Config) -> str:
         f" | max_daily_loss={config.risk.max_daily_loss} USDC"
         f" | book_age={config.risk.stale_book_seconds}s"
         f" | account_age={config.risk.account_age_seconds}s"
+        f" | stale_pause={config.risk.max_stale_pause_seconds}s"
     )
 
 

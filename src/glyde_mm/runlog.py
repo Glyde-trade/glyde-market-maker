@@ -17,9 +17,13 @@ _FIELDS = {
     "progress": {"book_messages", "pending_orders", "paper_fills"},
     "disconnected": set(),
     "reconnected": {"attempts", "downtime_ms"},
+    "book_stale": {"market", "reason"},
+    "book_fresh": {"market", "paused_ms"},
     "run_ended": {"outcome"},
 }
-_COUNTERS = {"progress", "reconnected"}
+_COUNTERS = {"progress", "reconnected", "book_fresh"}
+# Markets are config-order indexes, like metrics labels; reasons are a fixed set.
+STALE_REASONS = frozenset({"stale_book", "stale_book_source", "stale_peer"})
 _OUTCOMES = {"completed", "stopped", "cancelled", "risk_stop", "transport_error", "error"}
 _STRATEGIES = {
     "pure_market_making",
@@ -90,6 +94,12 @@ class RunLog:
             raise ValueError("invalid diagnostic counts")
         if event == "run_ended" and fields["outcome"] not in _OUTCOMES:
             raise ValueError("invalid diagnostic outcome")
+        if event == "book_stale" and (
+            type(fields["market"]) is not int
+            or not 0 <= fields["market"] < 16
+            or fields["reason"] not in STALE_REASONS
+        ):
+            raise ValueError("invalid diagnostic pause")
         if self._file.tell() + 512 > self.max_bytes:
             self._file.close()
             for index in range(self.backups, 0, -1):

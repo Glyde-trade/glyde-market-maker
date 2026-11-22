@@ -156,7 +156,7 @@ class Paper(PaperExchange):
         await super().cancel_all(symbol)
 
 
-def config(mode="paper", stale="5"):
+def config(mode="paper", stale="5", max_pause="300"):
     return Config(
         mode=mode,
         symbol="BTC",
@@ -164,16 +164,26 @@ def config(mode="paper", stale="5"):
         vault_address="0x" + "22" * 20,
         strategy_config={"order_amount": "0.01", "bid_spread": "0.02", "ask_spread": "0.02"},
         risk=RiskConfig(
-            max_position=D("0.1"), max_order_notional=D("25"), stale_book_seconds=D(stale)
+            max_position=D("0.1"),
+            max_order_notional=D("25"),
+            stale_book_seconds=D(stale),
+            max_stale_pause_seconds=D(max_pause),
         ),
     )
 
 
 async def scenario(
-    tmp_path, *, mode="paper", disconnected=False, stale="5", old_book=False, report=lambda _: None
+    tmp_path,
+    *,
+    mode="paper",
+    disconnected=False,
+    stale="5",
+    max_pause="300",
+    old_book=False,
+    report=lambda _: None,
 ):
     stop, placed = asyncio.Event(), asyncio.Event()
-    selected = config(mode, stale)
+    selected = config(mode, stale, max_pause)
     source = Source(selected, stop=stop, placed=placed)
     source.disconnected = disconnected
     if old_book:
@@ -243,7 +253,8 @@ async def test_unclassified_source_error_cancels_quotes_without_reconnect_or_res
 
 
 async def test_silent_stale_stream_triggers_watchdog_cancel(tmp_path):
-    task, _, paper = await scenario(tmp_path, stale="0.1")
+    # A stale book pauses first; a tiny pause bound turns it into the terminal stop.
+    task, _, paper = await scenario(tmp_path, stale="0.1", max_pause="0.1")
     with pytest.raises(RiskViolation, match="stale"):
         await asyncio.wait_for(task, 2)
     assert len(paper.submissions) == 2
@@ -389,7 +400,7 @@ async def test_paper_status_shows_active_quotes_and_final_cleanup(tmp_path):
 
 async def test_paper_risk_stop_is_visible_after_quotes_are_cancelled(tmp_path):
     messages = []
-    task, _, _ = await scenario(tmp_path, stale="0.1", report=messages.append)
+    task, _, _ = await scenario(tmp_path, stale="0.1", max_pause="0.1", report=messages.append)
     with pytest.raises(RiskViolation, match="stale"):
         await asyncio.wait_for(task, 2)
     summary = messages[-1]

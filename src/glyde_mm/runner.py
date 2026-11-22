@@ -8,7 +8,7 @@ import random
 import re
 import time
 from collections.abc import AsyncGenerator, Callable, Coroutine
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, suppress
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -277,7 +277,8 @@ async def _run_session(
             stop_event=stop,
             cleanup_symbols=config.symbols,
             metrics=metrics,
-            isolate_stale_markets=len(selected) > 1,
+            # A stale book pauses only its own market; the runner bounds how long.
+            isolate_stale_markets=True,
         )
         strategies: dict[str, Strategy] = {}
         stream: AsyncGenerator[JsonObject, None] | None = None
@@ -398,12 +399,23 @@ async def _run_session(
 
             market_lock = asyncio.Lock()
             paused: dict[str, str] = {}
+            paused_since: dict[str, float] = {}
+            market_index = {symbol: index for index, symbol in enumerate(selected)}
+            max_pause = float(config.risk.max_stale_pause_seconds)
 
-            async def pause_market(symbol: str, dependency: str) -> None:
+            async def pause_market(symbol: str, error: StaleMarket) -> None:
                 if symbol not in paused:
                     await strategies[symbol].stop()
-                    report(f"{config.mode.upper()} {symbol}: quoting paused (stale {dependency})")
-                paused[symbol] = dependency
+                    paused_since[symbol] = time.monotonic()
+                    reason = str(error) if error.symbol == symbol else "stale_peer"
+                    journal.emit("book_stale", market=market_index[symbol], reason=reason)
+                    metrics.count("stale_pauses")
+                    if paper_result is not None:
+                        paper_result.pause("stale")
+                    report(f"{config.mode.upper()} {symbol}: quoting paused (stale {error.symbol})")
+                elif time.monotonic() - paused_since[symbol] > max_pause:
+                    raise error  # Stale past the pause bound: end the run as a risk stop.
+                paused[symbol] = error.symbol
 
             async def refresh_markets() -> None:
                 for symbol in selected:
@@ -414,9 +426,12 @@ async def _run_session(
                         if dependency != symbol and guard.has_market_exposure(dependency):
                             guard.check_fresh(dependency)
                     except StaleMarket as error:
-                        await pause_market(symbol, error.symbol)
+                        await pause_market(symbol, error)
                         continue
                     if symbol in paused:
+                        # Reconcile as a reconnect does: retire what the venue still shows.
+                        await managed.cancel_all(symbol)
+                        guard.update_account(await raw.account())
                         policy = selected[symbol]
                         context = StrategyContext(
                             managed,
@@ -432,6 +447,10 @@ async def _run_session(
                         )
                         await strategies[symbol].on_book(book)
                         del paused[symbol]
+                        paused_ms = round((time.monotonic() - paused_since.pop(symbol)) * 1000)
+                        journal.emit("book_fresh", market=market_index[symbol], paused_ms=paused_ms)
+                        if paper_result is not None and not paused:
+                            paper_result.resume("stale")
                         report(f"{config.mode.upper()} {symbol}: quoting resumed")
 
             fill_index = 0
@@ -483,7 +502,9 @@ async def _run_session(
                     guard.update_book(book)
                     metrics.book(guard.books[book.symbol])
                     if book.symbol in references:
-                        guard.check_fresh(book.symbol)
+                        # Reference deviation check; staleness itself pauses via the watchdog.
+                        with suppress(StaleMarket):
+                            guard.check_fresh(book.symbol)
                     book_messages += 1
                     if paper is not None:
                         await paper.on_book(book)
@@ -504,7 +525,8 @@ async def _run_session(
                         if book.symbol not in references:
                             raise RiskViolation("reference_market_mismatch")
                         references[book.symbol].update(book)
-                        guard.check_fresh(book.symbol)
+                        with suppress(StaleMarket):
+                            guard.check_fresh(book.symbol)
                 raise RiskViolation("reference_disconnected")
 
             async def drive() -> None:
@@ -518,8 +540,7 @@ async def _run_session(
                         guard.update_account(await raw.account())
                         refreshed = now
                     async with market_lock:
-                        if len(selected) > 1:
-                            await refresh_markets()
+                        await refresh_markets()
                         for symbol, strategy in strategies.items():
                             if stop.is_set():
                                 return
@@ -528,10 +549,10 @@ async def _run_session(
                             try:
                                 await strategy.on_tick()
                             except StaleMarket as error:
-                                if len(selected) == 1 or error.symbol not in selected:
+                                if error.symbol not in selected:
                                     raise
-                                await pause_market(error.symbol, error.symbol)
-                                await pause_market(symbol, error.symbol)
+                                await pause_market(error.symbol, error)
+                                await pause_market(symbol, error)
                             if paper is not None:
                                 metrics.paper_fills(paper)
                                 await observe_paper()
@@ -564,10 +585,7 @@ async def _run_session(
                     if live is not None:
                         live.check()
                     async with market_lock:
-                        if len(selected) > 1:
-                            await refresh_markets()
-                        else:
-                            guard.check_fresh(config.symbols[0])
+                        await refresh_markets()
                         await managed.check_liveness()
                     await asyncio.sleep(0.25)
 
@@ -615,6 +633,9 @@ async def _run_session(
                     await strategy.stop()
                 strategies.clear()
                 paused.clear()
+                paused_since.clear()
+                if paper_result is not None:
+                    paper_result.resume("stale")  # Reconnect restarts every market fresh.
                 await resources.aclose()
                 for symbol in config.symbols:
                     await managed.cancel_all(symbol)

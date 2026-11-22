@@ -174,6 +174,7 @@ Refusal labels come from a fixed allowlist; arbitrary venue error text is omitte
 | `book_arrival_age_seconds{market}`, `book_source_age_seconds{market}` | Age of the last committed book by local receipt and source clock; scrapes never restamp it. |
 | `account_arrival_age_seconds`, `account_source_age_seconds` | Same for the complete sequenced owner cut. Paper has no owner stream. |
 | `gaps_total` | First detected sequence/session/epoch/cursor continuity failure per failed cache. |
+| `stale_pauses_total` | Markets paused for a stale book (or a stale exposed peer) while connected; `book_stale`/`book_fresh` run-log events carry the market index and pause length. |
 | `reconnects_total` | Subsequent stream baselines within the same process/collector. Each automatic reconnect after a socket drop adds one; a new runner session resets it. |
 
 `NaN` means unavailable or not yet observed, **not zero**. PnL is observational,
@@ -210,8 +211,10 @@ live loss guarantee; the paper model excludes fees/funding and approximates queu
 Read `outcome`, `termination`, `cleanup_confirmed` and `open_quotes_at_end`
 first. `stopped` with `duration_elapsed` and confirmed zero quotes means the
 requested local session finished normally; it is not a live execution claim.
-A source gap or stale book stops this runner rather than silently resuming. A socket
-drop retires quotes and reconnects; `pause_counts` records each such episode, not durations.
+A source gap stops this runner rather than silently resuming. A socket drop retires
+quotes and reconnects; a stale book retires that market's quotes and resumes on the next
+fresh book, stopping only after `risk.max_stale_pause_seconds`. `pause_counts` records
+each such episode, not durations.
 Transport/setup failures return nonzero and the result remains failed or
 unobserved. A signal is distinct from completing the requested duration. Disk
 write failure also returns nonzero; do not treat a missing/partial JSON as success.

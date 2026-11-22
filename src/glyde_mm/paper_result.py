@@ -95,7 +95,10 @@ class PaperResult:
             "unrealized_pnl_usdc": str(self.unrealized) if self.observed else None,
             "max_drawdown_usdc": str(self.drawdown) if self.observed else None,
             "pause_counts": self.pause_counts,
-            "pause_behavior": "disconnect_reconnects_after_resync; other pauses stop the session",
+            "pause_behavior": (
+                "disconnect_reconnects_after_resync; stale_resumes_when_fresh;"
+                " other pauses stop the session"
+            ),
             "cleanup_confirmed": self.cleanup_confirmed,
             "pnl_model": "simulated public-tape execution; no fees, funding or live settlement",
         }
