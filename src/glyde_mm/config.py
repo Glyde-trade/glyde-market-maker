@@ -34,6 +34,8 @@ class RiskConfig:
     account_age_seconds: Decimal = Decimal("10")
     max_orders_per_minute: int = 60
     max_total_notional: Decimal | None = None
+    # A stale book pauses its market; past this many seconds the run stops instead.
+    max_stale_pause_seconds: Decimal = Decimal("300")
 
 
 @dataclass(frozen=True)

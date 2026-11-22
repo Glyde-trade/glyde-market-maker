@@ -210,8 +210,9 @@ can cancel other orders in the same account. Review remaining orders in your acc
 fails; loss of connectivity cannot guarantee a successful cancel.
 
 Unknown order/cancel outcomes stop new orders and retain the original identity. The bot does not
-resend an ambiguous order or replace it with a new nonce/ID. Stale books, unavailable account reads
-and daily-loss breaches stop quoting. Preserve the runtime risk-state directory across restarts so
+resend an ambiguous order or replace it with a new nonce/ID. A stale book pauses that market
+(quotes retired, resumed from the next fresh book) for up to `risk.max_stale_pause_seconds`;
+longer staleness, unavailable account reads and daily-loss breaches stop quoting. Preserve the runtime risk-state directory across restarts so
 the daily-loss baseline is retained.
 
 ## Fixed-range grid
@@ -393,6 +394,7 @@ For diagnostic logs, use `glyde-mm report path/to/.glyde-mm/logs`.
 | `risk.max_order_notional` | Maximum USDC notional per order |
 | `risk.max_daily_loss` | Daily equity-loss kill switch in USDC |
 | `risk.stale_book_seconds` | Maximum book source/arrival age |
+| `risk.max_stale_pause_seconds` | Longest stale-book pause before the run stops, default 300 |
 | `risk.account_age_seconds` | Maximum account-observation age |
 
 PMM sizing follows Hummingbot's linear bid/ask adjustment, adapted to signed perpetual
@@ -633,6 +635,8 @@ metadata. Paper subscribes to public books/trades and keeps its simulated accoun
 A stale book pauses that market and confirms cancellation of its quotes. Other fresh
 markets keep quoting once the stale market is flat and its outstanding orders are retired.
 A fresh book restarts the paused strategy instance, including its volatility warm-up.
+Single-market runs pause the same way. A market stale for longer than
+`risk.max_stale_pause_seconds` (default 300) ends the run with the stale risk stop.
 If the stale market has a position, new quotes that require its notional valuation pause
 until that book is fresh; stale prices never become an assumed account-level bound.
 
@@ -762,7 +766,10 @@ even if read authority has expired. Confirmed terminal/cancel receipts retire tr
 without waiting for a dead read stream; the old session still refuses reads and new orders.
 The runner then reconnects with jittered exponential backoff (1s to 30s, until stopped),
 resubscribes, waits for fresh complete WS snapshots and cancels every open order that snapshot
-shows before quoting again. `disconnected`/`reconnected` events record each episode. Gaps,
+shows before quoting again. `disconnected`/`reconnected` events record each episode.
+A stale book while connected pauses only that market: its quotes are retired, and the next fresh
+book cancels whatever the venue still shows for it before quoting resumes. `book_stale`/`book_fresh`
+events (market index, reason, pause length) and `glyde_mm_stale_pauses_total` record each pause. Gaps,
 refusals, unknown outcomes and risk halts never reconnect; they stop the session. Restart
 repeats exposure checks while retaining durable loss, rate and unknown-outcome state. Lost or refused
 cancel receipts stay an error, even if the venue might already be empty; no order is re-signed

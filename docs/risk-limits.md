@@ -47,6 +47,10 @@ private reads or live trading are available.
 `stale_book_seconds` and `account_age_seconds` bound the observations used to admit orders. Stale
 source timestamps, repeated old books and unavailable private reads are not fresh authority.
 Restore the feed or account access instead of treating larger timeouts as proof of safety.
+A stale book pauses that market rather than ending the run: its quotes are cancelled, nothing new is
+placed, and a fresh book reconciles open orders before quoting resumes. `max_stale_pause_seconds`
+(default 300) bounds a pause; longer staleness ends the run with the `stale_book`/`stale_book_source`
+risk stop. A stale account is not paused; it stops the run.
 
 ## What should I do after an unknown order or cancel outcome?
 

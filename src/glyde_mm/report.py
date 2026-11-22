@@ -11,7 +11,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-from .runlog import _COUNTERS, _FIELDS, _OUTCOMES, _STRATEGIES
+from .runlog import _COUNTERS, _FIELDS, _OUTCOMES, _STRATEGIES, STALE_REASONS
 
 _RUN = re.compile(r"run-([0-9a-f]{32})")
 _SEGMENT = re.compile(r"events(?:\.([1-9][0-9]?))?\.jsonl")
@@ -65,6 +65,12 @@ def _validate(row: object, run_id: str) -> dict[str, Any]:
             raise ValueError("Invalid diagnostic counters.")
     elif event == "run_ended" and row["outcome"] not in tuple(_OUTCOMES):
         raise ValueError("Invalid diagnostic outcome.")
+    elif event == "book_stale" and (
+        type(row["market"]) is not int
+        or not 0 <= row["market"] < 16
+        or row["reason"] not in tuple(STALE_REASONS)
+    ):
+        raise ValueError("Invalid diagnostic pause.")
     return row
 
 

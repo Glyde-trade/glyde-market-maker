@@ -24,8 +24,9 @@ its initial book cut and the last processed trade cut. This discards historical
 subscription prints and conservatively skips same-millisecond ambiguous fills.
 Duplicate trade IDs at a cut and older source cuts cannot replay liquidity.
 Up to 4096 distinct prints per symbol/millisecond are accepted; overflow stops the
-session. Malformed prints, subscription refusal, stale books or a disconnected
-socket stop the run and cancel simulated quotes through the usual cleanup.
+session. Malformed prints or subscription refusal stop the run and cancel simulated
+quotes through the usual cleanup. A dropped socket reconnects and a stale book pauses
+the market, both after retiring simulated quotes.
 Book updates mark positions but do not also fill resting tape-driven quotes.
 
 The `record`/`replay` commands currently record books only. They retain their

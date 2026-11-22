@@ -219,9 +219,10 @@ def test_actual_cli_timer_public_tape_report_and_fail_closed_paths(monkeypatch, 
         assert D(row["realized_pnl_usdc"]) == D("0.0006")
         assert D(row["unrealized_pnl_usdc"]) == 0
     elif failure == "stale":
-        assert code == 1 and row["pause_counts"]["stale"] == 1
+        # A stale book pauses quoting; the timer, not a risk stop, ends the session.
+        assert code == 0 and row["pause_counts"]["stale"] == 1
         assert row["quotes"]["placed"] == 2
-        assert row["outcome"] == "risk_stop"
+        assert row["outcome"] == "stopped"
     elif failure == "gap":
         assert code == 1 and row["pause_counts"]["gap"] == 1
         assert row["outcome"] == "transport_error"

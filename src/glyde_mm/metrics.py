@@ -53,7 +53,8 @@ class Metrics:
         self._clock, self._wall = clock, wall_clock
         self._lock = threading.Lock()
         self._counts = {
-            key: 0 for key in ("quotes_placed", "quotes_cancelled", "gaps", "reconnects")
+            key: 0
+            for key in ("quotes_placed", "quotes_cancelled", "gaps", "reconnects", "stale_pauses")
         }
         self._refused = dict.fromkeys(_REASONS, 0)
         self._fills = dict.fromkeys(self._symbols.values(), 0)
