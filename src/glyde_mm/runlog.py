@@ -15,8 +15,11 @@ from .version import build_identity
 _FIELDS = {
     "strategy_started": set(),
     "progress": {"book_messages", "pending_orders", "paper_fills"},
+    "disconnected": set(),
+    "reconnected": {"attempts", "downtime_ms"},
     "run_ended": {"outcome"},
 }
+_COUNTERS = {"progress", "reconnected"}
 _OUTCOMES = {"completed", "stopped", "cancelled", "risk_stop", "transport_error", "error"}
 _STRATEGIES = {
     "pure_market_making",
@@ -81,7 +84,7 @@ class RunLog:
     def emit(self, event: str, **fields: object) -> None:
         if event not in _FIELDS or set(fields) != _FIELDS[event]:
             raise ValueError("unsupported diagnostic fields")
-        if event == "progress" and any(
+        if event in _COUNTERS and any(
             type(value) is not int or not 0 <= value <= 2**63 - 1 for value in fields.values()
         ):
             raise ValueError("invalid diagnostic counts")

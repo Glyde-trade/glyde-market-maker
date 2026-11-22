@@ -4,16 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import random
 import re
 import time
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import AsyncExitStack
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
+from typing import Any, TypeVar
 
 from .alerts import notify_session
-from .client import OneApiClient, OneApiError, book_from_wire, trades_from_wire
+from .client import (
+    OneApiClient,
+    OneApiError,
+    StreamDisconnected,
+    book_from_wire,
+    reconnectable,
+    trades_from_wire,
+)
 from .config import Config
 from .dashboard import SnapshotPublisher
 from .live_state import LiveStateClient
@@ -32,6 +41,32 @@ from .strategies.avellaneda_market_making import AvellanedaConfig, AvellanedaMar
 from .strategies.factory import Strategy, validate_strategy_config
 from .strategies.pure_market_making import PureMarketMakingConfig
 from .transport import ClientFactory, JsonObject
+
+RECONNECT_INITIAL_SECONDS = 1.0
+RECONNECT_MAX_SECONDS = 30.0
+_T = TypeVar("_T")
+
+
+async def _stopped_within(stop: asyncio.Event, seconds: float) -> bool:
+    try:
+        async with asyncio.timeout(seconds):
+            await stop.wait()
+    except TimeoutError:
+        return False
+    return True
+
+
+async def _unless_stopped(stop: asyncio.Event, work: Coroutine[Any, Any, _T]) -> _T | None:
+    """Await work unless stop is set first; abandoned work is cancelled and yields None."""
+    task = asyncio.create_task(work)
+    waiter = asyncio.create_task(stop.wait())
+    try:
+        await asyncio.wait((task, waiter), return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        waiter.cancel()
+        task.cancel()
+        await asyncio.gather(task, waiter, return_exceptions=True)
+    return None if task.cancelled() else task.result()
 
 
 def risk_state_path(config: Config, directory: Path) -> Path:
@@ -212,6 +247,7 @@ async def _run_session(
         state_path=risk_state_path(config, state_directory),
         position_limits={s: c.risk.max_position for s, c in selected.items()},
         reference_check=check_reference if references else None,
+        simulated=config.mode == "paper",
     )
     stop = stop_event or asyncio.Event()
     async with client_factory(config) as source:
@@ -226,8 +262,12 @@ async def _run_session(
                 return
         paper = paper_factory(config.paper_balance) if config.mode == "paper" else None
         live = LiveStateClient(source, config, metrics=metrics) if paper is None else None
-        raw = paper if paper is not None else live
-        assert raw is not None
+        raw: PaperExchange | LiveStateClient
+        if paper is not None:
+            raw = paper
+        else:
+            assert live is not None
+            raw = live
         cleanup_allowed = paper is not None
         if paper is not None:
             paper.use_trade_tape()
@@ -240,7 +280,8 @@ async def _run_session(
             isolate_stale_markets=len(selected) > 1,
         )
         strategies: dict[str, Strategy] = {}
-        stream = reference_stream = None
+        stream: AsyncGenerator[JsonObject, None] | None = None
+        reference_stream: AsyncGenerator[JsonObject, None] | None = None
         resources = AsyncExitStack()
         tasks: list[asyncio.Task[None] | asyncio.Task[bool]] = []
         risk_stop = None
@@ -268,82 +309,93 @@ async def _run_session(
             subscriptions = [{"type": "l2Book", "coin": symbol} for symbol in selected]
             if paper is not None:
                 subscriptions += [{"type": "trades", "coin": symbol} for symbol in selected]
-            stream = live.stream() if live is not None else source.stream(subscriptions)
-            resources.push_async_callback(stream.aclose)
-            initial_books: dict[str, Book] = {}
-            async with asyncio.timeout(10):
-                while initial_books.keys() != selected.keys():
-                    frame = await anext(stream)
-                    if stop.is_set():
-                        return
-                    if frame.get("channel") == "l2Book":
-                        book = book_from_wire(frame["data"])
-                        if book.symbol not in selected:
-                            raise OneApiError("book market mismatch")
-                        initial_books[book.symbol] = book
-            metrics.connected()
-            if references:
-                public_config = replace(
-                    config,
-                    mode="paper",
-                    base_url=HYPERLIQUID_PUBLIC_URL,
-                    owner="",
-                    vault_address=None,
-                )
-                reference_client = reference_factory(public_config)
-                resources.push_async_callback(reference_client.close)
-                reference_stream = reference_client.stream(
-                    [{"type": "l2Book", "coin": symbol} for symbol in references]
-                )
-                resources.push_async_callback(reference_stream.aclose)
-                received: set[str] = set()
+
+            async def open_streams() -> dict[str, Book]:
+                nonlocal stream, reference_stream
+                stream = live.stream() if live is not None else source.stream(subscriptions)
+                resources.push_async_callback(stream.aclose)
+                books: dict[str, Book] = {}
                 async with asyncio.timeout(10):
-                    try:
-                        while received != references.keys():
-                            frame = await anext(reference_stream)
-                            if stop.is_set():
-                                return
-                            if frame.get("channel") == "l2Book":
-                                book = book_from_wire(frame["data"])
-                                if book.symbol not in references:
-                                    raise RiskViolation("reference_market_mismatch")
-                                references[book.symbol].update(book)
-                                received.add(book.symbol)
-                    except StopAsyncIteration:
-                        raise RiskViolation("reference_disconnected") from None
-            for book in initial_books.values():
-                guard.update_book(book)
-                metrics.book(guard.books[book.symbol])
-                if paper is not None:
-                    await paper.on_book(book)
-                    await observe_paper()
-            if live is not None:
-                await check_live_exposure(
-                    live, config.symbols, allow_existing_exposure=allow_existing_exposure
-                )
-                cleanup_allowed = True
-            guard.update_account(await raw.account())
-            if stop.is_set():
-                return
-            for symbol, market_config in selected.items():
-                initial = guard.check_fresh(symbol)
-                context = StrategyContext(
-                    managed,
-                    symbol,
-                    _price_tick(initial, precision[symbol]),
-                    Decimal(1).scaleb(-precision[symbol]),
-                    quote_center=references[symbol].center if symbol in references else None,
-                )
-                strategy = strategy_factory(
-                    market_config.strategy, context, market_config.strategy_config
-                )
-                strategies[symbol] = strategy
-                await strategy.on_book(initial)
-                report(
-                    f"{config.mode.upper()} {symbol}: strategy started "
-                    "with shared account risk limits"
-                )
-                journal.emit("strategy_started")
+                    while books.keys() != selected.keys():
+                        try:
+                            frame = await anext(stream)
+                        except StopAsyncIteration:
+                            raise StreamDisconnected("book stream disconnected") from None
+                        if frame.get("channel") == "l2Book":
+                            book = book_from_wire(frame["data"])
+                            if book.symbol not in selected:
+                                raise OneApiError("book market mismatch")
+                            books[book.symbol] = book
+                metrics.connected()
+                if references:
+                    public_config = replace(
+                        config,
+                        mode="paper",
+                        base_url=HYPERLIQUID_PUBLIC_URL,
+                        owner="",
+                        vault_address=None,
+                    )
+                    reference_client = reference_factory(public_config)
+                    resources.push_async_callback(reference_client.close)
+                    reference_stream = reference_client.stream(
+                        [{"type": "l2Book", "coin": symbol} for symbol in references]
+                    )
+                    resources.push_async_callback(reference_stream.aclose)
+                    received: set[str] = set()
+                    async with asyncio.timeout(10):
+                        try:
+                            while received != references.keys():
+                                frame = await anext(reference_stream)
+                                if frame.get("channel") == "l2Book":
+                                    book = book_from_wire(frame["data"])
+                                    if book.symbol not in references:
+                                        raise RiskViolation("reference_market_mismatch")
+                                    references[book.symbol].update(book)
+                                    received.add(book.symbol)
+                        except StopAsyncIteration:
+                            raise RiskViolation("reference_disconnected") from None
+                return books
+
+            async def start_quoting(books: dict[str, Book], first: bool) -> None:
+                nonlocal cleanup_allowed
+                for book in books.values():
+                    guard.update_book(book)
+                    metrics.book(guard.books[book.symbol])
+                    if paper is not None:
+                        await paper.on_book(book)
+                        await observe_paper()
+                if live is not None and first:
+                    await check_live_exposure(
+                        live, config.symbols, allow_existing_exposure=allow_existing_exposure
+                    )
+                    cleanup_allowed = True
+                elif live is not None:
+                    # Reconcile: cancel what the fresh venue snapshot still shows before quoting.
+                    for symbol in config.symbols:
+                        await managed.cancel_all(symbol)
+                guard.update_account(await raw.account())
+                if stop.is_set():
+                    return
+                for symbol, market_config in selected.items():
+                    initial = guard.check_fresh(symbol)
+                    context = StrategyContext(
+                        managed,
+                        symbol,
+                        _price_tick(initial, precision[symbol]),
+                        Decimal(1).scaleb(-precision[symbol]),
+                        quote_center=references[symbol].center if symbol in references else None,
+                    )
+                    strategy = strategy_factory(
+                        market_config.strategy, context, market_config.strategy_config
+                    )
+                    strategies[symbol] = strategy
+                    await strategy.on_book(initial)
+                    report(
+                        f"{config.mode.upper()} {symbol}: strategy started "
+                        "with shared account risk limits"
+                    )
+                    journal.emit("strategy_started")
+
             market_lock = asyncio.Lock()
             paused: dict[str, str] = {}
 
@@ -383,7 +435,7 @@ async def _run_session(
                         report(f"{config.mode.upper()} {symbol}: quoting resumed")
 
             fill_index = 0
-            book_messages = len(initial_books)
+            book_messages = 0
 
             async def deliver_fills() -> None:
                 nonlocal fill_index
@@ -395,6 +447,7 @@ async def _run_session(
 
             async def receive_books() -> None:
                 nonlocal book_messages
+                assert stream is not None
                 async for frame in stream:
                     if paper is not None and frame.get("channel") in {
                         "resnapshot_required",
@@ -441,9 +494,7 @@ async def _run_session(
                         strategy.context, price_tick=_price_tick(book, precision[book.symbol])
                     )
                     await strategy.on_book(book)
-                if paper_result is not None:
-                    paper_result.pause("disconnect")
-                raise OneApiError("book stream disconnected")
+                raise StreamDisconnected("book stream disconnected")
 
             async def receive_reference() -> None:
                 assert reference_stream is not None
@@ -520,24 +571,100 @@ async def _run_session(
                         await managed.check_liveness()
                     await asyncio.sleep(0.25)
 
-            tasks = [
-                asyncio.create_task(receive_books()),
-                asyncio.create_task(drive()),
-                asyncio.create_task(watchdog()),
-                asyncio.create_task(stop.wait()),
-            ]
-            if references:
-                tasks.insert(0, asyncio.create_task(receive_reference()))
-            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for task in done:
-                if task is not tasks[-1]:
+            async def serve() -> StreamDisconnected | None:
+                nonlocal tasks
+                tasks = [
+                    asyncio.create_task(receive_books()),
+                    asyncio.create_task(drive()),
+                    asyncio.create_task(watchdog()),
+                    asyncio.create_task(stop.wait()),
+                ]
+                if references:
+                    tasks.insert(0, asyncio.create_task(receive_reference()))
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                dropped = None
+                for task in done:
+                    if task is tasks[-1]:
+                        continue
                     try:
                         task.result()
                     except RiskViolation as error:
                         if not stop.is_set() or str(error) != "client_closed":
                             raise
-                    if not stop.is_set():
-                        raise OneApiError("strategy task exited unexpectedly")
+                    except StreamDisconnected as error:
+                        dropped = dropped or error
+                    else:
+                        if not stop.is_set():
+                            raise OneApiError("strategy task exited unexpectedly")
+                return None if stop.is_set() else dropped
+
+            async def retire(dropped: StreamDisconnected) -> None:
+                nonlocal tasks
+                if paper_result is not None:
+                    paper_result.pause("disconnect")
+                results, tasks = await managed.interrupt(tasks), []
+                for result in results:
+                    if isinstance(result, Exception) and not isinstance(result, StreamDisconnected):
+                        if stop.is_set():
+                            return
+                        raise result
+                # An unknown outcome or risk halt still ends the run; only flat state reconnects.
+                if not guard.resume_after_disconnect():
+                    raise dropped
+                for strategy in strategies.values():
+                    await strategy.stop()
+                strategies.clear()
+                paused.clear()
+                await resources.aclose()
+                for symbol in config.symbols:
+                    await managed.cancel_all(symbol)
+                if live is not None:
+                    await live.close()
+                await observer.publish(guard, paper=paper)
+
+            first, attempts, dropped_at = True, 0, 0.0
+            while True:
+                if not first:
+                    attempts += 1
+                    delay = RECONNECT_INITIAL_SECONDS * 2 ** min(attempts - 1, 16)
+                    delay = min(delay, RECONNECT_MAX_SECONDS) * random.uniform(0.5, 1)
+                    if await _stopped_within(stop, delay):
+                        return
+                    if live is not None:
+                        live = LiveStateClient(source, config, metrics=metrics)
+                        raw = managed.client = live
+                try:
+                    books = await _unless_stopped(stop, open_streams())
+                except Exception as error:
+                    if first or not reconnectable(error):
+                        raise
+                    report(
+                        f"{config.mode.upper()}: reconnect attempt {attempts} failed "
+                        f"({type(error).__name__})"
+                    )
+                    await resources.aclose()
+                    if live is not None:
+                        await live.close()
+                    continue
+                if books is None or stop.is_set():
+                    return
+                await start_quoting(books, first)
+                if stop.is_set():
+                    return
+                if not first:
+                    downtime_ms = round((time.monotonic() - dropped_at) * 1000)
+                    journal.emit("reconnected", attempts=attempts, downtime_ms=downtime_ms)
+                    report(f"{config.mode.upper()}: reconnected after {attempts} attempt(s)")
+                    if paper_result is not None:
+                        paper_result.resume("disconnect")
+                first, attempts = False, 0
+                dropped = await serve()
+                if dropped is None:
+                    return
+                dropped_at = time.monotonic()
+                journal.emit("disconnected")
+                await retire(dropped)
+                report(f"{config.mode.upper()}: stream disconnected; quotes retired, reconnecting")
         except BaseException as error:
             if isinstance(error, RiskViolation):
                 risk_stop = str(error)

@@ -13,6 +13,7 @@ import pytest
 from market_receipt import approved_market
 from test_multi_market_live import MarketWire
 
+from glyde_mm import runner
 from glyde_mm.client import OneApiClient
 from glyde_mm.config import Config, MarketConfig, RiskConfig
 from glyde_mm.risk import RiskViolation
@@ -135,17 +136,13 @@ async def episode(wire, selected, directory):
                 await asyncio.gather(task, return_exceptions=True)
 
 
-@pytest.mark.parametrize("failure", ["disconnect", "gap"])
-async def test_disconnect_cancels_once_and_restart_uses_fresh_baseline(tmp_path, failure):
+async def test_gap_cancels_once_and_restart_uses_fresh_baseline(tmp_path):
     wire, selected = ResilienceWire(), config()
     async with episode(wire, selected, tmp_path) as (task, _):
         await until(wire, lambda: len(wire.orders()) == 4)
         originals = set(wire.orders())
         start = time.monotonic()
-        if failure == "disconnect":
-            await wire.socket.close()
-        else:
-            wire.emit_owner(skip=1)
+        wire.emit_owner(skip=1)
         await until(wire, lambda: not wire.orders())
         assert time.monotonic() - start < CANCEL_BOUND_SECONDS
         with pytest.raises(Exception, match="disconnected|stream"):
@@ -166,6 +163,59 @@ async def test_disconnect_cancels_once_and_restart_uses_fresh_baseline(tmp_path,
     wire.assert_no_duplicate_cancels()
     restarted = json.loads(risk_state_path(selected, tmp_path).read_text())
     assert len(restarted["order_attempts"]) > attempts  # Rate fence wasn't reset for restart.
+
+
+class FreshWire(ResilienceWire):
+    def connect(self, url, **kwargs):
+        self.ledger.now_ms = time.time_ns() // 1_000_000  # A new socket's snapshot is current.
+        return super().connect(url, **kwargs)
+
+
+async def test_socket_drop_reconciles_venue_orders_before_requoting(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "RECONNECT_INITIAL_SECONDS", 0.2)
+    wire, selected = FreshWire(), config()
+    async with episode(wire, selected, tmp_path) as (task, stop):
+        await until(wire, lambda: len(wire.orders()) == 4)
+        originals = set(wire.orders())
+        await wire.socket.close()
+        await until(wire, lambda: not wire.orders())
+        dropped = len(wire.actions)
+        # Venue state the dead session cannot see, e.g. an order from a lost receipt.
+        stray = wire.ledger.exchange(
+            {
+                "action": {
+                    "type": "order",
+                    "orders": [
+                        {
+                            "a": 0,
+                            "b": True,
+                            "p": "90",
+                            "s": "0.01",
+                            "r": False,
+                            "t": {"limit": {"tif": "Gtc"}},
+                        }
+                    ],
+                }
+            }
+        )["response"]["data"]["statuses"][0]["resting"]["oid"]
+        await until(wire, lambda: len(wire.orders()) == 4 and str(stray) not in wire.orders())
+        assert set(wire.orders()).isdisjoint(originals)
+        assert wire.connections == 2 and not task.done()
+        after = [action for _, action in wire.actions[dropped:]]
+        first_order = next(i for i, action in enumerate(after) if action["type"] == "order")
+        reconciled = {
+            row["o"]
+            for action in after[:first_order]
+            if action["type"] == "cancel"
+            for row in action["cancels"]
+        }
+        assert stray in reconciled
+        stop.set()
+        await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
+    assert not wire.orders()
+    wire.assert_no_duplicate_cancels()
+    state = json.loads(risk_state_path(selected, tmp_path).read_text())
+    assert state["execution"] is None
 
 
 async def test_stale_books_cancel_within_watchdog_bound_and_restart_cleanly(tmp_path):

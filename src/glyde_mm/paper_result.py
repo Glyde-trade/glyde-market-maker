@@ -73,6 +73,9 @@ class PaperResult:
             self.pause_counts[reason] += 1
             self._pauses.add(reason)
 
+    def resume(self, reason: str) -> None:
+        self._pauses.discard(reason)
+
     def write(self, termination: str) -> dict[str, Any]:
         result = {
             "schema": 1,
@@ -92,7 +95,7 @@ class PaperResult:
             "unrealized_pnl_usdc": str(self.unrealized) if self.observed else None,
             "max_drawdown_usdc": str(self.drawdown) if self.observed else None,
             "pause_counts": self.pause_counts,
-            "pause_behavior": "fail_closed_session_stop; no automatic reconnect",
+            "pause_behavior": "disconnect_reconnects_after_resync; other pauses stop the session",
             "cleanup_confirmed": self.cleanup_confirmed,
             "pnl_model": "simulated public-tape execution; no fees, funding or live settlement",
         }
