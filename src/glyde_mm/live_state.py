@@ -29,6 +29,7 @@ OWNER_CHANNELS = ("clearinghouseState", "openOrders", "orderUpdates", "userFills
 # HL reports many terminal statuses (marginCanceled, reduceOnlyRejected, ...) plus Glyde's
 # internalCancel; anything outside these families still fails closed.
 LIVE_ORDER_STATUSES = frozenset({"open", "triggered", "pending"})
+ENGINE_HALT_RETRY_SECONDS = 5.0
 TERMINAL_ORDER_STATUSES = frozenset({"filled", "canceled", "rejected", "expired"})
 
 
@@ -310,7 +311,10 @@ class LiveStateClient:
             refusal = subscription_refusal(frame)
             if isinstance(refusal, SubscriptionDeferred):
                 raise refusal
-        if channel in {"error", "glydeSafety", "resnapshot_required"}:
+        if channel == "glydeSafety":
+            # An engine halt or unsafe source: pull quotes and resubscribe until a safe snapshot.
+            raise SubscriptionDeferred("ENGINE_NOT_READY", ENGINE_HALT_RETRY_SECONDS)
+        if channel in {"error", "resnapshot_required"}:
             raise OneApiError("live stream requires resnapshot")
         meta = frame["glyde"]
         group = meta["group"]
