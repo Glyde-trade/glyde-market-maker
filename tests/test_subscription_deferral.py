@@ -182,6 +182,33 @@ async def test_live_first_connect_userfills_deferral_retries_and_quotes(tmp_path
     assert not wire.orders()
 
 
+class LateDeferredFillsSocket(MarketSocket):
+    """Production order: books arrive first, then the userFills refusal during startup."""
+
+    async def send(self, raw):
+        frame = json.loads(raw)
+        if frame.get("subscription", {}).get("type") == "userFills":
+            asyncio.get_running_loop().call_later(0.05, self.queue.put_nowait, DEFERRED)
+            return
+        await super().send(raw)
+
+
+class FirstFillsLateDeferredWire(FreshWire):
+    def connect(self, url, **kwargs):
+        socket = super().connect(url, **kwargs)
+        return LateDeferredFillsSocket(self) if self.connections == 1 else socket
+
+
+async def test_live_first_connect_deferral_after_books_retries_and_quotes(tmp_path):
+    wire, selected = FirstFillsLateDeferredWire(), live_config()
+    async with episode(wire, selected, tmp_path) as (task, stop):
+        await until(wire, lambda: len(wire.orders()) == 4)
+        assert wire.connections == 2 and not task.done()
+        stop.set()
+        await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
+    assert not wire.orders()
+
+
 async def test_live_refusal_without_retry_hint_still_ends_the_run(tmp_path):
     wire, selected = FreshWire(), live_config()
     async with episode(wire, selected, tmp_path) as (task, _):
