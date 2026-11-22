@@ -1,4 +1,4 @@
-# PAPER: smaller quotes, wider spacing and slower refresh; not a risk guarantee.
+# PAPER: minimum-size quotes, wider spacing and slower refresh; not a risk guarantee.
 # Check current price, venue minimum and quantity step before changing this size.
 # Values are illustrative; prices move and all pending orders count toward risk caps.
 base_url: https://api.glyde.trade/v1
@@ -16,7 +16,7 @@ strategy_config:
   bid_spread: '0.005'
   hanging_orders_enabled: false
   minimum_spread: '0.001'
-  order_amount: '0.00005'
+  order_amount: '0.0002'
   order_levels: 1
   order_refresh_time: 60
 symbol: BTC

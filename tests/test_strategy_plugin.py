@@ -308,7 +308,7 @@ async def test_hook_timeout_blocks_no_dispatch(plugin_module):
 def test_example_yaml_loads_typed_config():
     config = load_config("examples/plugin-paper.yaml")
     selected = validate_strategy_config(config.strategy, config.strategy_config)
-    assert config.mode == "paper" and selected.parameters.amount == D("0.0001")
+    assert config.mode == "paper" and selected.parameters.amount == D("0.0002")
 
 
 async def test_cancelled_hook_blocks_and_host_cleanup_still_runs(plugin_module):

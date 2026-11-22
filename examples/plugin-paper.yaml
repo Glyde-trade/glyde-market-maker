@@ -7,7 +7,7 @@ strategy_config:
   max_order_age: 300
   parameters:
     spread: '0.002'
-    amount: '0.0001'
+    amount: '0.0002'
 paper_balance: '10000'
 risk:
   max_position: '0.001'

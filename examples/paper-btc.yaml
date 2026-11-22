@@ -7,7 +7,7 @@ strategy: pure_market_making
 strategy_config:
   bid_spread: '0.002'
   ask_spread: '0.002'
-  order_amount: '0.0001'
+  order_amount: '0.0002'
   order_refresh_time: 30
   refresh_tolerance_pct: '0.1'
   max_order_age: 300

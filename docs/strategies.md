@@ -49,7 +49,7 @@ strategy: pure_market_making
 strategy_config:
   bid_spread: "0.001"
   ask_spread: "0.001"
-  order_amount: "0.0001"
+  order_amount: "0.0002"
   order_refresh_time: 30
   order_levels: 1
   order_level_spread: "0.001"
@@ -114,7 +114,7 @@ It does not create a second order coordinator.
 ```yaml
 strategy: avellaneda_market_making
 strategy_config:
-  order_amount: "0.0001"
+  order_amount: "0.0002"
   order_refresh_time: 30
   risk_factor: "1"
   liquidity_kappa: "1"

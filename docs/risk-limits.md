@@ -5,8 +5,8 @@ All strategies use the same risk boundary in paper and live mode.
 
 ## Is order amount a USDC amount?
 
-No. `strategy_config.order_amount` is in base units. For example, `0.0001 BTC` at a hypothetical
-100,000 USDC/BTC is about 10 USDC of notional. The runtime uses a conservative current price
+No. `strategy_config.order_amount` is in base units. For example, `0.0002 BTC` at about
+60,000 USDC/BTC is about 12 USDC of notional, above the 10 USDC venue minimum. The runtime uses a conservative current price
 reference for its per-order check, so the wizard's earlier reference price is not lasting authority.
 Prices, precision and minimum order requirements still have to fit your config.
 

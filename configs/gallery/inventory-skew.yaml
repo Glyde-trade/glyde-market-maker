@@ -7,7 +7,7 @@ symbol: BTC
 paper_balance: '1000'
 strategy: inventory_skewed
 strategy_config:
-  order_amount: '0.0001'
+  order_amount: '0.0002'
   order_refresh_time: 30
   minimum_spread: '0.001'
   order_amount_shape_factor: '2'

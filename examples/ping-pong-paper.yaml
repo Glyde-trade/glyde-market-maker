@@ -1,5 +1,5 @@
 # PMM with alternating sides after identified partial fills. PAPER ONLY.
-# Example sizing reference: BTC 100000 USDC. Update prices/amounts for your market.
+# Example sizing reference: BTC 60000 USDC (venue minimum 10 USDC per order). Update prices/amounts for your market.
 mode: paper
 base_url: https://api.glyde.trade/v1
 symbol: BTC
@@ -9,7 +9,7 @@ strategy_config:
   ping_pong_enabled: true
   bid_spread: '0.002'
   ask_spread: '0.002'
-  order_amount: '0.0001'
+  order_amount: '0.0002'
   order_levels: 3
   order_level_spread: '0.001'
   order_level_amount: '0.00002'

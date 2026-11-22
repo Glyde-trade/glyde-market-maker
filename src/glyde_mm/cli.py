@@ -344,10 +344,15 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except KeyboardInterrupt:
         return 1 if args.command in {"stop", "live-wizard"} else 0
-    except (ValueError, OSError, OneApiError, RiskViolation, TimeoutError):
-        # Exception bodies can include HTTP headers or local credential paths.
+    except (OneApiError, RiskViolation) as error:
+        # Both types carry sanitized, credential-free messages by contract.
+        print(f"Unable to run: {type(error).__name__}: {error}", file=sys.stderr)
+        return 1
+    except (ValueError, OSError, TimeoutError) as error:
+        # These bodies can include HTTP headers or local credential paths: name the type only.
         print(
-            "Unable to run: check configuration, credentials and One API availability.",
+            f"Unable to run ({type(error).__name__}): check configuration, credentials and "
+            "One API availability.",
             file=sys.stderr,
         )
         return 1
