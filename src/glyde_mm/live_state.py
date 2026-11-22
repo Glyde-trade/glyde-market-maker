@@ -134,17 +134,18 @@ class LiveStateClient:
         if self._failure:
             raise self._failure
         now = time.monotonic()
+        # A stalled or lagging stream is a transport fault: reconnect from a fresh snapshot.
         if any(now - started > 2 for _, _, started in self._pending.values()):
-            self.invalidate("incomplete live stream batch")
-            raise OneApiError("incomplete live stream batch")
+            self.invalidate("incomplete live stream batch", disconnected=True)
+            raise StreamDisconnected("incomplete live stream batch")
         if self._account is not None and (
             not 0 <= now - self._account.received_at <= float(self.config.risk.account_age_seconds)
             or not -1
             <= time.time() - self._account_time / 1000
             <= float(self.config.risk.account_age_seconds)
         ):
-            self.invalidate("stale live account stream")
-            raise OneApiError("stale live account stream")
+            self.invalidate("stale live account stream", disconnected=True)
+            raise StreamDisconnected("stale live account stream")
 
     async def _current(self) -> None:
         async with asyncio.timeout(2):
@@ -235,6 +236,20 @@ class LiveStateClient:
                     self._cancelled[oid] = request.symbol
                 results.extend(reply)
         return results
+
+    def mark_closed(self, requests: Sequence[CancelRequest]) -> None:
+        """Record venue-proven terminal orders as if their cancel receipts had arrived."""
+        for request in requests:
+            oid = request.order_id or next(
+                (
+                    oid
+                    for oid, order in self._known.items()
+                    if order.client_order_id == request.client_order_id
+                ),
+                None,
+            )
+            if oid is not None:
+                self._cancelled[oid] = request.symbol
 
     def _owned(self, row: OpenOrder) -> bool:
         return is_bot_order(row.client_order_id) or row.order_id in self._known

@@ -6,7 +6,7 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from .client import StreamDisconnected, reconnectable
 from .config import RiskConfig
 from .live_state import terminal_order_status
-from .models import CancelRequest, bot_client_order_id, is_bot_order
+from .models import CancelRequest, CancelResult, bot_client_order_id, is_bot_order
 from .risk_state import RiskStateStore
 
 if TYPE_CHECKING:
@@ -24,13 +24,16 @@ if TYPE_CHECKING:
     from .models import (
         Account,
         Book,
-        CancelResult,
         HistoricalOrder,
         OpenOrder,
         OrderRequest,
         OrderResult,
         TradingClient,
     )
+
+
+PROOF_RETRY_INITIAL_SECONDS = 0.25
+PROOF_RETRY_MAX_SECONDS = 5.0
 
 
 class RiskViolation(RuntimeError):
@@ -84,6 +87,28 @@ class RiskLimits:
             stale_book_seconds=float(config.stale_book_seconds),
             account_age_seconds=float(config.account_age_seconds),
         )
+
+
+def venue_proves_closed(
+    requests: Sequence[CancelRequest],
+    open_orders: Sequence[OpenOrder],
+    history: Sequence[HistoricalOrder],
+) -> bool:
+    """True when no request is open and each has a terminal historicalOrders status."""
+
+    def matches(request: CancelRequest, order: OpenOrder | HistoricalOrder) -> bool:
+        cloid = request.client_order_id
+        return order.symbol == request.symbol and (
+            (request.order_id is not None and order.order_id == request.order_id)
+            or (cloid is not None and (order.client_order_id or "").lower() == cloid.lower())
+        )
+
+    def closed(request: CancelRequest) -> bool:
+        return not any(matches(request, order) for order in open_orders) and any(
+            matches(request, order) and terminal_order_status(order.status) for order in history
+        )
+
+    return all(closed(request) for request in requests)
 
 
 def _positive(value: Decimal) -> bool:
@@ -304,20 +329,7 @@ class RiskGuard:
         record = self._execution
         if record is None or record["reason"] != "cancel_outcome_unknown":
             return False
-
-        def matches(row: dict[str, Any], order: OpenOrder | HistoricalOrder) -> bool:
-            cloid = row["client_order_id"]
-            return order.symbol == row["symbol"] and (
-                (row["order_id"] is not None and order.order_id == row["order_id"])
-                or (cloid is not None and (order.client_order_id or "").lower() == cloid.lower())
-            )
-
-        def closed(row: dict[str, Any]) -> bool:
-            return not any(matches(row, order) for order in open_orders) and any(
-                matches(row, order) and terminal_order_status(order.status) for order in history
-            )
-
-        if not all(closed(row) for row in record["originals"]):
+        if not venue_proves_closed(self.execution_cancellations(None), open_orders, history):
             return False
         halted, self.halted = self.halted, "daily_loss" if self._loss_halted_at_load else None
         try:
@@ -558,8 +570,13 @@ class RiskManagedClient:
         cleanup_symbols: tuple[str, ...] | None = None,
         metrics: Metrics | None = None,
         isolate_stale_markets: bool = False,
+        order_proof: Callable[[Sequence[CancelRequest]], Awaitable[bool]] | None = None,
+        proof_window_seconds: float = 0.0,
     ) -> None:
         self.isolate_stale_markets = isolate_stale_markets
+        # Venue read proving cancels terminal when a receipt is missing or late.
+        self.order_proof = order_proof
+        self.proof_window_seconds = proof_window_seconds
         self.client, self.guard = client, guard
         self.metrics = metrics
         self._lock = asyncio.Lock()
@@ -618,6 +635,8 @@ class RiskManagedClient:
             await self.guard.flush_state()
         except Exception as error:
             failure = error
+        unproven: list[CancelRequest] = []
+        unproven_error: Exception | None = None
         for request in requests:
             try:
                 results = await self.client.cancel_orders([request])
@@ -626,17 +645,21 @@ class RiskManagedClient:
                 result = results[0]
                 if result.status not in ("cancelled", "already_closed"):
                     raise RiskViolation("cancel_outcome_unknown")
-                if getattr(result, "order_id", None) not in (None, request.order_id) or getattr(
-                    result, "client_order_id", None
-                ) not in (
-                    None,
-                    request.client_order_id or self._order_ids.get(request.order_id or ""),
-                ):
-                    raise RiskViolation("cancel_identity_mismatch")
-                if self.metrics and result.status == "cancelled":
-                    self.metrics.count("quotes_cancelled")
             except Exception as error:
-                failure = failure or error
+                unproven.append(request)
+                unproven_error = unproven_error or error
+                continue
+            if getattr(result, "order_id", None) not in (None, request.order_id) or getattr(
+                result, "client_order_id", None
+            ) not in (
+                None,
+                request.client_order_id or self._order_ids.get(request.order_id or ""),
+            ):
+                failure = failure or RiskViolation("cancel_identity_mismatch")
+            elif self.metrics and result.status == "cancelled":
+                self.metrics.count("quotes_cancelled")
+        if unproven and not await self._venue_proves_closed(unproven):
+            failure = failure or unproven_error
         try:
             await self.client.cancel_all(symbol)
         except Exception as error:
@@ -652,6 +675,37 @@ class RiskManagedClient:
 
         self.guard.finish_execution(owned)
         self._retire_owned(symbol)
+
+    async def _cancel_one(self, request: CancelRequest) -> bool:
+        try:
+            results = await self.client.cancel_orders([request])
+        except Exception:
+            return False
+        return len(results) == 1 and results[0].status in ("cancelled", "already_closed")
+
+    async def _venue_proves_closed(self, requests: Sequence[CancelRequest]) -> bool:
+        """Retry venue proof with backoff, while trading stays paused under the lock."""
+        if self.order_proof is None or not requests:
+            return False
+        deadline = time.monotonic() + self.proof_window_seconds
+        delay = PROOF_RETRY_INITIAL_SECONDS
+        while True:
+            try:
+                if await self.order_proof(requests):
+                    return True
+            except Exception:  # noqa: S110 - unavailable proof is retried, then latched.
+                pass
+            # A halting or closing sweep checks once; only live trading waits out the window.
+            stopping = (
+                self._closed
+                or self.guard.halted is not None
+                or (self._stop_event is not None and self._stop_event.is_set())
+            )
+            remaining = deadline - time.monotonic()
+            if stopping or remaining <= 0:
+                return False
+            await asyncio.sleep(min(delay, remaining))
+            delay = min(delay * 2, PROOF_RETRY_MAX_SECONDS)
 
     def _retire_owned(self, symbol: str | None) -> None:
         # Foreign orders stay counted as exposure; only the bot's own are retired.
@@ -775,11 +829,23 @@ class RiskManagedClient:
             try:
                 owned = self.guard.begin_execution("cancel_outcome_unknown", orders)
                 await self.guard.flush_state()
-                results = await self.client.cancel_orders(orders)
-                if len(results) != len(orders) or any(
-                    r.status not in ("cancelled", "already_closed") for r in results
-                ):
-                    raise RiskViolation("cancel_outcome_unknown")
+                try:
+                    results = await self.client.cancel_orders(orders)
+                    if len(results) != len(orders) or any(
+                        r.status not in ("cancelled", "already_closed") for r in results
+                    ):
+                        raise RiskViolation("cancel_outcome_unknown")
+                except Exception:
+                    # A late or missing receipt is not an unknown outcome once the venue
+                    # shows every order terminal. Retry each first: a batch failure can
+                    # leave later cancels unsent, and receipted ones answer locally.
+                    unproven = [row for row in orders if not await self._cancel_one(row)]
+                    if unproven and not await self._venue_proves_closed(unproven):
+                        raise
+                    results = [
+                        CancelResult("already_closed", row.order_id, row.client_order_id)
+                        for row in orders
+                    ]
                 for request, result in zip(orders, results, strict=True):
                     if getattr(result, "order_id", None) not in (None, request.order_id) or getattr(
                         result, "client_order_id", None

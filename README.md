@@ -774,9 +774,12 @@ A stale book while connected pauses only that market: its quotes are retired, an
 book cancels whatever the venue still shows for it before quoting resumes. `book_stale`/`book_fresh`
 events (market index, reason, pause length) and `glyde_mm_stale_pauses_total` record each pause. Gaps,
 refusals, unknown outcomes and risk halts never reconnect; they stop the session. Restart
-repeats exposure checks while retaining durable loss, rate and unknown-outcome state. Lost or refused
-cancel receipts stay an error, even if the venue might already be empty; no order is re-signed
-to escape uncertainty. At the next live startup, a `cancel_outcome_unknown` latch clears itself
+repeats exposure checks while retaining durable loss, rate and unknown-outcome state. A lost, late or
+refused cancel receipt pauses trading while the bot asks the venue (`openOrders` plus
+`historicalOrders`) for proof, retrying with backoff for up to `max_stale_pause_seconds`. Proof
+that every order is terminal resumes quoting with no latch; without proof the original IDs latch.
+An owner stream that lags or stalls after a cancel reconnects instead of stopping. No order is
+re-signed to escape uncertainty. At the next live startup, a `cancel_outcome_unknown` latch clears itself
 only when the venue's `openOrders` omits and `historicalOrders` shows a terminal status for every
 listed original; otherwise it stays. A cancel latch listing no original is never written. Private evidence caches are bounded; exhaustion stops the session.
 
