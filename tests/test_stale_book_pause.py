@@ -15,6 +15,7 @@ from test_stream_reconnect import Paper, Venue, events
 
 from glyde_mm.client import OneApiClient
 from glyde_mm.config import Config, RiskConfig
+from glyde_mm.models import bot_client_order_id
 from glyde_mm.risk import RiskViolation
 from glyde_mm.runner import run
 
@@ -217,7 +218,7 @@ async def test_live_resume_reconciles_venue_orders_before_quoting(tmp_path):
             # The owner stream stays current; only the book stops.
             await until(task, lambda: not wire.orders(), tick=owner_only)
             assert "LIVE BTC: quoting paused (stale BTC)" in lines
-            # Venue state the paused strategy never placed, e.g. from a lost receipt.
+            # A bot order the paused strategy never tracked, e.g. from a lost receipt.
             stray = wire.ledger.exchange(
                 {
                     "action": {
@@ -230,6 +231,7 @@ async def test_live_resume_reconciles_venue_orders_before_quoting(tmp_path):
                                 "s": "0.01",
                                 "r": False,
                                 "t": {"limit": {"tif": "Gtc"}},
+                                "c": bot_client_order_id(),
                             }
                         ],
                     }

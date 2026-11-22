@@ -41,8 +41,8 @@ refusal, preview cancellation, auto-stop and cleanup failure, and contains no cr
 values. Existing account risk/unknown-outcome state stays in the original `.glyde-mm`
 directory rather than being reset for the wizard.
 
-Use a dedicated account. Cleanup can cancel manual orders on the selected symbol; it
-never flattens positions. If cancellation fails, verify the venue and reconcile the
+A dedicated account is still recommended. Cleanup cancels only the bot's own tagged
+orders on the selected symbol, never your manual orders, and it never flattens positions. If cancellation fails, verify the venue and reconcile the
 original IDs; do not delete risk state or automatically rerun. During the paper preview,
 use Ctrl-C. After live begins, the [stop command](../README.md#if-something-goes-wrong)
 from another terminal with the **original config path** can coordinate that live runner;

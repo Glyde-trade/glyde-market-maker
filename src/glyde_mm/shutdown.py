@@ -1,4 +1,4 @@
-"""Local runner coordination and an explicit symbol-scoped emergency cancellation."""
+"""Local runner coordination and a symbol-scoped cancellation of the bot's own orders."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from .client import OneApiClient
 from .config import Config
-from .models import CancelRequest, TradingClient
+from .models import CancelRequest, TradingClient, is_bot_order
 from .risk import RiskGuard, RiskViolation
 
 
@@ -174,8 +174,10 @@ async def stop_bot(
                                 except Exception as error:
                                     failure = failure or error
                             remaining = await client.open_orders()
+                            # Untagged orders belong to the account holder and stay open.
                             result["remaining_orders"] = sum(
-                                row.symbol in config.symbols for row in remaining
+                                row.symbol in config.symbols and is_bot_order(row.client_order_id)
+                                for row in remaining
                             )
                             if failure is not None or result["remaining_orders"]:
                                 raise RiskViolation("cancel_outcome_unknown")

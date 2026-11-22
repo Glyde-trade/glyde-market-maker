@@ -65,14 +65,16 @@ The retail CLI requires explicit typed-symbol confirmation, then reads account/o
 before managed cleanup exists. An occupied selected symbol is refused without placing or cancelling
 orders. `--i-understand` accepts that startup exposure after review; it does not waive confirmation,
 position/notional/loss caps, freshness or unresolved-intent checks. Other symbols do not trigger this
-startup refusal. This snapshot is not a lock against another process; use a dedicated account.
+startup refusal. Accepted orders are never cancelled by the bot but still count toward its
+caps. This snapshot is not a lock against another process; a dedicated account is recommended.
 
 ## Does Ctrl-C guarantee there are no live orders?
 
 It requests cancellation and cleanup. Successful cleanup depends on transport and authoritative
 receipts; verify venue state after any failure. Known order IDs are cancelled before discovery,
-but a read or cancel failure still prevents a clean-success claim. Use a dedicated account because
-symbol/account cleanup may affect orders placed outside this bot.
+but a read or cancel failure still prevents a clean-success claim. Cleanup cancels only orders
+whose client order id carries the bot's `0x676d6d31` ("gmm1") tag, plus ones it recorded itself;
+orders placed outside this bot stay open. A dedicated account is still recommended.
 
 ## Does doctor or paper mode prove live trading will work?
 

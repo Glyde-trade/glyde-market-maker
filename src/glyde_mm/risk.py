@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-import secrets
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -16,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from .client import StreamDisconnected
 from .config import RiskConfig
-from .models import CancelRequest
+from .models import CancelRequest, bot_client_order_id, is_bot_order
 from .risk_state import RiskStateStore
 
 if TYPE_CHECKING:
@@ -530,12 +529,21 @@ class RiskManagedClient:
         if self._closed or (self._stop_event is not None and self._stop_event.is_set()):
             raise RiskViolation("client_closed")
 
+    def _owned(self, order: OpenOrder | OrderRequest) -> bool:
+        """Bot-tagged or placed by this client; other account orders are never cancelled."""
+        return (
+            is_bot_order(order.client_order_id)
+            or getattr(order, "order_id", None) in self._order_ids
+            or order.client_order_id in self.guard.pending
+            or order.client_order_id in self._order_ids.values()
+        )
+
     async def _cancel_before_discovery(self, symbol: str | None = None) -> None:
         ids = {key: oid for oid, key in self._order_ids.items()}
         requests = []
         seen = set()
         for order in [*self.guard.pending.values(), *self.guard.open_orders]:
-            if symbol is not None and order.symbol != symbol:
+            if (symbol is not None and order.symbol != symbol) or not self._owned(order):
                 continue
             oid = getattr(order, "order_id", None) or ids.get(order.client_order_id or "")
             request = CancelRequest(
@@ -597,16 +605,17 @@ class RiskManagedClient:
             raise RiskViolation("cancel_outcome_unknown") from failure
 
         self.guard.finish_execution(owned)
+        # Foreign orders stay counted as exposure; only the bot's own are retired.
+        self.guard.open_orders = [
+            order
+            for order in self.guard.open_orders
+            if (symbol is not None and order.symbol != symbol) or not self._owned(order)
+        ]
         self.guard.pending = {
             key: order
             for key, order in self.guard.pending.items()
             if symbol is not None and order.symbol != symbol
         }
-        self.guard.open_orders = [
-            order
-            for order in self.guard.open_orders
-            if symbol is not None and order.symbol != symbol
-        ]
 
     async def _cancel_and_halt(self, reason: str) -> None:
         self.guard.halted = self.guard.halted or reason
@@ -627,9 +636,7 @@ class RiskManagedClient:
                 return []
             reserved: list[str] = []
             prepared = [
-                replace(
-                    order, client_order_id=order.client_order_id or "0x" + secrets.token_hex(16)
-                )
+                replace(order, client_order_id=order.client_order_id or bot_client_order_id())
                 for order in orders
             ]
             try:

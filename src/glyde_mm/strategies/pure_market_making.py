@@ -11,7 +11,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from time import monotonic
-from uuid import uuid4
 
 from glyde_mm.models import (
     Account,
@@ -20,6 +19,7 @@ from glyde_mm.models import (
     Fill,
     OrderRequest,
     TradingClient,
+    bot_client_order_id,
 )
 from glyde_mm.risk import RiskViolation
 
@@ -514,7 +514,7 @@ class PureMarketMakingStrategy:
                         order.side,
                         order.quantity,
                         order.price,
-                        client_order_id=f"0x{uuid4().hex}",
+                        client_order_id=bot_client_order_id(),
                         time_in_force="Alo",
                     )
                     for order in self.quotes(book, account)

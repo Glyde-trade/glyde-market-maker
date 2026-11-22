@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -9,6 +11,19 @@ from time import monotonic
 from typing import Literal, Protocol
 
 Side = Literal["buy", "sell"]
+
+# Every bot order's cloid starts with "gmm1"; cleanup never touches an order without it.
+BOT_CLOID_PREFIX = "0x676d6d31"
+_BOT_CLOID = re.compile(BOT_CLOID_PREFIX + "[0-9a-f]{24}")
+
+
+def bot_client_order_id() -> str:
+    """A fresh 16-byte venue cloid carrying the bot tag."""
+    return BOT_CLOID_PREFIX + secrets.token_hex(12)
+
+
+def is_bot_order(client_order_id: str | None) -> bool:
+    return client_order_id is not None and _BOT_CLOID.fullmatch(client_order_id.lower()) is not None
 
 
 @dataclass(frozen=True)
@@ -122,6 +137,7 @@ class Fill:
 class TradingClient(Protocol):
     async def place_orders(self, orders: Sequence[OrderRequest]) -> list[OrderResult]: ...
     async def cancel_orders(self, orders: Sequence[CancelRequest]) -> list[CancelResult]: ...
+    # Cancels only the bot's own orders: tagged cloids or ones this client placed.
     async def cancel_all(self, symbol: str | None = None) -> None: ...
     async def account(self) -> Account: ...
     async def open_orders(self) -> list[OpenOrder]: ...

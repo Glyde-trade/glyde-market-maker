@@ -4,6 +4,11 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 ## [Unreleased]
 
+- Cleanup only touches the bot's own orders. Every order carries a client order id tagged
+  `0x676d6d31` ("gmm1"); startup, reconnect, stale-pause, risk-halt, shutdown and `stop`
+  sweeps cancel only tagged or self-recorded orders, so manual orders in the same account stay
+  open (they still count toward risk limits).
+
 ## [0.6.1]
 
 - Fix cancellation after uncertain order outcomes and restarts: cleanup retains

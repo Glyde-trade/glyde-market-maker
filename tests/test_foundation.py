@@ -12,7 +12,14 @@ from hyperliquid.utils.signing import recover_agent_or_user_from_l1_action
 from glyde_mm.cli import main
 from glyde_mm.client import OneApiClient, OneApiError, OutcomeUnknown, book_from_wire
 from glyde_mm.config import Config, load_config, write_config
-from glyde_mm.models import Book, CancelRequest, Level, ModifyRequest, OrderRequest
+from glyde_mm.models import (
+    BOT_CLOID_PREFIX,
+    Book,
+    CancelRequest,
+    Level,
+    ModifyRequest,
+    OrderRequest,
+)
 from glyde_mm.paper import PaperExchange
 
 D = Decimal
@@ -20,6 +27,7 @@ D = Decimal
 TEST_KEY = EthAccount.create().key.hex()
 OWNER = "0x" + "22" * 20
 CLOID = "0x" + "ab" * 16
+BOT = BOT_CLOID_PREFIX + "ab" * 12
 
 
 class FakeOneApi:
@@ -155,7 +163,9 @@ async def test_unknown_send_has_no_automatic_retry_or_error_body_leak(client):
 
 async def test_cancel_all_requires_definitive_success(client):
     api, server = client
-    server.orders = [{"coin": "BTC", "oid": 1, "side": "B", "sz": "0.01", "limitPx": "99"}]
+    server.orders = [
+        {"coin": "BTC", "oid": 1, "side": "B", "sz": "0.01", "limitPx": "99", "cloid": BOT}
+    ]
     server.cancel_fails = True
     with pytest.raises(OneApiError):
         await api.cancel_all()
