@@ -4,11 +4,13 @@ import asyncio
 import json
 import threading
 from dataclasses import replace
+from decimal import Decimal as D
 
 import pytest
 from test_risk import Account, FakeClient, Order, guard, guard_restart
 
-from glyde_mm.risk import RiskManagedClient, RiskViolation
+from glyde_mm.models import BOT_CLOID_PREFIX, HistoricalOrder, OpenOrder, bot_client_order_id
+from glyde_mm.risk import RiskManagedClient, RiskViolation, VenueSweepDeferred
 from glyde_mm.risk_state import RiskStateStore
 
 
@@ -170,3 +172,138 @@ def test_obsolete_risk_state_path_config_is_rejected(tmp_path):
     path.write_text("mode: paper\nrisk_state_path: ignored.json\n")
     with pytest.raises(ValueError, match="unknown configuration field"):
         load_config(path)
+
+
+class ProjectionOutageClient(FakeClient):
+    """Production 22 Nov 2026: the reconcile sweep waited for an owner cut that never came."""
+
+    async def cancel_all(self, symbol=None):
+        self.all_cancels += 1
+        raise TimeoutError("owner snapshot withheld")
+
+
+async def test_transient_sweep_failure_with_nothing_outstanding_defers_without_a_latch(tmp_path):
+    path = tmp_path / "risk.json"
+    g, now = guard(path)
+    managed = RiskManagedClient(ProjectionOutageClient(), g)
+    with pytest.raises(VenueSweepDeferred):
+        await managed.cancel_all("BTC")
+    await g.flush_state()
+    assert g.halted is None
+    assert json.loads(path.read_text())["execution"] is None
+    await g.close_state()
+    restarted, _ = guard_restart(path, now)
+    assert restarted.halted is None
+    await restarted.close_state()
+
+
+async def test_transient_sweep_failure_after_confirmed_cancels_clears_its_originals(tmp_path):
+    path = tmp_path / "risk.json"
+    g, _ = guard(path)
+    managed = RiskManagedClient(ProjectionOutageClient(), g)
+    await managed.place_orders([Order(client_order_id=bot_client_order_id())])
+    assert g.pending
+    with pytest.raises(VenueSweepDeferred):
+        await managed.cancel_all("BTC")
+    await g.flush_state()
+    assert not g.pending and g.halted is None
+    assert json.loads(path.read_text())["execution"] is None
+    await g.close_state()
+
+
+async def test_unconfirmed_cancel_keeps_its_latch_despite_a_transient_sweep(tmp_path):
+    path = tmp_path / "risk.json"
+    g, _ = guard(path)
+    client = ProjectionOutageClient()
+    managed = RiskManagedClient(client, g)
+    await managed.place_orders([Order(client_order_id=bot_client_order_id())])
+    client.cancel_result = "rejected"
+    with pytest.raises(RiskViolation, match="cancel_outcome_unknown"):
+        await managed.cancel_all("BTC")
+    await g.flush_state()
+    assert len(json.loads(path.read_text())["execution"]["originals"]) == 1
+    await g.close_state()
+
+
+def latched(path, originals, *, loss_halted=False):
+    path.write_text(
+        json.dumps(
+            {
+                "day": "2023-11-14",
+                "equity_start": "100",
+                "loss_halted": loss_halted,
+                "execution": {"reason": "cancel_outcome_unknown", "originals": originals},
+                "order_attempts": [],
+            }
+        )
+    )
+
+
+def test_empty_cancel_latch_is_never_written(tmp_path):
+    path = tmp_path / "risk.json"
+    g, _ = guard(path)
+    assert g.begin_execution("cancel_outcome_unknown", []) is False
+    asyncio.run(g.close_state())
+    assert json.loads(path.read_text())["execution"] is None
+
+
+def test_empty_cancel_latch_on_disk_does_not_block_startup(tmp_path):
+    path = tmp_path / "risk.json"
+    latched(path, [])
+    g, _ = guard(path)
+    assert g.halted is None and g.execution_cancellations(None) == ()
+
+
+ORIGINAL = {"symbol": "BTC", "order_id": "84", "client_order_id": None}
+TAGGED = {"symbol": "BTC", "order_id": None, "client_order_id": BOT_CLOID_PREFIX + "ab" * 12}
+
+
+def open_order(oid, cloid=None):
+    return OpenOrder(oid, "BTC", "buy", D("0.0002"), D("60000"), cloid)
+
+
+@pytest.mark.parametrize(
+    ("open_orders", "history", "resolved"),
+    [
+        ([], [HistoricalOrder("84", "BTC", "canceled")], True),
+        ([], [HistoricalOrder("84", "BTC", "filled"), HistoricalOrder("85", "BTC", "open")], True),
+        ([], [HistoricalOrder("84", "BTC", "open")], False),
+        ([], [HistoricalOrder("84", "ETH", "canceled")], False),
+        ([], [HistoricalOrder("99", "BTC", "canceled")], False),
+        ([], [], False),
+        ([open_order("84")], [HistoricalOrder("84", "BTC", "canceled")], False),
+    ],
+)
+def test_startup_resolves_a_cancel_latch_only_with_venue_proof(
+    tmp_path, open_orders, history, resolved
+):
+    path = tmp_path / "risk.json"
+    latched(path, [ORIGINAL])
+    g, _ = guard_restart(path, [100.0, 1_700_000_000.0])
+    assert g.halted == "cancel_outcome_unknown"
+    assert g.resolve_cancel_latch(open_orders, history) is resolved
+    assert g.halted == (None if resolved else "cancel_outcome_unknown")
+    asyncio.run(g.close_state())
+    assert (json.loads(path.read_text())["execution"] is None) is resolved
+
+
+def test_cloid_only_original_resolves_by_cloid_and_open_cloid_keeps_it(tmp_path):
+    path = tmp_path / "risk.json"
+    latched(path, [ORIGINAL, TAGGED])
+    g, _ = guard_restart(path, [100.0, 1_700_000_000.0])
+    history = [
+        HistoricalOrder("84", "BTC", "canceled"),
+        HistoricalOrder("86", "BTC", "canceled", TAGGED["client_order_id"].upper()),
+    ]
+    assert not g.resolve_cancel_latch([open_order("86", TAGGED["client_order_id"])], history)
+    assert g.resolve_cancel_latch([], history)
+
+
+def test_resolved_cancel_latch_keeps_a_daily_loss_halt(tmp_path):
+    path = tmp_path / "risk.json"
+    latched(path, [ORIGINAL], loss_halted=True)
+    g, _ = guard_restart(path, [100.0, 1_700_000_000.0])
+    assert g.resolve_cancel_latch([], [HistoricalOrder("84", "BTC", "canceled")])
+    assert g.halted == "daily_loss"
+    asyncio.run(g.close_state())
+    assert json.loads(path.read_text())["loss_halted"] is True

@@ -13,8 +13,9 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .client import StreamDisconnected
+from .client import StreamDisconnected, reconnectable
 from .config import RiskConfig
+from .live_state import terminal_order_status
 from .models import CancelRequest, bot_client_order_id, is_bot_order
 from .risk_state import RiskStateStore
 
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
         Account,
         Book,
         CancelResult,
+        HistoricalOrder,
         OpenOrder,
         OrderRequest,
         OrderResult,
@@ -39,6 +41,10 @@ class StaleMarket(RiskViolation):
     def __init__(self, symbol: str, reason: str) -> None:
         super().__init__(reason)
         self.symbol = symbol
+
+
+class VenueSweepDeferred(StreamDisconnected):
+    """Every known original is confirmed closed; only the venue sweep awaits a fresh read."""
 
 
 @dataclass(frozen=True)
@@ -114,6 +120,7 @@ class RiskGuard:
         self._day: str | None = None
         self._equity_start: Decimal | None = None
         self._execution: dict[str, Any] | None = None
+        self._loss_halted_at_load = False
         self._order_attempts: list[float] = []
         self._last_rate_clock: float | None = None
         self._rate_monotonic: list[float] = []
@@ -146,10 +153,15 @@ class RiskGuard:
                     monotonic_now - min(60, wall - stamp) for stamp in self._order_attempts
                 ]
                 self._execution = data["execution"]
+                self._loss_halted_at_load = data["loss_halted"]
                 if self._execution is not None:
                     self._validate_execution(self._execution)
                     # Simulated orders died with the prior process; no venue holds an outcome.
-                    if simulated:
+                    # An empty cancel latch names no original, so nothing could ever resolve it.
+                    if simulated or (
+                        self._execution["reason"] == "cancel_outcome_unknown"
+                        and not self._execution["originals"]
+                    ):
                         self._execution = None
                 if self._execution is not None:
                     self.halted = self._execution["reason"]
@@ -247,6 +259,8 @@ class RiskGuard:
                     self._execution = expanded
                     self._persist()
             return False
+        if reason == "cancel_outcome_unknown" and not originals:
+            return False  # A cancel latch naming no original could never be resolved.
         record = {
             "reason": reason,
             "originals": [
@@ -282,6 +296,36 @@ class RiskGuard:
         except BaseException:
             self._execution = original
             raise
+
+    def resolve_cancel_latch(
+        self, open_orders: Sequence[OpenOrder], history: Sequence[HistoricalOrder]
+    ) -> bool:
+        """Clear a durable cancel latch only when the venue proves every original terminal."""
+        record = self._execution
+        if record is None or record["reason"] != "cancel_outcome_unknown":
+            return False
+
+        def matches(row: dict[str, Any], order: OpenOrder | HistoricalOrder) -> bool:
+            cloid = row["client_order_id"]
+            return order.symbol == row["symbol"] and (
+                (row["order_id"] is not None and order.order_id == row["order_id"])
+                or (cloid is not None and (order.client_order_id or "").lower() == cloid.lower())
+            )
+
+        def closed(row: dict[str, Any]) -> bool:
+            return not any(matches(row, order) for order in open_orders) and any(
+                matches(row, order) and terminal_order_status(order.status) for order in history
+            )
+
+        if not all(closed(row) for row in record["originals"]):
+            return False
+        halted, self.halted = self.halted, "daily_loss" if self._loss_halted_at_load else None
+        try:
+            self.finish_execution(True)
+        except BaseException:
+            self.halted = halted
+            raise
+        return True
 
     def _check_state(self) -> None:
         try:
@@ -595,16 +639,21 @@ class RiskManagedClient:
                 failure = failure or error
         try:
             await self.client.cancel_all(symbol)
-        except StreamDisconnected as error:
-            # Nothing known is outstanding; the reconnect reconciles the venue before quoting.
-            if requests or failure is not None:
-                failure = failure or error
         except Exception as error:
+            if failure is None and reconnectable(error):
+                # A transient read failure leaves no unknown original; the next connection's
+                # reconcile repeats the sweep before any quote.
+                self.guard.finish_execution(owned)
+                self._retire_owned(symbol)
+                raise VenueSweepDeferred("venue sweep awaits a fresh snapshot") from error
             failure = failure or error
         if failure is not None:
             raise RiskViolation("cancel_outcome_unknown") from failure
 
         self.guard.finish_execution(owned)
+        self._retire_owned(symbol)
+
+    def _retire_owned(self, symbol: str | None) -> None:
         # Foreign orders stay counted as exposure; only the bot's own are retired.
         self.guard.open_orders = [
             order
@@ -661,6 +710,8 @@ class RiskManagedClient:
                 ):
                     try:
                         await self._cancel_before_discovery(error.symbol)
+                    except VenueSweepDeferred:
+                        raise
                     except BaseException:
                         await self._cancel_and_halt("cancel_outcome_unknown")
                         raise
@@ -751,6 +802,8 @@ class RiskManagedClient:
         async with self._lock:
             try:
                 await self._cancel_before_discovery(symbol)
+            except VenueSweepDeferred:
+                raise
             except BaseException:
                 self.guard.halted = self.guard.halted or "cancel_outcome_unknown"
                 raise

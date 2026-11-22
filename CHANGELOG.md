@@ -8,6 +8,12 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
   `0x676d6d31` ("gmm1"); startup, reconnect, stale-pause, risk-halt, shutdown and `stop`
   sweeps cancel only tagged or self-recorded orders, so manual orders in the same account stay
   open (they still count toward risk limits).
+- A short Glyde outage no longer ends a live run. A reconnect reconcile whose owner snapshot
+  does not arrive (or any transient read failure after every known original is confirmed
+  closed) retries with backoff for up to `max_stale_pause_seconds`, instead of becoming
+  `cancel_outcome_unknown`. A cancel latch listing no original is never written, and one
+  found on disk is ignored. At live startup a `cancel_outcome_unknown` latch clears itself
+  when `openOrders` and `historicalOrders` prove every listed original terminal.
 
 ## [0.6.1]
 

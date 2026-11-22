@@ -4,6 +4,8 @@ import asyncio
 import json
 import socket
 import time
+from dataclasses import replace
+from decimal import Decimal as D
 
 import pytest
 from test_multi_market_live import MarketSocket
@@ -14,7 +16,14 @@ from test_stream_reconnect import config as paper_config
 from test_stream_reconnect import until as run_until
 
 from glyde_mm import runner
-from glyde_mm.client import OneApiError, SubscriptionDeferred, reconnectable, subscription_refusal
+from glyde_mm.client import (
+    OneApiError,
+    StreamDisconnected,
+    SubscriptionDeferred,
+    reconnectable,
+    subscription_refusal,
+)
+from glyde_mm.runner import risk_state_path
 
 # The frame production sent for userFills on 2026-11-22, with a test-sized retry hint.
 DEFERRED = {
@@ -232,3 +241,66 @@ async def test_live_refusal_without_retry_hint_still_ends_the_run(tmp_path):
         with pytest.raises(OneApiError):
             await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
     assert wire.connections == 1
+
+
+class BooksOnlySocket(MarketSocket):
+    """A projection outage: the market group publishes, the owner snapshot never arrives."""
+
+    async def send(self, raw):
+        frame = json.loads(raw)
+        if frame["method"] == "ping":
+            self.queue.put_nowait({"channel": "pong"})
+            return
+        self.subscriptions.append(frame["subscription"])
+        if len(self.subscriptions) == 6:
+            self.fixture.emit_book("BTC")
+            self.fixture.emit_book("ETH")
+
+
+class ProjectionOutageWire(FreshWire):
+    """Production 22 Nov 2026: refused sockets, then books without an owner cut, then recovery."""
+
+    def __init__(self, *, refused=(), books_only=()):
+        super().__init__()
+        self.refused, self.books_only = refused, books_only
+
+    def connect(self, url, **kwargs):
+        socket = super().connect(url, **kwargs)
+        if self.connections in self.refused:
+            raise OSError("synthetic projection outage")
+        return BooksOnlySocket(self) if self.connections in self.books_only else socket
+
+
+async def test_live_projection_outage_keeps_reconnecting_until_the_owner_cut_returns(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("glyde_mm.live_state.ENGINE_HALT_RETRY_SECONDS", 0.05)
+    wire, selected = ProjectionOutageWire(refused=range(2, 9), books_only={9}), live_config()
+    async with episode(wire, selected, tmp_path) as (task, stop):
+        await until(wire, lambda: len(wire.orders()) == 4)
+        originals = set(wire.orders())
+        wire.socket.queue.put_nowait({"channel": "glydeSafety", "data": {"ready": False}})
+        await until(wire, lambda: not wire.orders())
+        await run_until(task, lambda: len(wire.orders()) == 4, seconds=8)
+        assert set(wire.orders()).isdisjoint(originals)
+        assert wire.connections == 10 and not task.done()
+        stop.set()
+        await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
+    assert not wire.orders()
+    assert json.loads(risk_state_path(selected, tmp_path).read_text())["execution"] is None
+
+
+async def test_live_outage_past_the_stale_pause_window_ends_without_a_latch(tmp_path, monkeypatch):
+    monkeypatch.setattr("glyde_mm.live_state.ENGINE_HALT_RETRY_SECONDS", 0.05)
+    wire, selected, lines = ProjectionOutageWire(refused=range(2, 10**6)), live_config(), []
+    selected = replace(selected, risk=replace(selected.risk, max_stale_pause_seconds=D(1)))
+    async with episode(wire, selected, tmp_path, report=lines.append) as (task, _):
+        await until(wire, lambda: len(wire.orders()) == 4)
+        wire.socket.queue.put_nowait({"channel": "glydeSafety", "data": {"ready": False}})
+        dropped = time.monotonic()
+        with pytest.raises(StreamDisconnected):
+            await asyncio.wait_for(task, 4)
+        assert time.monotonic() - dropped >= 1 and wire.connections > 2
+    assert not wire.orders()
+    assert any("reconnect window" in line for line in lines)
+    assert json.loads(risk_state_path(selected, tmp_path).read_text())["execution"] is None

@@ -29,6 +29,7 @@ from .models import (
     Book,
     CancelRequest,
     CancelResult,
+    HistoricalOrder,
     Level,
     ModifyRequest,
     OpenOrder,
@@ -205,6 +206,25 @@ def orders_from_wire(rows: list[dict[str, Any]]) -> list[OpenOrder]:
     return result
 
 
+def history_from_wire(rows: object) -> list[HistoricalOrder]:
+    try:
+        if not isinstance(rows, list):
+            raise TypeError
+        result = []
+        for row in rows:
+            order, status, cloid = row["order"], row["status"], row["order"].get("cloid")
+            if (
+                not isinstance(status, str)
+                or not isinstance(order["coin"], str)
+                or (cloid is not None and not isinstance(cloid, str))
+            ):
+                raise TypeError
+            result.append(HistoricalOrder(str(order["oid"]), order["coin"], status, cloid))
+        return result
+    except (KeyError, TypeError, AttributeError):
+        raise OneApiError("invalid historical orders") from None
+
+
 class OneApiClient:
     def __init__(
         self,
@@ -352,7 +372,9 @@ class OneApiClient:
 
     async def info(self, body: dict[str, Any]) -> Any:
         return await self._post(
-            "/info", body, private=body.get("type") in {"clearinghouseState", "openOrders"}
+            "/info",
+            body,
+            private=body.get("type") in {"clearinghouseState", "openOrders", "historicalOrders"},
         )
 
     async def meta(self) -> dict[str, Any]:
@@ -378,6 +400,12 @@ class OneApiClient:
 
     async def open_orders(self) -> list[OpenOrder]:
         return orders_from_wire(await self.info({"type": "openOrders", "user": self.config.owner}))
+
+    async def historical_orders(self) -> list[HistoricalOrder]:
+        """The owner's recent orders with their latest status, newest first."""
+        return history_from_wire(
+            await self.info({"type": "historicalOrders", "user": self.config.owner})
+        )
 
     async def _asset(self, symbol: str) -> tuple[int, int]:
         if not self._assets:

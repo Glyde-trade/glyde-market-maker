@@ -90,6 +90,7 @@ class FakeOneApiServer:
         self._positions: dict[tuple[str, str], tuple[Decimal, Decimal]] = {}
         self._orders: dict[int, _Order] = {}
         self._fills: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self._history: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._last: dict[str, Decimal] = {}
         self._next_oid = 1
         self._trade_id = 0
@@ -153,6 +154,8 @@ class FakeOneApiServer:
             return [o.wire() for o in self._orders.values() if o.user == user]
         if kind == "userFills":
             return deepcopy(self._fills[user])
+        if kind == "historicalOrders":
+            return deepcopy(self._history[user])
         if kind == "clearinghouseState":
             unrealized, notional, positions = ZERO, ZERO, []
             for (owner, coin), (quantity, entry) in self._positions.items():
@@ -247,6 +250,12 @@ class FakeOneApiServer:
 
     def _update(self, order: _Order, status: str) -> None:
         if order.user is not None:
+            self._history[order.user] = [
+                row for row in self._history[order.user] if row["order"]["oid"] != order.oid
+            ]
+            self._history[order.user].insert(
+                0, {"order": order.wire(), "status": status, "statusTimestamp": self.now_ms}
+            )
             self._broadcast(
                 "orderUpdates",
                 [
