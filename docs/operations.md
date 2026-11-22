@@ -212,7 +212,10 @@ Read `outcome`, `termination`, `cleanup_confirmed` and `open_quotes_at_end`
 first. `stopped` with `duration_elapsed` and confirmed zero quotes means the
 requested local session finished normally; it is not a live execution claim.
 A source gap stops this runner rather than silently resuming. A socket drop retires
-quotes and reconnects; a stale book retires that market's quotes and resumes on the next
+quotes and reconnects. A subscription the server defers (an error frame carrying
+`retryAfter`, or reason `PROJECTION_UNAVAILABLE`) is handled the same way, waiting at
+least `retryAfter` seconds, and is retried even before the first quote; any other
+subscription refusal still ends the run. A stale book retires that market's quotes and resumes on the next
 fresh book, stopping only after `risk.max_stale_pause_seconds`. `pause_counts` records
 each such episode, not durations.
 Transport/setup failures return nonzero and the result remains failed or

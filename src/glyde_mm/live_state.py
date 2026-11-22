@@ -14,10 +14,12 @@ if TYPE_CHECKING:
 from .client import (
     OneApiError,
     StreamDisconnected,
+    SubscriptionDeferred,
     account_from_wire,
     book_from_wire,
     orders_from_wire,
     reconnectable,
+    subscription_refusal,
 )
 from .config import Config, decimal
 from .models import Account, CancelRequest, CancelResult, Fill, OpenOrder, OrderRequest, OrderResult
@@ -87,8 +89,11 @@ class LiveStateClient:
         )
         return subscriptions
 
-    def invalidate(self, reason: str, *, disconnected: bool = False) -> None:
-        failure = StreamDisconnected(reason) if disconnected else OneApiError(reason)
+    def invalidate(self, reason: str | OneApiError, *, disconnected: bool = False) -> None:
+        if isinstance(reason, OneApiError):
+            failure = reason
+        else:
+            failure = StreamDisconnected(reason) if disconnected else OneApiError(reason)
         self._failure = self._failure or failure
         self._changed.set()
         if not self._events.full():
@@ -255,7 +260,9 @@ class LiveStateClient:
             raise
         except Exception as error:
             # consume() latches protocol failures first; only a transport drop may reconnect.
-            if reconnectable(error):
+            if isinstance(error, SubscriptionDeferred):
+                self.invalidate(error)  # Keep its retryAfter for the runner's backoff.
+            elif reconnectable(error):
                 self.invalidate("live stream disconnected", disconnected=True)
             else:
                 self.invalidate("live stream invalid, gapped or disconnected")
@@ -265,6 +272,9 @@ class LiveStateClient:
     def consume(self, frame: JsonObject) -> None:
         try:
             self._consume(frame)
+        except SubscriptionDeferred as error:
+            self.invalidate(error)
+            raise
         except Exception as error:
             if (
                 self.metrics
@@ -280,6 +290,10 @@ class LiveStateClient:
         channel = frame.get("channel")
         if channel in {"pong", "subscriptionResponse"}:
             return
+        if channel == "error":
+            refusal = subscription_refusal(frame)
+            if isinstance(refusal, SubscriptionDeferred):
+                raise refusal
         if channel in {"error", "glydeSafety", "resnapshot_required"}:
             raise OneApiError("live stream requires resnapshot")
         meta = frame["glyde"]
