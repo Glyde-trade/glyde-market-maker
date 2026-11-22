@@ -276,8 +276,11 @@ def test_actual_cli_pass_and_changed_config_refusal(tmp_path, monkeypatch, capsy
 
 
 @pytest.mark.parametrize("mode", ["paper", "live"])
-async def test_missing_environment_names_are_reported_without_values(tmp_path, monkeypatch, mode):
-    monkeypatch.delenv("GLYDE_READ_API_KEY")
+@pytest.mark.parametrize("name", ["GLYDE_READ_API_KEY", "GLYDE_API_PRIVATE_KEY"])
+async def test_missing_environment_names_are_reported_without_values(
+    tmp_path, monkeypatch, mode, name
+):
+    monkeypatch.delenv(name)
     lines = []
     result = await check(
         replace(selected(), mode=mode),
@@ -285,8 +288,10 @@ async def test_missing_environment_names_are_reported_without_values(tmp_path, m
         client_factory=Public().factory,
         report=lines.append,
     )
-    assert result == (1 if mode == "live" else 0)
-    assert any("GLYDE_READ_API_KEY=absent" in line for line in lines)
+    # Live reads are minted from the trading key, so only that key is required.
+    required = mode == "live" and name == "GLYDE_API_PRIVATE_KEY"
+    assert result == (1 if required else 0)
+    assert any(f"{name}=absent" in line for line in lines)
     assert "never-read" not in "\n".join(lines)
 
 
