@@ -172,6 +172,20 @@ async def test_live_deferred_subscription_reconciles_then_requotes(tmp_path):
     wire.assert_no_duplicate_cancels()
 
 
+async def test_live_engine_halt_safety_frame_pauses_then_requotes(tmp_path, monkeypatch):
+    monkeypatch.setattr("glyde_mm.live_state.ENGINE_HALT_RETRY_SECONDS", 0.2)
+    wire, selected = FreshWire(), live_config()
+    async with episode(wire, selected, tmp_path) as (task, stop):
+        await until(wire, lambda: len(wire.orders()) == 4)
+        wire.socket.queue.put_nowait({"channel": "glydeSafety", "data": {"ready": False}})
+        await until(wire, lambda: not wire.orders())
+        await until(wire, lambda: len(wire.orders()) == 4)
+        assert wire.connections == 2 and not task.done()
+        stop.set()
+        await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
+    assert not wire.orders()
+
+
 async def test_live_first_connect_userfills_deferral_retries_and_quotes(tmp_path):
     wire, selected = FirstFillsDeferredWire(), live_config()
     async with episode(wire, selected, tmp_path) as (task, stop):
