@@ -757,11 +757,14 @@ two-second deadline. A server without these sequenced channels refuses the run;
 there is no HTTP fallback. Initial subscription snapshots must cover all private
 roots before quoting. Earlier private fill rows are not replayed as new fills.
 
-Disconnect stops the session and attempts cancellation of recorded original IDs,
+A socket drop retires quotes and attempts cancellation of recorded original IDs,
 even if read authority has expired. Confirmed terminal/cancel receipts retire tracked IDs once,
 without waiting for a dead read stream; the old session still refuses reads and new orders.
-There is no automatic reconnect. Restart repeats exposure checks and requires fresh complete
-WS snapshots while retaining durable loss, rate and unknown-outcome state. Lost or refused
+The runner then reconnects with jittered exponential backoff (1s to 30s, until stopped),
+resubscribes, waits for fresh complete WS snapshots and cancels every open order that snapshot
+shows before quoting again. `disconnected`/`reconnected` events record each episode. Gaps,
+refusals, unknown outcomes and risk halts never reconnect; they stop the session. Restart
+repeats exposure checks while retaining durable loss, rate and unknown-outcome state. Lost or refused
 cancel receipts stay an error, even if the venue might already be empty; no order is re-signed
 to escape uncertainty. Private evidence caches are bounded; exhaustion stops the session.
 

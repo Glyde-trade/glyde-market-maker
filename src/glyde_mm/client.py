@@ -17,7 +17,7 @@ import httpx
 import websockets
 from eth_account import Account as EthAccount
 from hyperliquid.utils.signing import sign_l1_action
-from websockets.exceptions import InvalidStatus
+from websockets.exceptions import ConnectionClosed, InvalidStatus, WebSocketException
 
 from .config import Config, decimal
 from .models import (
@@ -49,6 +49,17 @@ class OneApiHTTPError(OneApiError):
 
 class OutcomeUnknown(OneApiError):
     """A submitted action may have committed; reconcile, do not blindly re-sign/retry."""
+
+
+class StreamDisconnected(OneApiError):
+    """The socket closed or its transport failed; resubscribe from a fresh snapshot."""
+
+
+def reconnectable(error: BaseException) -> bool:
+    """Socket drops and transient admission failures; never protocol or subscription refusals."""
+    if isinstance(error, OneApiHTTPError):
+        return error.status_code == 429 or error.status_code >= 500
+    return isinstance(error, (StreamDisconnected, OSError, TimeoutError, WebSocketException))
 
 
 # Socket admission retries must finish inside the runner's 10s first-book window.
@@ -519,6 +530,8 @@ class OneApiClient:
                     if not isinstance(frame, dict) or frame.get("channel") == "error":
                         raise OneApiError("WebSocket subscription refused")
                     yield frame
+            except (ConnectionClosed, OSError):
+                raise StreamDisconnected("WebSocket disconnected") from None
             finally:
                 task.cancel()
                 with suppress(asyncio.CancelledError):

@@ -174,7 +174,7 @@ Refusal labels come from a fixed allowlist; arbitrary venue error text is omitte
 | `book_arrival_age_seconds{market}`, `book_source_age_seconds{market}` | Age of the last committed book by local receipt and source clock; scrapes never restamp it. |
 | `account_arrival_age_seconds`, `account_source_age_seconds` | Same for the complete sequenced owner cut. Paper has no owner stream. |
 | `gaps_total` | First detected sequence/session/epoch/cursor continuity failure per failed cache. |
-| `reconnects_total` | Subsequent stream baselines within the same process/collector. Current fail-closed runner has no automatic reconnect, so normally zero; a new runner session resets it. |
+| `reconnects_total` | Subsequent stream baselines within the same process/collector. Each automatic reconnect after a socket drop adds one; a new runner session resets it. |
 
 `NaN` means unavailable or not yet observed, **not zero**. PnL is observational,
 not accounting/settlement proof. Inventory/headroom are cached and refreshed with
@@ -210,8 +210,8 @@ live loss guarantee; the paper model excludes fees/funding and approximates queu
 Read `outcome`, `termination`, `cleanup_confirmed` and `open_quotes_at_end`
 first. `stopped` with `duration_elapsed` and confirmed zero quotes means the
 requested local session finished normally; it is not a live execution claim.
-A source gap or stale book stops this runner rather than silently resuming;
-`pause_counts` records those stop episodes, not invented reconnect durations.
+A source gap or stale book stops this runner rather than silently resuming. A socket
+drop retires quotes and reconnects; `pause_counts` records each such episode, not durations.
 Transport/setup failures return nonzero and the result remains failed or
 unobserved. A signal is distinct from completing the requested duration. Disk
 write failure also returns nonzero; do not treat a missing/partial JSON as success.

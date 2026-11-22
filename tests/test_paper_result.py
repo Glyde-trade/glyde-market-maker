@@ -226,7 +226,9 @@ def test_actual_cli_timer_public_tape_report_and_fail_closed_paths(monkeypatch, 
         assert code == 1 and row["pause_counts"]["gap"] == 1
         assert row["outcome"] == "transport_error"
     elif failure == "disconnect":
-        assert code == 1 and row["pause_counts"]["disconnect"] == 1
+        # The timer stops the run while it waits to reconnect; a drop is not a failure.
+        assert code == 0 and row["pause_counts"]["disconnect"] == 1
+        assert row["outcome"] == "stopped"
     else:
         assert code == 1 and row["quotes"]["refused_by_reason"] == {"max_order_notional": 2}
 

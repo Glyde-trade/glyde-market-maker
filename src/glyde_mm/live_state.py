@@ -11,7 +11,14 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .metrics import Metrics
 
-from .client import OneApiError, account_from_wire, book_from_wire, orders_from_wire
+from .client import (
+    OneApiError,
+    StreamDisconnected,
+    account_from_wire,
+    book_from_wire,
+    orders_from_wire,
+    reconnectable,
+)
 from .config import Config, decimal
 from .models import Account, CancelRequest, CancelResult, Fill, OpenOrder, OrderRequest, OrderResult
 from .transport import JsonObject, MarketClient
@@ -80,8 +87,9 @@ class LiveStateClient:
         )
         return subscriptions
 
-    def invalidate(self, reason: str) -> None:
-        self._failure = self._failure or OneApiError(reason)
+    def invalidate(self, reason: str, *, disconnected: bool = False) -> None:
+        failure = StreamDisconnected(reason) if disconnected else OneApiError(reason)
+        self._failure = self._failure or failure
         self._changed.set()
         if not self._events.full():
             self._events.put_nowait(None)
@@ -242,11 +250,15 @@ class LiveStateClient:
         try:
             async for frame in stream:
                 self.consume(frame)
-            raise OneApiError("live stream disconnected")
+            self.invalidate("live stream disconnected", disconnected=True)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            self.invalidate("live stream invalid, gapped or disconnected")
+        except Exception as error:
+            # consume() latches protocol failures first; only a transport drop may reconnect.
+            if reconnectable(error):
+                self.invalidate("live stream disconnected", disconnected=True)
+            else:
+                self.invalidate("live stream invalid, gapped or disconnected")
         finally:
             await stream.aclose()
 

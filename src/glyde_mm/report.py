@@ -11,7 +11,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-from .runlog import _FIELDS, _OUTCOMES, _STRATEGIES
+from .runlog import _COUNTERS, _FIELDS, _OUTCOMES, _STRATEGIES
 
 _RUN = re.compile(r"run-([0-9a-f]{32})")
 _SEGMENT = re.compile(r"events(?:\.([1-9][0-9]?))?\.jsonl")
@@ -60,7 +60,7 @@ def _validate(row: object, run_id: str) -> dict[str, Any]:
             or not re.fullmatch(r"[0-9a-f]{40}|unknown", row["commit"])
         ):
             raise ValueError("Invalid diagnostic build header.")
-    elif event == "progress":
+    elif event in _COUNTERS:
         if any(type(row[key]) is not int or not 0 <= row[key] <= 2**63 - 1 for key in fields):
             raise ValueError("Invalid diagnostic counters.")
     elif event == "run_ended" and row["outcome"] not in tuple(_OUTCOMES):

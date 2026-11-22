@@ -232,7 +232,9 @@ async def test_explicit_live_routes_only_through_managed_transport_and_cancels_o
     assert source.cancellations >= 1
 
 
-async def test_source_disconnect_cancels_quotes_without_reconnect_or_resend(tmp_path):
+async def test_unclassified_source_error_cancels_quotes_without_reconnect_or_resend(
+    tmp_path,
+):
     task, source, paper = await scenario(tmp_path, disconnected=True)
     with pytest.raises(ConnectionError, match="synthetic"):
         await asyncio.wait_for(task, 2)

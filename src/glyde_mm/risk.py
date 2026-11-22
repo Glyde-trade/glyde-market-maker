@@ -96,6 +96,7 @@ class RiskGuard:
         state_path: Path | None = None,
         reference_check: Callable[[Book], Decimal] | None = None,
         position_limits: dict[str, Decimal] | None = None,
+        simulated: bool = False,
     ) -> None:
         self.limits = limits
         self.position_limits = dict(position_limits or {})
@@ -147,6 +148,10 @@ class RiskGuard:
                 self._execution = data["execution"]
                 if self._execution is not None:
                     self._validate_execution(self._execution)
+                    # Simulated orders died with the prior process; no venue holds an outcome.
+                    if simulated:
+                        self._execution = None
+                if self._execution is not None:
                     self.halted = self._execution["reason"]
                 elif data["loss_halted"]:
                     self.halted = "daily_loss"
@@ -378,6 +383,13 @@ class RiskGuard:
         except BaseException:
             self.pending.update(retained)
             raise
+
+    def resume_after_disconnect(self) -> bool:
+        """Clear a halt caused only by a dropped read stream; unresolved intent stays latched."""
+        if self._execution is not None or self.halted not in (None, "pretrade_refused"):
+            return False
+        self.halted = None
+        return True
 
     def set_open_orders(self, orders: Sequence[OpenOrder | OrderRequest]) -> None:
         self.open_orders = list(orders)
@@ -748,6 +760,14 @@ class RiskManagedClient:
             self._ensure_running()
             self.guard.update_account(account)
             self.guard.set_open_orders(orders)
+
+    async def interrupt(self, tasks: Sequence[asyncio.Task[Any]]) -> list[BaseException | None]:
+        """Cancel tasks between boundary actions, never during a dispatched write."""
+        async with self._lock:
+            for task in tasks:
+                task.cancel()
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        return [result if isinstance(result, BaseException) else None for result in results]
 
     async def on_disconnect(self) -> None:
         async with self._lock:
