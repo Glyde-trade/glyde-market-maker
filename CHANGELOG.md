@@ -14,6 +14,11 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
   `cancel_outcome_unknown`. A cancel latch listing no original is never written, and one
   found on disk is ignored. At live startup a `cancel_outcome_unknown` latch clears itself
   when `openOrders` and `historicalOrders` prove every listed original terminal.
+- A late cancel receipt no longer ends a live run. A cancel with no or a failed receipt pauses
+  trading and retries the venue proof (`openOrders` plus `historicalOrders`) with backoff for up
+  to `max_stale_pause_seconds`; proof resumes quoting with no latch, and only missing proof
+  latches. A lagging or stalled owner stream (the 2s post-cancel cut deadline, a stale account
+  or an incomplete batch) now reconnects instead of becoming `cancel_outcome_unknown`.
 
 ## [0.6.1]
 

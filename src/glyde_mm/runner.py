@@ -7,7 +7,7 @@ import hashlib
 import random
 import re
 import time
-from collections.abc import AsyncGenerator, Callable, Coroutine
+from collections.abc import AsyncGenerator, Callable, Coroutine, Sequence
 from contextlib import AsyncExitStack, suppress
 from dataclasses import replace
 from decimal import Decimal
@@ -29,7 +29,7 @@ from .dashboard import SnapshotPublisher
 from .live_state import LiveStateClient
 from .market_preflight import require_preflight
 from .metrics import Metrics
-from .models import Book
+from .models import Book, CancelRequest
 from .paper import PaperExchange
 from .paper_result import PaperResult
 from .preflight import check_live_exposure
@@ -41,6 +41,7 @@ from .risk import (
     RiskViolation,
     StaleMarket,
     VenueSweepDeferred,
+    venue_proves_closed,
 )
 from .runlog import RunLog
 from .shutdown import RunnerControl
@@ -310,6 +311,16 @@ async def _run_session(
         cleanup_allowed = paper is not None
         if paper is not None:
             paper.use_trade_tape()
+
+        async def prove_closed(requests: Sequence[CancelRequest]) -> bool:
+            open_orders = await source.open_orders()
+            if not venue_proves_closed(requests, open_orders, await source.historical_orders()):
+                return False
+            if live is not None:
+                live.mark_closed(requests)
+            report(f"LIVE: order history proves {len(requests)} late-receipt cancel(s) closed")
+            return True
+
         managed = RiskManagedClient(
             raw,
             guard,
@@ -318,6 +329,8 @@ async def _run_session(
             metrics=metrics,
             # A stale book pauses only its own market; the runner bounds how long.
             isolate_stale_markets=True,
+            order_proof=prove_closed if paper is None else None,
+            proof_window_seconds=float(config.risk.max_stale_pause_seconds),
         )
         strategies: dict[str, Strategy] = {}
         stream: AsyncGenerator[JsonObject, None] | None = None
@@ -650,6 +663,9 @@ async def _run_session(
                             raise
                     except StreamDisconnected as error:
                         dropped = dropped or error
+                    except TimeoutError:
+                        # A late read (e.g. the owner cut after a cancel) pauses and reconnects.
+                        dropped = dropped or StreamDisconnected("live read deadline passed")
                     else:
                         if not stop.is_set():
                             raise OneApiError("strategy task exited unexpectedly")
@@ -660,8 +676,13 @@ async def _run_session(
                 if paper_result is not None:
                     paper_result.pause("disconnect")
                 results, tasks = await managed.interrupt(tasks), []
+                if live is not None:
+                    # Retire on receipts alone; the next connection's snapshot reconciles.
+                    live.invalidate("live stream retired", disconnected=True)
                 for result in results:
-                    if isinstance(result, Exception) and not isinstance(result, StreamDisconnected):
+                    if isinstance(result, Exception) and not isinstance(
+                        result, (StreamDisconnected, TimeoutError)
+                    ):
                         if stop.is_set():
                             return
                         raise result
@@ -732,10 +753,12 @@ async def _run_session(
                 try:
                     await start_quoting(books, first)
                 except Exception as error:
-                    # A deferral can arrive after the books, while waiting for the account cut.
-                    if not reconnectable(error) or (
-                        first and not isinstance(error, SubscriptionDeferred)
-                    ):
+                    # A deferral can arrive after the books, while waiting for the account cut;
+                    # a slow reconnect reconcile can also outlast the first books' freshness.
+                    retryable = reconnectable(error) or (
+                        not first and isinstance(error, StaleMarket) and guard.halted is None
+                    )
+                    if not retryable or (first and not isinstance(error, SubscriptionDeferred)):
                         raise
                     attempt = f"connect {attempts + 1}" if first else f"reconnect {attempts}"
                     report(

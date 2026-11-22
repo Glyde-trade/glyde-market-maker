@@ -6,6 +6,7 @@ import socket
 import time
 from collections import Counter
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from decimal import Decimal as D
 
 import httpx
@@ -292,13 +293,16 @@ async def test_new_process_objects_reuse_durable_state_without_orphan_or_duplica
 
 
 async def lose_cancel_receipts(wire, selected, directory):
+    # Without order history the in-run proof is retried for the (short) pause window, then latched.
+    selected = replace(selected, risk=replace(selected.risk, max_stale_pause_seconds=D("0.3")))
     async with episode(wire, selected, directory) as (task, _):
         await until(wire, lambda: len(wire.orders()) == 4)
         originals = set(wire.orders())
-        wire.lose_cancel_receipts = True
+        wire.lose_cancel_receipts = wire.refuse_history = True
         await wire.socket.close()
         with pytest.raises(RiskViolation, match="cancel_outcome_unknown"):
             await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
+    wire.refuse_history = False
     assert not wire.orders()  # Ledger applied cancel; the bot has no confirming receipts.
     state = json.loads(risk_state_path(selected, directory).read_text())
     assert state["execution"]["reason"] == "cancel_outcome_unknown"
