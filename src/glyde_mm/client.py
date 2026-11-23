@@ -53,9 +53,13 @@ class OneApiError(RuntimeError):
 class OneApiHTTPError(OneApiError):
     """A refused HTTP status without response bodies, URLs or credential details."""
 
-    def __init__(self, status_code: int) -> None:
-        self.status_code = status_code
+    def __init__(self, status_code: int, reason_code: str | None = None) -> None:
+        self.status_code, self.reason_code = status_code, reason_code
         super().__init__(f"One API refused request (HTTP {status_code})")
+
+
+class EngineUnavailable(OneApiError):
+    """Glyde refused an exchange action because its engine is halted or not ready."""
 
 
 class OutcomeUnknown(OneApiError):
@@ -77,12 +81,37 @@ class SubscriptionDeferred(StreamDisconnected):
 RETRYABLE_REFUSALS = frozenset({"PROJECTION_UNAVAILABLE"})
 REFUSAL_RETRY_MAX_SECONDS = 60.0
 _REASON_CODE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+# Refusal codes meaning Glyde's engine or its projection is halted or not ready yet.
+ENGINE_UNAVAILABLE_REASONS = frozenset(
+    {
+        "ENGINE_NOT_READY",
+        "ENGINE_HALTED",
+        "ADAPTER_INTEGRITY_CONFLICT",
+        "ADAPTER_INACTIVE",
+        "PROJECTION_UNAVAILABLE",
+        "MATCHING_PAUSED",
+        "NATIVE_READ_UNAVAILABLE",
+    }
+)
+_ENGINE_UNAVAILABLE_TEXT = "trading is unavailable"
+
+
+def reason_code(value: object) -> str | None:
+    return value if isinstance(value, str) and _REASON_CODE.fullmatch(value) else None
+
+
+def engine_unavailable(error: BaseException | None) -> bool:
+    """A refusal Glyde sends while its engine is halted or not ready; never a plain drop."""
+    if isinstance(error, EngineUnavailable):
+        return True
+    if isinstance(error, SubscriptionDeferred):
+        return error.reason_code in ENGINE_UNAVAILABLE_REASONS
+    return isinstance(error, OneApiHTTPError) and error.reason_code in ENGINE_UNAVAILABLE_REASONS
 
 
 def subscription_refusal(frame: dict[str, Any]) -> OneApiError:
     """Classify an error frame: retryAfter or a known transient reasonCode defers, else refuses."""
-    code = frame.get("reasonCode")
-    reason = code if isinstance(code, str) and _REASON_CODE.fullmatch(code) else "UNSPECIFIED"
+    reason = reason_code(frame.get("reasonCode")) or "UNSPECIFIED"
     hint = frame.get("retryAfter")
     if isinstance(hint, (int, float)) and not isinstance(hint, bool):
         retry_after = float(hint)
@@ -360,6 +389,12 @@ class OneApiClient:
                 pass
         if response.status_code >= 500 and action:
             raise OutcomeUnknown("exchange outcome unknown; reconcile the original request")
+        if response.status_code == 503:
+            try:
+                code = reason_code(response.json().get("reasonCode"))
+            except (ValueError, AttributeError):
+                code = None
+            raise OneApiHTTPError(503, code)
         if response.status_code != 200:
             raise OneApiHTTPError(response.status_code)
         try:
@@ -369,6 +404,20 @@ class OneApiClient:
                 raise OutcomeUnknown("exchange returned an invalid receipt") from None
             raise OneApiError("One API returned invalid JSON") from None
         return result
+
+    async def engine_ready(self) -> bool | None:
+        """Glyde's public health: True when READY, False while it reports the engine
+        unavailable (HTTP 503 with a state), None when health itself is unreachable."""
+        try:
+            response = await self._http.get(self.config.base_url.rstrip("/") + "/health")
+            state = response.json().get("state")
+        except (httpx.TransportError, ValueError, AttributeError):
+            return None
+        if response.status_code == 200 and state == "READY":
+            return True
+        if response.status_code == 503 and reason_code(state) is not None:
+            return False
+        return None
 
     async def info(self, body: dict[str, Any]) -> Any:
         return await self._post(
@@ -478,6 +527,9 @@ class OneApiClient:
     @staticmethod
     def _statuses(result: dict[str, Any], count: int) -> list[Any]:
         if result.get("status") != "ok":
+            refusal = result.get("response")
+            if isinstance(refusal, str) and _ENGINE_UNAVAILABLE_TEXT in refusal.lower():
+                raise EngineUnavailable("exchange refused the action: engine unavailable")
             raise OneApiError("exchange refused the action")
         try:
             statuses = result["response"]["data"]["statuses"]

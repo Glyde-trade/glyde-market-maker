@@ -28,6 +28,7 @@ def summary(config: Config) -> str:
         f" | book_age={config.risk.stale_book_seconds}s"
         f" | account_age={config.risk.account_age_seconds}s"
         f" | stale_pause={config.risk.max_stale_pause_seconds}s"
+        f" | engine_halt={config.risk.max_engine_halt_seconds}s"
     )
 
 

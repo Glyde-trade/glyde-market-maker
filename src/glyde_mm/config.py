@@ -36,6 +36,8 @@ class RiskConfig:
     max_total_notional: Decimal | None = None
     # A stale book pauses its market; past this many seconds the run stops instead.
     max_stale_pause_seconds: Decimal = Decimal("300")
+    # While Glyde reports its engine halted, the bot waits this long instead (not counted above).
+    max_engine_halt_seconds: Decimal = Decimal("1800")
 
 
 @dataclass(frozen=True)

@@ -4,6 +4,13 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 ## [Unreleased]
 
+- A Glyde engine halt no longer ends a live run. While Glyde reports its engine unavailable
+  (`GET /v1/health` 503, `glydeSafety`, or an engine/projection refusal code), cancel proof and
+  reconnects keep waiting with bounded backoff; that time does not count against
+  `max_stale_pause_seconds` and is bounded by the new `risk.max_engine_halt_seconds`
+  (default 1800). Once health is READY the bot re-sends the cancels the halt refused, proves
+  them from `openOrders`/`historicalOrders`, reconciles its tagged orders and resumes quoting
+  with any fill made on resume counted as inventory against `max_position`.
 - Cleanup only touches the bot's own orders. Every order carries a client order id tagged
   `0x676d6d31` ("gmm1"); startup, reconnect, stale-pause, risk-halt, shutdown and `stop`
   sweeps cancel only tagged or self-recorded orders, so manual orders in the same account stay

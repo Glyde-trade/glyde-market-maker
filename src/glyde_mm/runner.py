@@ -21,6 +21,7 @@ from .client import (
     StreamDisconnected,
     SubscriptionDeferred,
     book_from_wire,
+    engine_unavailable,
     reconnectable,
     trades_from_wire,
 )
@@ -321,6 +322,12 @@ async def _run_session(
             report(f"LIVE: order history proves {len(requests)} late-receipt cancel(s) closed")
             return True
 
+        async def engine_halted(error: BaseException | None) -> bool:
+            # Glyde's health is the authority; a refusal code decides only when it is unreachable.
+            probe = getattr(source, "engine_ready", None)
+            ready = await probe() if probe is not None else None
+            return engine_unavailable(error) if ready is None else not ready
+
         managed = RiskManagedClient(
             raw,
             guard,
@@ -331,6 +338,8 @@ async def _run_session(
             isolate_stale_markets=True,
             order_proof=prove_closed if paper is None else None,
             proof_window_seconds=float(config.risk.max_stale_pause_seconds),
+            engine_halted=engine_halted,
+            halt_window_seconds=float(config.risk.max_engine_halt_seconds),
         )
         strategies: dict[str, Strategy] = {}
         stream: AsyncGenerator[JsonObject, None] | None = None
@@ -708,8 +717,24 @@ async def _run_session(
                     with suppress(VenueSweepDeferred):
                         await managed.cancel_all(symbol)
 
-            def give_up_after_window(attempt: str) -> bool:
-                if time.monotonic() - dropped_at <= max_pause:
+            max_halt = float(config.risk.max_engine_halt_seconds)
+            first, attempts, dropped_at = True, 0, time.monotonic()
+            failing_since = dropped_at
+
+            async def give_up_after_window(attempt: str, error: BaseException) -> bool:
+                nonlocal failing_since
+                now = time.monotonic()
+                if await engine_halted(error):
+                    # Halt time never counts against the reconnect window; it has its own budget.
+                    failing_since = now
+                    if now - dropped_at <= max_halt:
+                        return False
+                    report(
+                        f"{config.mode.upper()}: {attempt} failed; Glyde engine halted past the "
+                        f"{max_halt:g}s halt budget; stopping"
+                    )
+                    return True
+                if now - failing_since <= max_pause:
                     return False
                 report(
                     f"{config.mode.upper()}: {attempt} failed past the {max_pause:g}s "
@@ -717,7 +742,6 @@ async def _run_session(
                 )
                 return True
 
-            first, attempts, dropped_at = True, 0, time.monotonic()
             retry_after: float | None = None  # Set once a connection must be retried.
             while True:
                 if retry_after is not None:
@@ -741,7 +765,7 @@ async def _run_session(
                     report(
                         f"{config.mode.upper()}: {attempt} attempt failed ({_failure_label(error)})"
                     )
-                    if give_up_after_window(attempt):
+                    if await give_up_after_window(attempt, error):
                         raise
                     await resources.aclose()
                     if live is not None:
@@ -764,7 +788,7 @@ async def _run_session(
                     report(
                         f"{config.mode.upper()}: {attempt} attempt failed ({_failure_label(error)})"
                     )
-                    if give_up_after_window(attempt):
+                    if await give_up_after_window(attempt, error):
                         raise
                     for strategy in strategies.values():
                         await strategy.stop()
@@ -791,6 +815,7 @@ async def _run_session(
                 dropped_at = time.monotonic()
                 journal.emit("disconnected")
                 await retire(dropped)
+                failing_since = time.monotonic()  # A sweep waiting out a halt is not counted.
                 retry_after = _retry_floor(dropped)
                 report(
                     f"{config.mode.upper()}: stream disconnected ({_failure_label(dropped)}); "
