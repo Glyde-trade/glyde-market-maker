@@ -396,6 +396,7 @@ For diagnostic logs, use `glyde-mm report path/to/.glyde-mm/logs`.
 | `risk.max_daily_loss` | Daily equity-loss kill switch in USDC |
 | `risk.stale_book_seconds` | Maximum book source/arrival age |
 | `risk.max_stale_pause_seconds` | Longest stale-book pause before the run stops, default 300 |
+| `risk.max_engine_halt_seconds` | Longest wait while Glyde reports its engine halted, default 1800 |
 | `risk.account_age_seconds` | Maximum account-observation age |
 
 PMM sizing follows Hummingbot's linear bid/ask adjustment, adapted to signed perpetual
@@ -781,7 +782,12 @@ that every order is terminal resumes quoting with no latch; without proof the or
 An owner stream that lags or stalls after a cancel reconnects instead of stopping. No order is
 re-signed to escape uncertainty. At the next live startup, a `cancel_outcome_unknown` latch clears itself
 only when the venue's `openOrders` omits and `historicalOrders` shows a terminal status for every
-listed original; otherwise it stays. A cancel latch listing no original is never written. Private evidence caches are bounded; exhaustion stops the session.
+listed original; otherwise it stays. A cancel latch listing no original is never written. While Glyde
+reports its engine halted or not ready (`GET /v1/health` not READY, a `glydeSafety` frame, or an
+engine/projection refusal code), proof and reconnects keep waiting; that time does not count against
+`max_stale_pause_seconds` and is bounded by `max_engine_halt_seconds` (default 1800). Resting
+orders survive a halt by design, so once health is READY the bot re-sends refused cancels, proves
+them, reconciles its tagged orders and resumes quoting with any fill counted as inventory. Private evidence caches are bounded; exhaustion stops the session.
 
 ### Offline quote-resilience checks
 

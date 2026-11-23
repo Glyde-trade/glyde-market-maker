@@ -13,7 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .client import StreamDisconnected, reconnectable
+from .client import StreamDisconnected, engine_unavailable, reconnectable
 from .config import RiskConfig
 from .live_state import terminal_order_status
 from .models import CancelRequest, CancelResult, bot_client_order_id, is_bot_order
@@ -572,11 +572,16 @@ class RiskManagedClient:
         isolate_stale_markets: bool = False,
         order_proof: Callable[[Sequence[CancelRequest]], Awaitable[bool]] | None = None,
         proof_window_seconds: float = 0.0,
+        engine_halted: Callable[[BaseException | None], Awaitable[bool]] | None = None,
+        halt_window_seconds: float = 0.0,
     ) -> None:
         self.isolate_stale_markets = isolate_stale_markets
         # Venue read proving cancels terminal when a receipt is missing or late.
         self.order_proof = order_proof
         self.proof_window_seconds = proof_window_seconds
+        # True while Glyde reports its engine halted; that wait has its own, longer budget.
+        self.engine_halted = engine_halted
+        self.halt_window_seconds = halt_window_seconds
         self.client, self.guard = client, guard
         self.metrics = metrics
         self._lock = asyncio.Lock()
@@ -658,7 +663,7 @@ class RiskManagedClient:
                 failure = failure or RiskViolation("cancel_identity_mismatch")
             elif self.metrics and result.status == "cancelled":
                 self.metrics.count("quotes_cancelled")
-        if unproven and not await self._venue_proves_closed(unproven):
+        if unproven and not await self._venue_proves_closed(unproven, unproven_error):
             failure = failure or unproven_error
         try:
             await self.client.cancel_all(symbol)
@@ -683,26 +688,60 @@ class RiskManagedClient:
             return False
         return len(results) == 1 and results[0].status in ("cancelled", "already_closed")
 
-    async def _venue_proves_closed(self, requests: Sequence[CancelRequest]) -> bool:
-        """Retry venue proof with backoff, while trading stays paused under the lock."""
+    async def _engine_is_halted(self, error: BaseException | None) -> bool:
+        if self.engine_halted is None:
+            return False
+        try:
+            return await self.engine_halted(error)
+        except Exception:
+            return False
+
+    async def _venue_proves_closed(
+        self, requests: Sequence[CancelRequest], cause: BaseException | None = None
+    ) -> bool:
+        """Retry venue proof with backoff, while trading stays paused under the lock.
+
+        Time Glyde reports its engine halted never counts against the proof window; it is
+        bounded by the halt window instead. Cancels the halt refused are re-sent once it ends.
+        """
         if self.order_proof is None or not requests:
             return False
-        deadline = time.monotonic() + self.proof_window_seconds
+        started = time.monotonic()
+        deadline = started + self.proof_window_seconds
+        halt_deadline = started + self.halt_window_seconds
         delay = PROOF_RETRY_INITIAL_SECONDS
+        unproven, was_halted = list(requests), engine_unavailable(cause)
         while True:
+            failure: BaseException | None = None
             try:
-                if await self.order_proof(requests):
+                if await self.order_proof(unproven):
                     return True
-            except Exception:  # noqa: S110 - unavailable proof is retried, then latched.
-                pass
+            except Exception as error:  # Unavailable proof is retried, then latched.
+                failure = error
             # A halting or closing sweep checks once; only live trading waits out the window.
             stopping = (
                 self._closed
                 or self.guard.halted is not None
                 or (self._stop_event is not None and self._stop_event.is_set())
             )
-            remaining = deadline - time.monotonic()
-            if stopping or remaining <= 0:
+            if stopping:
+                return False
+            halted = await self._engine_is_halted(failure)
+            if was_halted and not halted:
+                # The engine is back: a cancel the halt refused is sent again, then proven.
+                unproven = [row for row in unproven if not await self._cancel_one(row)]
+                if not unproven:
+                    return True
+                was_halted = False
+                continue
+            was_halted = was_halted or halted
+            now = time.monotonic()
+            if halted:
+                deadline = max(deadline, now + self.proof_window_seconds)
+                remaining = halt_deadline - now
+            else:
+                remaining = deadline - now
+            if remaining <= 0:
                 return False
             await asyncio.sleep(min(delay, remaining))
             delay = min(delay * 2, PROOF_RETRY_MAX_SECONDS)
@@ -835,12 +874,12 @@ class RiskManagedClient:
                         r.status not in ("cancelled", "already_closed") for r in results
                     ):
                         raise RiskViolation("cancel_outcome_unknown")
-                except Exception:
+                except Exception as error:
                     # A late or missing receipt is not an unknown outcome once the venue
                     # shows every order terminal. Retry each first: a batch failure can
                     # leave later cancels unsent, and receipted ones answer locally.
                     unproven = [row for row in orders if not await self._cancel_one(row)]
-                    if unproven and not await self._venue_proves_closed(unproven):
+                    if unproven and not await self._venue_proves_closed(unproven, error):
                         raise
                     results = [
                         CancelResult("already_closed", row.order_id, row.client_order_id)
