@@ -456,6 +456,29 @@ def test_uncertain_cancel_survives_restart_with_original_identity(tmp_path):
     asyncio.run(scenario())
 
 
+def test_account_check_waits_out_an_in_flight_order_instead_of_latching_it(monkeypatch):
+    async def scenario():
+        g, _ = guard()
+        raw = FakeClient()
+        client = RiskManagedClient(raw, g)
+        flushing, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_flush():
+            flushing.set()
+            await release.wait()
+
+        monkeypatch.setattr(g, "flush_state", slow_flush)
+        placing = asyncio.create_task(client.place_orders([Order()]))
+        await flushing.wait()
+        observing = asyncio.create_task(client.observe_account())
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(placing, observing)
+        assert len(raw.placed) == 1 and g.halted is None
+
+    asyncio.run(scenario())
+
+
 def test_state_write_failure_prevents_order_submission(tmp_path, monkeypatch):
     async def scenario():
         path = tmp_path / "risk.json"

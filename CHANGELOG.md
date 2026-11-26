@@ -4,6 +4,29 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 ## [Unreleased]
 
+- A routine account check no longer ends a run with `order_outcome_unknown` or
+  `cancel_outcome_unknown` while an order or cancel is still being written. The check now
+  waits for the in-flight action to finish instead of mistaking its durable intent record
+  for an unresolved outcome. This intermittently stopped paper runs after a few seconds.
+- A peer market's book expiring between pretrade validation and dispatch no longer ends a
+  multi-market run with `cancel_outcome_unknown`. Nothing was sent to Glyde, so the orders are
+  released and refused exactly as a pretrade refusal is, and the stale market is retired alone.
+- Shutdown no longer reports a clean stop when the final venue sweep could not read Glyde.
+  The reconnect-time deferral of a transient sweep failure does not apply at close, where no
+  next connection repeats the sweep; it stops with `cancel_outcome_unknown` instead.
+- More than 8 levels per side now runs on Glyde. Glyde refuses an order, cancel or modify
+  action with more than 16 entries, so 10+ levels (20+ quotes) ended ~30s after start with
+  `RiskViolation: cancel_outcome_unknown` and no quote placed. Batches are now split into
+  signed actions of at most 16. A whole-action refusal (`status: err`) is a known outcome:
+  nothing was placed, so the bot no longer hunts order history for cloids that never existed;
+  it stops with `order_refused` and prints Glyde's refusal text as the cause. The offline
+  venue enforces the same 16-entry cap.
+- A Glyde stream gap or resnapshot no longer ends a live run. A sequence gap, a new
+  session/epoch (an engine restart), a resnapshot request, an unsafe publication, an
+  engine-halt refusal code without `retryAfter`, or an order refused with "trading is
+  unavailable" now retires quotes and reconnects from a fresh snapshot like a socket drop.
+  Starting while Glyde reports its engine halted (HTTP 503) waits, within
+  `max_engine_halt_seconds`, instead of exiting.
 - A Glyde engine halt no longer ends a live run. While Glyde reports its engine unavailable
   (`GET /v1/health` 503, `glydeSafety`, or an engine/projection refusal code), cancel proof and
   reconnects keep waiting with bounded backoff; that time does not count against

@@ -59,6 +59,13 @@ def offline(monkeypatch):
         ({**DEFERRED, "retryAfter": -1, "reasonCode": "X"}, False, None),
         ({**DEFERRED, "retryAfter": "1", "reasonCode": "X"}, False, None),
         (REFUSED, False, None),
+        # Engine-halt codes defer even without a retry hint (26 Nov 2026).
+        ({"channel": "error", "reasonCode": "ENGINE_HALTED"}, True, 0.0),
+        ({"channel": "error", "reasonCode": "ADAPTER_INTEGRITY_CONFLICT"}, True, 0.0),
+        # Glyde's uncoded projection refusals resubscribe from a fresh snapshot.
+        ({"channel": "error", "data": "Glyde: resnapshot required"}, True, 0.0),
+        ({"channel": "error", "data": "Glyde: projection unavailable"}, True, 0.0),
+        ({"channel": "error", "data": "Glyde: subscription capacity exceeded"}, False, None),
     ],
 )
 def test_only_retry_hints_or_transient_codes_defer(frame, deferred, delay):

@@ -18,6 +18,8 @@ from .websocket import FakeWebSocket
 
 DEFAULT_USER = "0x" + "1" * 40
 ZERO = Decimal(0)
+# Glyde refuses an order, cancel or modify action outside 1..16 entries.
+MAX_ACTION_ENTRIES = 16
 
 
 def number(value: Any) -> Decimal:
@@ -423,6 +425,10 @@ class FakeOneApiServer:
             items = [action] if kind == "modify" else action.get("modifies", [])
         if not isinstance(items, list):
             raise ValueError("orders, cancels or modifies must be an array")
+        if not 1 <= len(items) <= MAX_ACTION_ENTRIES:
+            # Prime refuses the whole signed action, before any entry takes effect
+            # (services/prime/crates/prime-oms/src/incoming.rs, `bounded`).
+            return {"status": "err", "response": "Order rejected by current engine constraints"}
         for item in items:
             try:
                 if not isinstance(item, dict):

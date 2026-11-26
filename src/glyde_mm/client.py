@@ -9,7 +9,7 @@ import os
 import re
 import secrets
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from decimal import Decimal
 from email.utils import parsedate_to_datetime
@@ -58,7 +58,11 @@ class OneApiHTTPError(OneApiError):
         super().__init__(f"One API refused request (HTTP {status_code})")
 
 
-class EngineUnavailable(OneApiError):
+class ActionRefused(OneApiError):
+    """Glyde refused a whole signed action (``status: err``): none of its entries took effect."""
+
+
+class EngineUnavailable(ActionRefused):
     """Glyde refused an exchange action because its engine is halted or not ready."""
 
 
@@ -78,6 +82,9 @@ class SubscriptionDeferred(StreamDisconnected):
         super().__init__(f"subscription deferred ({reason_code})")
 
 
+# Glyde refuses an order, cancel or modify action outside 1..16 entries
+# (docs/one-api/hl-compatibility.md); larger batches are split into several signed actions.
+MAX_ACTION_ENTRIES = 16
 RETRYABLE_REFUSALS = frozenset({"PROJECTION_UNAVAILABLE"})
 REFUSAL_RETRY_MAX_SECONDS = 60.0
 _REASON_CODE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
@@ -94,6 +101,11 @@ ENGINE_UNAVAILABLE_REASONS = frozenset(
     }
 )
 _ENGINE_UNAVAILABLE_TEXT = "trading is unavailable"
+_REFUSAL_TEXT = re.compile(r"[A-Za-z][A-Za-z0-9 ,.:;'()/_-]{0,199}")
+_RESUBSCRIBE_TEXT = {
+    "Glyde: resnapshot required": "RESNAPSHOT_REQUIRED",
+    "Glyde: projection unavailable": "PROJECTION_UNAVAILABLE",
+}
 
 
 def reason_code(value: object) -> str | None:
@@ -117,8 +129,11 @@ def subscription_refusal(frame: dict[str, Any]) -> OneApiError:
         retry_after = float(hint)
         if math.isfinite(retry_after) and retry_after >= 0:
             return SubscriptionDeferred(reason, min(retry_after, REFUSAL_RETRY_MAX_SECONDS))
-    if reason in RETRYABLE_REFUSALS:
+    if reason in RETRYABLE_REFUSALS or reason in ENGINE_UNAVAILABLE_REASONS:
         return SubscriptionDeferred(reason, 0.0)
+    if reason == "UNSPECIFIED" and frame.get("data") in _RESUBSCRIBE_TEXT:
+        # Glyde's uncoded projection refusals: a fresh snapshot repairs both.
+        return SubscriptionDeferred(_RESUBSCRIBE_TEXT[frame["data"]], 0.0)
     return OneApiError("WebSocket subscription refused")
 
 
@@ -514,15 +529,44 @@ class OneApiClient:
             raise OutcomeUnknown("exchange returned an unrecognized receipt")
         return result
 
+    async def _chunked(
+        self,
+        rows: Sequence[Any],
+        orders: Sequence[OrderRequest],
+        action: Callable[[Sequence[Any]], Awaitable[dict[str, Any]]],
+    ) -> list[OrderResult]:
+        """Send at most MAX_ACTION_ENTRIES per signed action, in order.
+
+        A refusal of the first action means nothing was placed and is raised. Once an earlier
+        action has placed orders, a refused later action (and every one after it, which is
+        not sent) is reported per order as rejected, so placed orders stay accounted for.
+        """
+        results: list[OrderResult] = []
+        for start in range(0, len(rows), MAX_ACTION_ENTRIES):
+            part = slice(start, start + MAX_ACTION_ENTRIES)
+            try:
+                results.extend(self._order_results(await action(rows[part]), orders[part]))
+            except ActionRefused:
+                if not start:
+                    raise
+                results.extend(
+                    OrderResult(
+                        "rejected", client_order_id=row.client_order_id, error="order refused"
+                    )
+                    for row in orders[start:]
+                )
+                break
+        return results
+
     async def place_orders(self, orders: Sequence[OrderRequest]) -> list[OrderResult]:
         if not orders:
             return []
-        action = {
-            "type": "order",
-            "orders": [await self._order_wire(order) for order in orders],
-            "grouping": "na",
-        }
-        return self._order_results(await self.exchange(action), orders)
+        wires = [await self._order_wire(order) for order in orders]
+        return await self._chunked(
+            wires,
+            orders,
+            lambda part: self.exchange({"type": "order", "orders": list(part), "grouping": "na"}),
+        )
 
     @staticmethod
     def _statuses(result: dict[str, Any], count: int) -> list[Any]:
@@ -530,7 +574,15 @@ class OneApiClient:
             refusal = result.get("response")
             if isinstance(refusal, str) and _ENGINE_UNAVAILABLE_TEXT in refusal.lower():
                 raise EngineUnavailable("exchange refused the action: engine unavailable")
-            raise OneApiError("exchange refused the action")
+            # Glyde's refusal texts are short constants; anything else stays generic.
+            reason = (
+                f": {refusal}"
+                if isinstance(refusal, str)
+                and _REFUSAL_TEXT.fullmatch(refusal)
+                and "0x" not in refusal
+                else ""
+            )
+            raise ActionRefused(f"exchange refused the action{reason}")
         try:
             statuses = result["response"]["data"]["statuses"]
             if not isinstance(statuses, list) or len(statuses) != count:
@@ -591,14 +643,14 @@ class OneApiClient:
     async def modify_orders(self, orders: Sequence[ModifyRequest]) -> list[OrderResult]:
         if not orders:
             return []
-        action = {
-            "type": "batchModify",
-            "modifies": [
-                {"oid": int(row.order_id), "order": await self._order_wire(row.order)}
-                for row in orders
-            ],
-        }
-        return self._order_results(await self.exchange(action), [row.order for row in orders])
+        modifies = [
+            {"oid": int(row.order_id), "order": await self._order_wire(row.order)} for row in orders
+        ]
+        return await self._chunked(
+            modifies,
+            [row.order for row in orders],
+            lambda part: self.exchange({"type": "batchModify", "modifies": list(part)}),
+        )
 
     async def cancel_orders(self, orders: Sequence[CancelRequest]) -> list[CancelResult]:
         # Different cancel wire types require separate signed actions.

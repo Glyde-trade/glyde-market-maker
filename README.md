@@ -376,7 +376,7 @@ For diagnostic logs, use `glyde-mm report path/to/.glyde-mm/logs`.
 | `read_api_key_env` | Name of a separate private-read credential variable |
 | `strategy_config.ping_pong_enabled` | PMM paper-only boolean, default false: start both sides, then quote only opposite the latest identified fill (partials count) |
 | `strategy_config.price_floor` / `price_ceiling` | Optional quote-reference price bands: pull asks at/below the floor and bids at/above the ceiling; re-enter promptly when permitted |
-| `strategy_config.order_levels` | PMM/Avellaneda levels per side, 1–50; default 1 (no ladder) |
+| `strategy_config.order_levels` | PMM/Avellaneda levels per side, 1–50; default 1 (no ladder). Glyde takes at most 16 orders per signed action, so larger ladders are sent as several actions |
 | `strategy_config.order_level_spread` | Add this fraction of reference price per level (e.g. `'0.001'` = 0.1% spacing) |
 | `strategy_config.order_level_amount` | Add this nonnegative base quantity per level; every level still shares risk caps |
 | `strategy_config.order_amount` | Quantity per level in base units |
@@ -642,8 +642,8 @@ Single-market runs pause the same way. A market stale for longer than
 If the stale market has a position, new quotes that require its notional valuation pause
 until that book is fresh; stale prices never become an assumed account-level bound.
 
-A private/account stream failure, continuity gap, unknown cancellation, disconnect,
-daily-loss stop or other risk violation still stops the shared session. Shutdown cancels the
+A private/account stream failure, unknown cancellation, daily-loss stop or other risk violation
+still stops the shared session; a disconnect or continuity gap retires quotes and reconnects. Shutdown cancels the
 bot's own tagged orders on **every configured symbol**, leaving manual orders, other symbols and
 all positions untouched.
 Use a dedicated account and only one runner for it. Paper status lines show each market's
@@ -773,8 +773,9 @@ arrive, keep retrying for `max_stale_pause_seconds` (default 300) before the run
 `disconnected`/`reconnected` events record each episode.
 A stale book while connected pauses only that market: its quotes are retired, and the next fresh
 book cancels whatever the venue still shows for it before quoting resumes. `book_stale`/`book_fresh`
-events (market index, reason, pause length) and `glyde_mm_stale_pauses_total` record each pause. Gaps,
-refusals, unknown outcomes and risk halts never reconnect; they stop the session. Restart
+events (market index, reason, pause length) and `glyde_mm_stale_pauses_total` record each pause. A
+sequence gap, changed session/epoch or resnapshot request reconnects like a socket drop, from a
+fresh snapshot. Refusals, unknown outcomes and risk halts never reconnect; they stop the session. Restart
 repeats exposure checks while retaining durable loss, rate and unknown-outcome state. A lost, late or
 refused cancel receipt pauses trading while the bot asks the venue (`openOrders` plus
 `historicalOrders`) for proof, retrying with backoff for up to `max_stale_pause_seconds`. Proof

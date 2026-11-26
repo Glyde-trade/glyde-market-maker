@@ -351,7 +351,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if args.command in {"stop", "live-wizard"} else 0
     except (OneApiError, RiskViolation) as error:
         # Both types carry sanitized, credential-free messages by contract.
-        print(f"Unable to run: {type(error).__name__}: {error}", file=sys.stderr)
+        cause = error.__cause__
+        detail = (
+            f" (cause: {type(cause).__name__}: {cause})"
+            if isinstance(cause, (OneApiError, RiskViolation))
+            else ""
+        )
+        print(f"Unable to run: {type(error).__name__}: {error}{detail}", file=sys.stderr)
         return 1
     except (ValueError, OSError, TimeoutError) as error:
         # These bodies can include HTTP headers or local credential paths: name the type only.

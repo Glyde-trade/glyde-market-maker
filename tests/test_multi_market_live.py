@@ -16,7 +16,7 @@ from market_receipt import approved_market
 
 from glyde_mm.client import OneApiClient
 from glyde_mm.config import Config, MarketConfig, RiskConfig
-from glyde_mm.risk import RiskManagedClient
+from glyde_mm.risk import RiskGuard, RiskManagedClient
 from glyde_mm.runner import run
 
 OWNER = "0x" + "1" * 40
@@ -82,9 +82,10 @@ def offline(monkeypatch):
     monkeypatch.setenv("GLYDE_READ_API_KEY", "read-fixture")
 
 
-@pytest.mark.parametrize("expire_during_pretrade", [False, True])
+# None leaves ETH to age past 0.3s on the wall clock, so it may expire at either boundary.
+@pytest.mark.parametrize("expire_during", [None, "pretrade", "revalidation"])
 async def test_one_live_ws_stale_market_retires_other_keeps_quoting_and_recovers(
-    tmp_path, monkeypatch, expire_during_pretrade
+    tmp_path, monkeypatch, expire_during
 ):
     wire = MarketWire()
     stop, paused, recovered = asyncio.Event(), asyncio.Event(), asyncio.Event()
@@ -101,7 +102,7 @@ async def test_one_live_ws_stale_market_retires_other_keeps_quoting_and_recovers
             max_position=D(1),
             max_order_notional=D(25),
             max_total_notional=D(50),
-            stale_book_seconds=D(30) if expire_during_pretrade else D("0.3"),
+            stale_book_seconds=D(30) if expire_during else D("0.3"),
             max_orders_per_minute=600,
         ),
     )
@@ -110,20 +111,30 @@ async def test_one_live_ws_stale_market_retires_other_keeps_quoting_and_recovers
     messages = []
     injected = False
     original_place = RiskManagedClient.place_orders
+    original_revalidate = RiskGuard.revalidate_execution
+
+    def expire_eth(guard, orders):
+        nonlocal injected
+        assert orders[0].symbol == "BTC"
+        guard.books["ETH"] = replace(
+            guard.books["ETH"], received_at=time.monotonic() - guard.limits.stale_book_seconds - 1
+        )
+        injected = True
 
     async def expire_after_watchdog(managed, orders):
-        nonlocal injected
-        if expire_during_pretrade and not injected and wire.started.is_set():
-            assert orders[0].symbol == "BTC"
+        if expire_during == "pretrade" and not injected and wire.started.is_set():
             # Cross the freshness boundary after refresh_markets, before shared-risk validation.
-            managed.guard.books["ETH"] = replace(
-                managed.guard.books["ETH"],
-                received_at=time.monotonic() - managed.guard.limits.stale_book_seconds - 1,
-            )
-            injected = True
+            expire_eth(managed.guard, orders)
         return await original_place(managed, orders)
 
+    def expire_before_revalidation(guard, orders, account, open_orders):
+        if expire_during == "revalidation" and not injected and wire.started.is_set():
+            # Cross it after pretrade passed and the intent latched, before the BTC dispatch.
+            expire_eth(guard, orders)
+        return original_revalidate(guard, orders, account, open_orders)
+
     monkeypatch.setattr(RiskManagedClient, "place_orders", expire_after_watchdog)
+    monkeypatch.setattr(RiskGuard, "revalidate_execution", expire_before_revalidation)
 
     def report(line):
         messages.append(line)
@@ -175,10 +186,10 @@ async def test_one_live_ws_stale_market_retires_other_keeps_quoting_and_recovers
         finally:
             feeder.cancel()
             await asyncio.gather(feeder, return_exceptions=True)
-    if expire_during_pretrade:
+    if expire_during:
         assert "LIVE BTC: quoting paused (stale ETH)" in messages
         assert "LIVE BTC: quoting resumed" in messages
-    assert injected == expire_during_pretrade
+    assert injected == bool(expire_during)
     assert wire.connections == 1 and recovered.is_set()
     assert len(wire.socket.subscriptions) == 6
     assert wire.ledger.info({"type": "openOrders", "user": OWNER}) == []

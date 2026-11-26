@@ -7,7 +7,7 @@ import hashlib
 import random
 import re
 import time
-from collections.abc import AsyncGenerator, Callable, Coroutine, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
 from contextlib import AsyncExitStack, suppress
 from dataclasses import replace
 from decimal import Decimal
@@ -18,6 +18,7 @@ from .alerts import notify_session
 from .client import (
     OneApiClient,
     OneApiError,
+    OneApiHTTPError,
     StreamDisconnected,
     SubscriptionDeferred,
     book_from_wire,
@@ -102,6 +103,36 @@ def _price_tick(book: Book, size_decimals: int) -> Decimal:
         raise RiskViolation("invalid_book")
     # Perpetual prices use at most five significant figures and 6-szDecimals places.
     return max(Decimal(1).scaleb(mid.adjusted() - 4), Decimal(1).scaleb(-max(0, 6 - size_decimals)))
+
+
+async def _wait_out_halt(
+    source: MarketClient,
+    stop: asyncio.Event,
+    report: Callable[[str], object],
+    max_halt: float,
+    work: Callable[[], Awaitable[_T]],
+) -> _T | None:
+    """Retry a startup read Glyde refuses while it reports its engine halted.
+
+    Bounded by the halt budget; any other failure, or a refusal while Glyde reports itself
+    ready, is raised at once. Returns None if stopped while waiting.
+    """
+    deadline, delay, reported = time.monotonic() + max_halt, RECONNECT_INITIAL_SECONDS, False
+    while True:
+        try:
+            return await work()
+        except OneApiHTTPError as error:
+            probe = getattr(source, "engine_ready", None)
+            ready = await probe() if probe is not None else None
+            halted = engine_unavailable(error) if ready is None else not ready
+            if not halted or time.monotonic() >= deadline:
+                raise
+            if not reported:
+                report("Glyde reports its engine halted; waiting for it before starting")
+                reported = True
+        if await _stopped_within(stop, delay):
+            return None
+        delay = min(delay * 2, RECONNECT_MAX_SECONDS)
 
 
 async def _resolve_cancel_latch(
@@ -294,11 +325,18 @@ async def _run_session(
         if config.mode == "live":
             if stop.is_set():
                 return
-            await _resolve_cancel_latch(source, guard, report)
-            # All selected markets must pass before cleanup gains cancellation authority.
-            await check_live_exposure(
-                source, config.symbols, allow_existing_exposure=allow_existing_exposure
-            )
+            max_halt = float(config.risk.max_engine_halt_seconds)
+
+            async def startup_reads() -> bool:
+                await _resolve_cancel_latch(source, guard, report)
+                # All selected markets must pass before cleanup gains cancellation authority.
+                await check_live_exposure(
+                    source, config.symbols, allow_existing_exposure=allow_existing_exposure
+                )
+                return True
+
+            if not await _wait_out_halt(source, stop, report, max_halt, startup_reads):
+                return
             if stop.is_set():
                 return
         paper = paper_factory(config.paper_balance) if config.mode == "paper" else None
@@ -355,8 +393,10 @@ async def _run_session(
         try:
             if stop.is_set():
                 return
-            metadata = await source.meta()
-            if stop.is_set():
+            metadata = await _wait_out_halt(
+                source, stop, report, float(config.risk.max_engine_halt_seconds), source.meta
+            )
+            if metadata is None or stop.is_set():
                 return
             precision = {}
             for symbol in selected:
@@ -435,7 +475,7 @@ async def _run_session(
                     # Reconcile: cancel what the fresh venue snapshot still shows before quoting.
                     for symbol in config.symbols:
                         await managed.cancel_all(symbol)
-                guard.update_account(await raw.account())
+                await managed.observe_account()
                 if stop.is_set():
                     return
                 for symbol, market_config in selected.items():
@@ -492,7 +532,7 @@ async def _run_session(
                     if symbol in paused:
                         # Reconcile as a reconnect does: retire what the venue still shows.
                         await managed.cancel_all(symbol)
-                        guard.update_account(await raw.account())
+                        await managed.observe_account()
                         policy = selected[symbol]
                         context = StrategyContext(
                             managed,
@@ -553,7 +593,7 @@ async def _run_session(
                             await paper.on_trade(trade)
                             await observe_paper()
                         await deliver_fills()
-                        guard.update_account(await raw.account())
+                        await managed.observe_account()
                         continue
                     if frame.get("channel") != "l2Book":
                         continue
@@ -598,7 +638,7 @@ async def _run_session(
                     if paper is not None and now - refreshed >= min(
                         2.0, limits.account_age_seconds / 2
                     ):
-                        guard.update_account(await raw.account())
+                        await managed.observe_account()
                         refreshed = now
                     async with market_lock:
                         await refresh_markets()
@@ -675,6 +715,11 @@ async def _run_session(
                     except TimeoutError:
                         # A late read (e.g. the owner cut after a cancel) pauses and reconnects.
                         dropped = dropped or StreamDisconnected("live read deadline passed")
+                    except OneApiError as error:
+                        # A transient One API read failure (5xx, 429) mid-run is a drop too.
+                        if not reconnectable(error):
+                            raise
+                        dropped = dropped or StreamDisconnected("transient One API failure")
                     else:
                         if not stop.is_set():
                             raise OneApiError("strategy task exited unexpectedly")
@@ -756,9 +801,12 @@ async def _run_session(
                 try:
                     books = await _unless_stopped(stop, open_streams())
                 except Exception as error:
-                    # A deferred subscription is retried even before the first quote.
+                    # A deferred subscription, or a start while Glyde reports its engine
+                    # halted, is retried even before the first quote.
                     if not reconnectable(error) or (
-                        first and not isinstance(error, SubscriptionDeferred)
+                        first
+                        and not isinstance(error, SubscriptionDeferred)
+                        and not await engine_halted(error)
                     ):
                         raise
                     attempt = f"connect {attempts + 1}" if first else f"reconnect {attempts}"
@@ -782,7 +830,11 @@ async def _run_session(
                     retryable = reconnectable(error) or (
                         not first and isinstance(error, StaleMarket) and guard.halted is None
                     )
-                    if not retryable or (first and not isinstance(error, SubscriptionDeferred)):
+                    if not retryable or (
+                        first
+                        and not isinstance(error, SubscriptionDeferred)
+                        and not await engine_halted(error)
+                    ):
                         raise
                     attempt = f"connect {attempts + 1}" if first else f"reconnect {attempts}"
                     report(

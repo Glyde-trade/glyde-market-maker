@@ -263,3 +263,19 @@ async def test_info_refusal_keeps_its_reason_code_and_trading_unavailable_is_cla
             OneApiClient._statuses(
                 {"status": "err", "response": "Glyde: trading is unavailable"}, 1
             )
+
+
+async def test_starting_during_a_halt_waits_for_glyde_instead_of_exiting(tmp_path):
+    """Production 26 Nov 2026: a restart during a halt ended at once with HTTP 503."""
+    wire, selected, lines = HaltingWire(), halting_config("1"), []
+    wire.halted = True
+    async with episode(wire, selected, tmp_path, report=lines.append) as (task, stop):
+        await run_until(task, lambda: wire.connections >= 2 or wire.changed.is_set(), seconds=3)
+        await asyncio.sleep(1.5)  # Past max_stale_pause_seconds, still halted.
+        assert not task.done(), "the bot exited instead of waiting out the halt"
+        assert not wire.orders()
+        wire.halted = False
+        await run_until(task, lambda: len(wire.orders()) == 4, seconds=8)
+        stop.set()
+        await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
+    assert not wire.orders()
