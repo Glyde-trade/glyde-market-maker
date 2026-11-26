@@ -967,6 +967,11 @@ class RiskManagedClient:
     async def open_orders(self) -> list[OpenOrder]:
         return await self.client.open_orders()
 
+    async def observe_account(self) -> None:
+        """Check the account between boundary actions; an in-flight intent is not an outcome."""
+        async with self._lock:
+            self.guard.update_account(await self.client.account())
+
     async def refresh_account(self) -> None:
         async with self._lock:
             self._ensure_running()

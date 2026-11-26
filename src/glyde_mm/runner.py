@@ -475,7 +475,7 @@ async def _run_session(
                     # Reconcile: cancel what the fresh venue snapshot still shows before quoting.
                     for symbol in config.symbols:
                         await managed.cancel_all(symbol)
-                guard.update_account(await raw.account())
+                await managed.observe_account()
                 if stop.is_set():
                     return
                 for symbol, market_config in selected.items():
@@ -532,7 +532,7 @@ async def _run_session(
                     if symbol in paused:
                         # Reconcile as a reconnect does: retire what the venue still shows.
                         await managed.cancel_all(symbol)
-                        guard.update_account(await raw.account())
+                        await managed.observe_account()
                         policy = selected[symbol]
                         context = StrategyContext(
                             managed,
@@ -593,7 +593,7 @@ async def _run_session(
                             await paper.on_trade(trade)
                             await observe_paper()
                         await deliver_fills()
-                        guard.update_account(await raw.account())
+                        await managed.observe_account()
                         continue
                     if frame.get("channel") != "l2Book":
                         continue
@@ -638,7 +638,7 @@ async def _run_session(
                     if paper is not None and now - refreshed >= min(
                         2.0, limits.account_age_seconds / 2
                     ):
-                        guard.update_account(await raw.account())
+                        await managed.observe_account()
                         refreshed = now
                     async with market_lock:
                         await refresh_markets()

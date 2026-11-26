@@ -4,6 +4,10 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 ## [Unreleased]
 
+- A routine account check no longer ends a run with `order_outcome_unknown` or
+  `cancel_outcome_unknown` while an order or cancel is still being written. The check now
+  waits for the in-flight action to finish instead of mistaking its durable intent record
+  for an unresolved outcome. This intermittently stopped paper runs after a few seconds.
 - A peer market's book expiring between pretrade validation and dispatch no longer ends a
   multi-market run with `cancel_outcome_unknown`. Nothing was sent to Glyde, so the orders are
   released and refused exactly as a pretrade refusal is, and the stale market is retired alone.
