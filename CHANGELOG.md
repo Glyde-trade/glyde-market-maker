@@ -4,6 +4,12 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 ## [Unreleased]
 
+- A peer market's book expiring between pretrade validation and dispatch no longer ends a
+  multi-market run with `cancel_outcome_unknown`. Nothing was sent to Glyde, so the orders are
+  released and refused exactly as a pretrade refusal is, and the stale market is retired alone.
+- Shutdown no longer reports a clean stop when the final venue sweep could not read Glyde.
+  The reconnect-time deferral of a transient sweep failure does not apply at close, where no
+  next connection repeats the sweep; it stops with `cancel_outcome_unknown` instead.
 - More than 8 levels per side now runs on Glyde. Glyde refuses an order, cancel or modify
   action with more than 16 entries, so 10+ levels (20+ quotes) ended ~30s after start with
   `RiskViolation: cancel_outcome_unknown` and no quote placed. Batches are now split into
