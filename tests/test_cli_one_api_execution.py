@@ -45,6 +45,7 @@ def exercise_cli(
     existing_order=False,
     understand=False,
     paper_fill_sides=("buy",),
+    levels=1,
 ):
     sequenced = SequencedFake(read_credential="synthetic-read-credential")
     fake = sequenced.ledger
@@ -95,8 +96,13 @@ def exercise_cli(
                     "bid_spread": "0.002",
                     "ask_spread": "0.002",
                     "order_amount": "0.1",
+                    "order_levels": levels,
                 },
-                "risk": {"max_position": "1", "max_order_notional": "25", **(risk or {})},
+                "risk": {
+                    "max_position": str(levels),
+                    "max_order_notional": "25",
+                    **(risk or {}),
+                },
             }
         )
     )
@@ -159,10 +165,10 @@ def exercise_cli(
                 if request.url.path.endswith("/exchange"):
                     sequenced.emit_owner()
                 if request.url.path.endswith("/exchange") and body["action"]["type"] == "order":
-                    assert len(fake.info({"type": "openOrders", "user": OWNER})) == 2 + int(
-                        existing_order
-                    )
-                    stop_event.set()
+                    resting = len(fake.info({"type": "openOrders", "user": OWNER}))
+                    assert resting <= 2 * levels + int(existing_order)
+                    if resting == 2 * levels + int(existing_order):
+                        stop_event.set()
                 return response
 
             async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
@@ -173,7 +179,7 @@ def exercise_cli(
                 ) as client:
                     yield client
 
-        async with asyncio.timeout(3):
+        async with asyncio.timeout(3 + levels):
             await run(
                 config,
                 state_directory=state_directory,
@@ -229,6 +235,18 @@ def test_paper_cli_both_quotes_fill_through_public_tape_without_keys(monkeypatch
     assert asyncio.run(paper.open_orders()) == []
     assert any("PAPER SUMMARY" in row and "fills=2 | open_quotes=0" in row for row in reports)
     assert all(row["body"]["type"] == "meta" for row in fake.requests)
+    assert fake.info({"type": "openOrders", "user": OWNER}) == []
+
+
+@pytest.mark.parametrize("levels", [8, 10, 20])
+def test_live_cli_quotes_more_levels_than_one_glyde_action_holds(monkeypatch, tmp_path, levels):
+    result, fake, actions, reports, _ = exercise_cli(
+        monkeypatch, tmp_path, command="run", levels=levels
+    )
+    assert result == 0, reports
+    placed = [row["action"]["orders"] for row in actions if row["action"]["type"] == "order"]
+    assert all(1 <= len(batch) <= 16 for batch in placed)
+    assert sum(len(batch) for batch in placed) == 2 * levels
     assert fake.info({"type": "openOrders", "user": OWNER}) == []
 
 

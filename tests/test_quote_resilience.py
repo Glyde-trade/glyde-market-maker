@@ -141,33 +141,27 @@ async def episode(wire, selected, directory, **options):
                 await asyncio.gather(task, return_exceptions=True)
 
 
-async def test_gap_cancels_once_and_restart_uses_fresh_baseline(tmp_path):
-    wire, selected = ResilienceWire(), config()
-    async with episode(wire, selected, tmp_path) as (task, _):
+async def test_gap_cancels_once_and_reconnects_from_a_fresh_baseline(tmp_path):
+    """A sequencing gap (e.g. Glyde's engine restarting on a new epoch) retires quotes and
+    resubscribes, like a socket drop; it no longer ends the run (26 Nov 2026)."""
+    wire, selected, lines = FreshWire(), config(), []
+    async with episode(wire, selected, tmp_path, report=lines.append) as (task, stop):
         await until(wire, lambda: len(wire.orders()) == 4)
         originals = set(wire.orders())
         start = time.monotonic()
         wire.emit_owner(skip=1)
-        await until(wire, lambda: not wire.orders())
+        await until(wire, lambda: not set(wire.orders()) & originals)
         assert time.monotonic() - start < CANCEL_BOUND_SECONDS
-        with pytest.raises(Exception, match="disconnected|stream"):
-            await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
-    wire.assert_no_duplicate_cancels()
-    # Confirmed cancellation is not an unknown result merely because the read WS is gone.
-    state = json.loads(risk_state_path(selected, tmp_path).read_text())
-    assert state["execution"] is None
-    attempts = len(state["order_attempts"])
-    wire.ledger.now_ms = time.time_ns() // 1_000_000
-    async with episode(wire, selected, tmp_path) as (task, stop):
-        await until(wire, lambda: len(wire.orders()) == 4)
-        assert set(wire.orders()).isdisjoint(originals)
-        assert not task.done() and wire.connections == 2
+        await until(wire, lambda: len(wire.orders()) == 4 and wire.connections == 2)
+        assert set(wire.orders()).isdisjoint(originals) and not task.done()
+        wire.assert_no_duplicate_cancels()
         stop.set()
         await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
     assert not wire.orders()
     wire.assert_no_duplicate_cancels()
-    restarted = json.loads(risk_state_path(selected, tmp_path).read_text())
-    assert len(restarted["order_attempts"]) > attempts  # Rate fence wasn't reset for restart.
+    # Confirmed cancellation is not an unknown result merely because the read WS gapped.
+    assert json.loads(risk_state_path(selected, tmp_path).read_text())["execution"] is None
+    assert any("stream disconnected" in line and "reconnecting" in line for line in lines)
 
 
 class FreshWire(ResilienceWire):

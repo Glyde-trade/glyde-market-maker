@@ -11,7 +11,7 @@ import pytest
 from live_wire import batch, owner_roots
 from market_receipt import approved_market
 
-from glyde_mm.client import OneApiError, account_from_wire
+from glyde_mm.client import OneApiError, StreamDisconnected, account_from_wire
 from glyde_mm.config import Config
 from glyde_mm.live_state import LiveStateClient
 from glyde_mm.metrics import Metrics
@@ -179,6 +179,9 @@ def test_real_cache_gap_is_counted_once_and_does_not_restore_authority():
     with pytest.raises(OneApiError):
         cache.consume(frames[0])
     assert value(metrics, "gaps_total") == "1"
+    # A gap is repaired by a fresh snapshot: the runner retires quotes and resubscribes.
+    with pytest.raises(StreamDisconnected, match="continuity gap"):
+        cache.check()
 
 
 async def test_enabled_runner_owns_endpoint_and_records_actual_paper_fills(monkeypatch, tmp_path):

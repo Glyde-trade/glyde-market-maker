@@ -13,7 +13,13 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .client import StreamDisconnected, engine_unavailable, reconnectable
+from .client import (
+    ActionRefused,
+    EngineUnavailable,
+    StreamDisconnected,
+    engine_unavailable,
+    reconnectable,
+)
 from .config import RiskConfig
 from .live_state import terminal_order_status
 from .models import CancelRequest, CancelResult, bot_client_order_id, is_bot_order
@@ -814,6 +820,7 @@ class RiskManagedClient:
                 except Exception as cleanup_error:
                     raise error from cleanup_error
                 raise
+            refused = False
             try:
                 owned = self.guard.begin_execution("order_outcome_unknown", prepared)
                 await self.guard.flush_state()
@@ -828,7 +835,18 @@ class RiskManagedClient:
                     for order in prepared:
                         self.guard.check_fresh(order.symbol)
                 self.guard.refresh_order_rate(len(prepared))
-                results = await self.client.place_orders(prepared)
+                try:
+                    results = await self.client.place_orders(prepared)
+                except ActionRefused:
+                    # Glyde refused the whole action: nothing was placed, so there is no
+                    # unknown outcome to reconcile and none of these orders to cancel.
+                    for order in prepared:
+                        self.guard.pending.pop(order.client_order_id or "", None)
+                    self.guard.finish_execution(owned)
+                    refused = True
+                    if self.metrics:
+                        self.metrics.refused("venue_refused", len(prepared))
+                    raise
                 self.guard.refresh_order_rate(len(prepared))
                 if len(results) != len(prepared) or any(
                     r.status not in ("resting", "filled", "rejected") for r in results
@@ -857,10 +875,18 @@ class RiskManagedClient:
                     )
                 return results
             except BaseException as error:
+                if refused and isinstance(error, EngineUnavailable):
+                    # Retire quotes and wait the halt out exactly as a stream drop does.
+                    raise StreamDisconnected("exchange refused orders: engine unavailable") from (
+                        error
+                    )
+                reason = "order_refused" if refused else "order_outcome_unknown"
                 try:
-                    await self._cancel_and_halt("order_outcome_unknown")
+                    await self._cancel_and_halt(reason)
                 except Exception as cleanup_error:
                     raise error from cleanup_error
+                if refused:
+                    raise RiskViolation(reason) from error
                 raise
 
     async def cancel_orders(self, orders: Sequence[CancelRequest]) -> list[CancelResult]:

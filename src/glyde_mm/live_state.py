@@ -61,6 +61,16 @@ def counter(value: object) -> int:
     return int(value)
 
 
+# Stream sequencing faults that a fresh snapshot repairs; every other stream fault is fatal.
+RESNAPSHOT_FAULTS = frozenset(
+    {
+        "live stream requires resnapshot",
+        "live stream continuity gap",
+        "live stream baseline or predecessor missing",
+    }
+)
+
+
 class LiveStateClient:
     def __init__(
         self, source: MarketClient, config: Config, *, metrics: Metrics | None = None
@@ -326,7 +336,12 @@ class LiveStateClient:
                 and str(error) == "live stream continuity gap"
             ):
                 self.metrics.count("gaps")
-            self.invalidate("live stream invalid, gapped or disconnected")
+            if type(error) is OneApiError and str(error) in RESNAPSHOT_FAULTS:
+                # Sequencing breaks (an engine restart opens a new epoch) cost no evidence a
+                # fresh snapshot lacks: retire quotes and resubscribe, as on a socket drop.
+                self.invalidate(str(error), disconnected=True)
+            else:
+                self.invalidate("live stream invalid, gapped or disconnected")
             raise
 
     def _consume(self, frame: JsonObject) -> None:
@@ -367,7 +382,8 @@ class LiveStateClient:
             or publication.get("unsafeState") is not False
             or publication.get("authorityAvailable") is not True
         ):
-            raise OneApiError("unsafe live publication")
+            # Glyde flags its own publication unsafe while the engine is halted or degraded.
+            raise SubscriptionDeferred("ENGINE_NOT_READY", ENGINE_HALT_RETRY_SECONDS)
         batch = meta["batch"]
         declarations = batch["parts"]
         if (

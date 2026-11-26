@@ -87,8 +87,8 @@ bound per-order notional, gross `max_total_notional`, daily equity loss and orde
 
 A stale **flat** market cancels its quotes while fresh peers can keep quoting. A fresh book
 restarts that market's strategy, including volatility warm-up. A stale nonflat position can
-block other quotes that need its valuation. A private stream gap/disconnect or ambiguous
-cancel stops the shared session. Confirmed original IDs are not cancelled twice; restart
+block other quotes that need its valuation. A private stream gap or disconnect retires quotes
+and reconnects from a fresh snapshot; an ambiguous cancel stops the shared session. Confirmed original IDs are not cancelled twice; restart
 needs fresh complete snapshots and preserved risk state. Offline tests prove responsive
 simulated cancellation within two seconds, not a production SLA or hard-kill cleanup.
 
