@@ -259,7 +259,8 @@ async def test_fill_duplicates_do_not_fire_twice_but_changed_identity_refuses():
         "mm-owner", owner_roots(OWNER, fills=[fill()]), owner=OWNER, sequence=3, previous=2
     ):
         state.consume(frame)
-    assert sum(len(row["fills"]) for row in list(state._events._queue)) == 1
+    queued = [state._deliver(state._events.get_nowait()) for _ in range(state._events.qsize())]
+    assert sum(len(row["fills"]) for row in queued) == 1
     with pytest.raises(OneApiError):
         for frame in batch(
             "mm-owner",
@@ -335,16 +336,18 @@ async def test_incomplete_batch_deadline_blocks_without_more_network_data():
         state.consume(frames[1])
 
 
-async def test_bounded_delivery_queue_refuses_instead_of_dropping_fill_updates():
+async def test_bounded_delivery_queue_coalesces_fill_updates_instead_of_dropping_them():
     state = LiveStateClient(None, config())
     seed(state)
-    with pytest.raises(OneApiError, match="overflow"):
-        for i in range(2, 35):
-            roots = owner_roots(OWNER, fills=[fill(tid=i)])
-            for frame in batch("mm-owner", roots, owner=OWNER, sequence=i, previous=i - 1):
-                state.consume(frame)
-    with pytest.raises(OneApiError):
-        await state.account()
+    for i in range(2, 35):
+        roots = owner_roots(OWNER, fills=[fill(tid=i)])
+        for frame in batch("mm-owner", roots, owner=OWNER, sequence=i, previous=i - 1):
+            state.consume(frame)
+    queued = [state._deliver(state._events.get_nowait()) for _ in range(state._events.qsize())]
+    owner = [frame for frame in queued if frame["channel"] == "mmOwner"]
+    assert len(owner) == 1
+    assert [f.trade_id for f in owner[0]["fills"]] == [str(i) for i in range(2, 35)]
+    assert (await state.account()).equity == D(1000)
 
 
 async def test_cancel_ack_waits_for_push_before_reusing_account_and_orders(monkeypatch):

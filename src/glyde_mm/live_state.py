@@ -39,6 +39,8 @@ OWNER_CHANNELS = ("clearinghouseState", "openOrders", "orderUpdates", "userFills
 # internalCancel; anything outside these families still fails closed.
 LIVE_ORDER_STATUSES = frozenset({"open", "triggered", "pending"})
 ENGINE_HALT_RETRY_SECONDS = 5.0
+# Fills a stalled consumer may owe the strategy before the run fails closed.
+MAX_UNDELIVERED_FILLS = 4096
 TERMINAL_ORDER_STATUSES = frozenset({"filled", "canceled", "rejected", "expired"})
 
 
@@ -84,6 +86,9 @@ class LiveStateClient:
         self._pending: dict[str, tuple[JsonObject, list[JsonObject], float]] = {}
         self._failure: OneApiError | None = None
         self._events: asyncio.Queue[JsonObject | None] = asyncio.Queue(32)
+        # Owner cuts coalesce into one queued event carrying every fill not yet delivered.
+        self._fills: list[Fill] = []
+        self._owner_queued = False
         self._changed = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._seen_fills: dict[tuple[str, str], JsonObject] = {}
@@ -130,14 +135,21 @@ class LiveStateClient:
             self._events.put_nowait(None)
 
     def _emit(self, frame: JsonObject) -> None:
-        if self._events.full():
-            # Books are full snapshots and empty owner cuts are already applied to account
-            # state, so a busy consumer may skip them; fills must never be dropped.
-            if frame.get("channel") == "l2Book" or (
-                frame.get("channel") == "mmOwner" and not frame.get("fills")
-            ):
+        if frame.get("channel") == "mmOwner":
+            # Account state is already applied; the consumer needs only the undelivered fills.
+            self._fills.extend(frame["fills"])
+            if len(self._fills) > MAX_UNDELIVERED_FILLS:
+                raise OneApiError("live fill backlog exceeded")
+            if self._owner_queued:
                 return
-            raise OneApiError("live stream consumer overflow")
+            self._owner_queued = True
+        if self._events.full():
+            # Books are full snapshots, so a busy consumer may skip them. An owner cut evicts
+            # the oldest queued book instead: a requote stalling the consumer must not end the
+            # run when a fill lands (27 Nov 2026).
+            if frame.get("channel") == "l2Book":
+                return
+            self._events.get_nowait()
         self._events.put_nowait(frame)
 
     def check(self) -> None:
@@ -296,7 +308,14 @@ class LiveStateClient:
             self.check()
             if frame is None:
                 raise OneApiError("live stream disconnected")
-            yield frame
+            yield self._deliver(frame)
+
+    def _deliver(self, frame: JsonObject) -> JsonObject:
+        """A dequeued owner cut hands over every fill queued since the last one."""
+        if frame.get("channel") != "mmOwner":
+            return frame
+        fills, self._fills, self._owner_queued = self._fills, [], False
+        return {"channel": "mmOwner", "fills": fills}
 
     async def close(self) -> None:
         self.invalidate("live stream closed")
