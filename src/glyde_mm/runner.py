@@ -28,7 +28,7 @@ from .client import (
 )
 from .config import Config
 from .dashboard import SnapshotPublisher
-from .live_state import LiveStateClient
+from .live_state import LiveStateClient, StreamFault
 from .market_preflight import require_preflight
 from .metrics import Metrics
 from .models import Book, CancelRequest
@@ -66,6 +66,9 @@ def _failure_label(error: BaseException) -> str:
     # reasonCode is a sanitized constant; raw frames are never logged.
     if isinstance(error, SubscriptionDeferred):
         return f"{error.reason_code}, retry after {error.retry_after:g}s"
+    if isinstance(error, OneApiError):
+        # One API errors carry sanitized, credential-free messages by contract.
+        return f"{type(error).__name__}: {error}"
     return type(error).__name__
 
 
@@ -243,6 +246,8 @@ async def run(
             if paper_result is not None:
                 paper_result.outcome = outcome
             observer.finish(outcome)
+            if isinstance(failure, StreamFault):
+                journal.emit("stream_fault", **failure.fields())
             journal.emit("run_ended", outcome=outcome)
             await notify_session(
                 config, journal.run_id, outcome, failure, report=report, risk_reasons=risk_reasons
@@ -866,6 +871,8 @@ async def _run_session(
                     return
                 dropped_at = time.monotonic()
                 journal.emit("disconnected")
+                if isinstance(dropped, StreamFault):
+                    journal.emit("stream_fault", **dropped.fields())
                 await retire(dropped)
                 failing_since = time.monotonic()  # A sweep waiting out a halt is not counted.
                 retry_after = _retry_floor(dropped)
