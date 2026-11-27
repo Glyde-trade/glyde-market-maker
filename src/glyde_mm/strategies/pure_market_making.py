@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from time import monotonic
 
+from glyde_mm.client import RateLimited
 from glyde_mm.models import (
     Account,
     Book,
@@ -56,6 +57,9 @@ class StrategyContext:
         require_decimal(self.min_notional, "min_notional")
 
 
+RATE_BACKOFF_SECONDS = 30.0
+
+
 @dataclass(frozen=True)
 class PureMarketMakingConfig:
     """Spread fractions: 0.01 means 1%; amounts and target inventory are base units."""
@@ -84,6 +88,11 @@ class PureMarketMakingConfig:
     reference_skew_bps: Decimal = ZERO
     max_reference_deviation_bps: Decimal = Decimal("50")
     reference_stale_seconds: Decimal = Decimal("3")
+    # replace_all cancels and re-places every quote on refresh; changed_levels keeps quotes still
+    # within the refresh tolerance (exact price when unset) and replaces only the rest.
+    quote_refresh: str = "replace_all"
+    # Cap on order entries placed plus cancelled per rolling minute by refreshes; None is no cap.
+    max_quote_actions_per_minute: int | None = None
 
     def __post_init__(self) -> None:
         validate_refresh_settings(self.refresh_tolerance_pct, self.max_order_age)
@@ -102,6 +111,11 @@ class PureMarketMakingConfig:
                 raise ValueError(
                     "base ratio must be in 0..1 and cannot combine with position target"
                 )
+        if self.quote_refresh not in {"replace_all", "changed_levels"}:
+            raise ValueError("quote_refresh must be replace_all or changed_levels")
+        cap = self.max_quote_actions_per_minute
+        if cap is not None and (type(cap) is not int or not 1 <= cap <= 6000):
+            raise ValueError("max_quote_actions_per_minute must be an integer in 1..6000")
         if self.reference_source not in {"glyde", "hyperliquid"}:
             raise ValueError("reference_source must be glyde or hyperliquid")
         require_decimal(self.reference_skew_bps, "reference_skew_bps", minimum=Decimal("-1000"))
@@ -262,6 +276,10 @@ class PureMarketMakingStrategy:
         self._ping_fills: set[tuple[str, str]] = set()
         self._needs_refresh = False
         self._quote_after = 0.0
+        self._placed_at: dict[str, float] = {}
+        self._action_times: list[float] = []
+        self._throttled_until = 0.0
+        self._rate_backoff = 0.0
         self._lock = asyncio.Lock()
 
     def _quote_mid(self, book: Book) -> Decimal | None:
@@ -371,16 +389,18 @@ class PureMarketMakingStrategy:
         mid = self._quote_mid(book)
         if mid is None:
             return True
-        for order in self._active.values():
-            spread = (mid - order.price if order.side == "buy" else order.price - mid) / mid
-            if spread < self.config.minimum_spread:
+        return any(self._order_must_go(order, mid) for order in self._active.values())
+
+    def _order_must_go(self, order: OrderRequest, mid: Decimal) -> bool:
+        spread = (mid - order.price if order.side == "buy" else order.price - mid) / mid
+        if spread < self.config.minimum_spread:
+            return True
+        if order.side == "buy" and self.config.price_ceiling is not None:
+            if mid >= self.config.price_ceiling:
                 return True
-            if order.side == "buy" and self.config.price_ceiling is not None:
-                if mid >= self.config.price_ceiling:
-                    return True
-            if order.side == "sell" and self.config.price_floor is not None:
-                if mid <= self.config.price_floor:
-                    return True
+        if order.side == "sell" and self.config.price_floor is not None:
+            if mid <= self.config.price_floor:
+                return True
         return False
 
     def _age_expired(self, now: float) -> bool:
@@ -410,11 +430,15 @@ class PureMarketMakingStrategy:
         return True
 
     async def _cancel_active(self) -> None:
-        requests = [
-            CancelRequest(self.context.symbol, order_id=oid) for oid, order in self._active.items()
-        ]
+        await self._cancel(list(self._active))
+        self._ping_fills.clear()
+        self._active_since = None
+
+    async def _cancel(self, order_ids: list[str]) -> None:
+        requests = [CancelRequest(self.context.symbol, order_id=oid) for oid in order_ids]
         if not requests:
             return
+        self._record_actions(len(requests))
         results = await self.context.client.cancel_orders(requests)
         if len(results) != len(requests):
             raise RuntimeError("cancellation outcome unavailable")
@@ -429,9 +453,24 @@ class PureMarketMakingStrategy:
                 self._active[request.order_id].client_order_id,
             ):
                 raise RuntimeError("cancellation identity mismatch")
-        self._active.clear()
-        self._ping_fills.clear()
-        self._active_since = None
+        for oid in order_ids:
+            self._active.pop(oid, None)
+            self._placed_at.pop(oid, None)
+
+    def _record_actions(self, count: int) -> None:
+        self._action_times.extend([self.context.clock()] * count)
+
+    def _action_budget(self) -> float:
+        """Order entries this refresh may still send under max_quote_actions_per_minute."""
+        cap = self.config.max_quote_actions_per_minute
+        now = self.context.clock()
+        self._action_times = [t for t in self._action_times if now - t < 60]
+        return math.inf if cap is None else cap - len(self._action_times)
+
+    def _throttle(self, error: RateLimited) -> None:
+        """Back off after a rate or budget refusal, keeping resting quotes as they are."""
+        self._rate_backoff = min(max(self._rate_backoff * 2, RATE_BACKOFF_SECONDS), 300.0)
+        self._throttled_until = self.context.clock() + max(self._rate_backoff, error.retry_after)
 
     async def on_tick(self, now: float | None = None) -> None:
         async with self._lock:
@@ -468,8 +507,16 @@ class PureMarketMakingStrategy:
             ):
                 return
             try:
+                if self.context.clock() < self._throttled_until:
+                    return
                 if self.context.clock() < self._quote_after:
                     await self._cancel_active()
+                    return
+                if self.config.quote_refresh == "changed_levels":
+                    await self._refresh_changed_levels(now)
+                    return
+                if self._action_budget() < len(self._active):
+                    self._wait_for_action_budget()
                     return
                 if (
                     book is not None
@@ -508,53 +555,113 @@ class PureMarketMakingStrategy:
                 if book is None:
                     return
                 generation = self._fill_generation
-                orders = [
-                    OrderRequest(
-                        order.symbol,
-                        order.side,
-                        order.quantity,
-                        order.price,
-                        client_order_id=bot_client_order_id(),
-                        time_in_force="Alo",
-                    )
-                    for order in self.quotes(book, account)
-                ]
-                if not orders:
-                    self._last_refresh = now
-                    self._needs_refresh = False
-                    return
-                results = await self.context.client.place_orders(orders)
-                if len(results) != len(orders):
-                    raise RuntimeError("order outcome unavailable")
-                immediate_fill = False
-                for order, result in zip(orders, results, strict=True):
-                    if result.client_order_id not in (None, order.client_order_id):
-                        raise RuntimeError("order identity mismatch")
-                    if result.status == "resting" and result.order_id:
-                        if result.order_id in self._active:
-                            raise RuntimeError("duplicate resting order identity")
-                        self._active[result.order_id] = order
-                    elif result.status == "filled":
-                        if self.config.ping_pong_enabled:
-                            raise RiskViolation("ping_pong_fill_evidence")
-                        immediate_fill = True
-                        if self.config.filled_order_delay > 0:
-                            self._quote_after = (
-                                self.context.clock() + self.config.filled_order_delay
-                            )
-                    elif result.status != "rejected":
-                        raise RuntimeError("order outcome unknown")
-                self._active_since = now if self._active else None
-                self._last_refresh = now
-                self._needs_refresh = immediate_fill or generation != self._fill_generation
+                targets = list(self.quotes(book, account))
+                budget = max(int(min(self._action_budget(), len(targets))), 0)
+                await self._place(targets[:budget], now, generation)
+            except RateLimited as error:
+                self._throttle(error)
             except BaseException:
                 self.blocked = True
                 raise
+
+    async def _refresh_changed_levels(self, now: float) -> None:
+        """Keep quotes still close to their target level; cancel and place only the rest."""
+        account = await self.context.client.account()
+        if self.blocked:
+            return
+        book = self.book
+        if book is None:
+            return
+        mid = self._quote_mid(book)
+        assert mid is not None
+        generation = self._fill_generation
+        wanted = list(self.quotes(book, account))
+        tolerance = self.config.price_refresh_tolerance
+        stale = []
+        for oid, order in self._active.items():
+            match = None
+            age = now - self._placed_at.get(oid, now)
+            if age < self.config.max_order_age and not self._order_must_go(order, mid):
+                match = next(
+                    (
+                        target
+                        for target in wanted
+                        if (target.side, target.quantity) == (order.side, order.quantity)
+                        and (
+                            target.price == order.price
+                            if tolerance is None
+                            else abs(target.price - order.price) * 100 <= order.price * tolerance
+                        )
+                    ),
+                    None,
+                )
+            if match is None:
+                stale.append(oid)
+            else:
+                wanted.remove(match)
+        budget = self._action_budget()
+        if len(stale) > budget:
+            # Cancels come first; place nothing until every moved quote is gone.
+            await self._cancel(stale[: max(int(budget), 0)])
+            self._wait_for_action_budget()
+            return
+        await self._cancel(stale)
+        if self.blocked:
+            return
+        await self._place(
+            wanted[: max(int(min(self._action_budget(), len(wanted))), 0)], now, generation
+        )
+
+    def _wait_for_action_budget(self) -> None:
+        if self._action_times:
+            self._throttled_until = max(self._throttled_until, self._action_times[0] + 60)
+
+    async def _place(self, targets: list[OrderRequest], now: float, generation: int) -> None:
+        orders = [
+            OrderRequest(
+                order.symbol,
+                order.side,
+                order.quantity,
+                order.price,
+                client_order_id=bot_client_order_id(),
+                time_in_force="Alo",
+            )
+            for order in targets
+        ]
+        if orders:
+            self._record_actions(len(orders))
+            results = await self.context.client.place_orders(orders)
+            if len(results) != len(orders):
+                raise RuntimeError("order outcome unavailable")
+        else:
+            results = []
+        immediate_fill = False
+        for order, result in zip(orders, results, strict=True):
+            if result.client_order_id not in (None, order.client_order_id):
+                raise RuntimeError("order identity mismatch")
+            if result.status == "resting" and result.order_id:
+                if result.order_id in self._active:
+                    raise RuntimeError("duplicate resting order identity")
+                self._active[result.order_id] = order
+                self._placed_at[result.order_id] = now
+            elif result.status == "filled":
+                if self.config.ping_pong_enabled:
+                    raise RiskViolation("ping_pong_fill_evidence")
+                immediate_fill = True
+                if self.config.filled_order_delay > 0:
+                    self._quote_after = self.context.clock() + self.config.filled_order_delay
+            elif result.status != "rejected":
+                raise RuntimeError("order outcome unknown")
+        self._active_since = min(self._placed_at.values(), default=None)
+        self._last_refresh = now
+        self._needs_refresh = immediate_fill or generation != self._fill_generation
+        self._rate_backoff = 0.0
 
     async def stop(self) -> None:
         self.blocked = True
         async with self._lock:
             await self.context.client.cancel_all(self.context.symbol)
             self._active.clear()
+            self._placed_at.clear()
             self._ping_fills.clear()
             self._active_since = None

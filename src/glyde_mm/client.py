@@ -62,6 +62,14 @@ class ActionRefused(OneApiError):
     """Glyde refused a whole signed action (``status: err``): none of its entries took effect."""
 
 
+class RateLimited(ActionRefused):
+    """Glyde refused an action for request rate or venue budget: nothing took effect; back off."""
+
+    def __init__(self, message: str, retry_after: float = 0.0) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 class EngineUnavailable(ActionRefused):
     """Glyde refused an exchange action because its engine is halted or not ready."""
 
@@ -119,6 +127,8 @@ ENGINE_UNAVAILABLE_REASONS = frozenset(
     }
 )
 _ENGINE_UNAVAILABLE_TEXT = "trading is unavailable"
+_RATE_LIMITED_TEXT = re.compile(r"rate.?limit|too many requests|budget", re.IGNORECASE)
+RATE_LIMIT_RETRY_MAX_SECONDS = 300.0
 _REFUSAL_TEXT = re.compile(r"[A-Za-z][A-Za-z0-9 ,.:;'()/_-]{0,199}")
 _RESUBSCRIBE_TEXT = {
     "Glyde: resnapshot required": "RESNAPSHOT_REQUIRED",
@@ -428,6 +438,18 @@ class OneApiClient:
                     self.public_clock = sent_at, time.time(), date.timestamp()
             except (KeyError, ValueError, TypeError, OverflowError, OSError):
                 pass
+        if response.status_code == 429 and action:
+            # A 429 is answered before the action is processed: a definite refusal.
+            try:
+                retry_after = float(response.headers.get("Retry-After") or 0)
+            except ValueError:
+                retry_after = 0.0
+            if not math.isfinite(retry_after):
+                retry_after = 0.0
+            raise RateLimited(
+                "exchange refused the action: rate limited",
+                min(max(retry_after, 0.0), RATE_LIMIT_RETRY_MAX_SECONDS),
+            )
         if response.status_code >= 500 and action:
             raise OutcomeUnknown("exchange outcome unknown; reconcile the original request")
         if response.status_code == 503:
@@ -600,6 +622,8 @@ class OneApiClient:
             refusal = result.get("response")
             if isinstance(refusal, str) and _ENGINE_UNAVAILABLE_TEXT in refusal.lower():
                 raise EngineUnavailable("exchange refused the action: engine unavailable")
+            if isinstance(refusal, str) and _RATE_LIMITED_TEXT.search(refusal):
+                raise RateLimited(f"exchange refused the action{refusal_text(refusal)}")
             # Glyde's refusal texts are short constants; anything else stays generic.
             raise ActionRefused(f"exchange refused the action{refusal_text(refusal)}")
         try:
@@ -672,31 +696,38 @@ class OneApiClient:
         )
 
     async def cancel_orders(self, orders: Sequence[CancelRequest]) -> list[CancelResult]:
-        # Different cancel wire types require separate signed actions.
-        results: list[CancelResult] = []
-        for request in orders:
+        # One signed action per wire type and MAX_ACTION_ENTRIES chunk, not one per order:
+        # every action costs Glyde a venue request.
+        by_id: list[tuple[int, dict[str, Any]]] = []
+        by_cloid: list[tuple[int, dict[str, Any]]] = []
+        for index, request in enumerate(orders):
             if (request.order_id is None) == (request.client_order_id is None):
                 raise ValueError("cancel requires exactly one order_id or client_order_id")
             asset, _ = await self._asset(request.symbol)
             if request.order_id is not None:
-                action = {"type": "cancel", "cancels": [{"a": asset, "o": int(request.order_id)}]}
+                by_id.append((index, {"a": asset, "o": int(request.order_id)}))
             else:
                 if not re.fullmatch(r"0x[0-9a-fA-F]{32}", request.client_order_id or ""):
                     raise ValueError("invalid cancel client_order_id")
-                action = {
-                    "type": "cancelByCloid",
-                    "cancels": [{"asset": asset, "cloid": request.client_order_id}],
-                }
-            status = self._statuses(await self.exchange(action), 1)[0]
-            results.append(
-                CancelResult(
-                    "cancelled" if status == "success" else "rejected",
-                    request.order_id,
-                    request.client_order_id,
-                    None if status == "success" else "cancel refused",
-                )
+                by_cloid.append((index, {"asset": asset, "cloid": request.client_order_id}))
+        statuses: dict[int, Any] = {}
+        for kind, rows in (("cancel", by_id), ("cancelByCloid", by_cloid)):
+            for start in range(0, len(rows), MAX_ACTION_ENTRIES):
+                part = rows[start : start + MAX_ACTION_ENTRIES]
+                action = {"type": kind, "cancels": [wire for _, wire in part]}
+                for (index, _), status in zip(
+                    part, self._statuses(await self.exchange(action), len(part)), strict=True
+                ):
+                    statuses[index] = status
+        return [
+            CancelResult(
+                "cancelled" if statuses[index] == "success" else "rejected",
+                request.order_id,
+                request.client_order_id,
+                None if statuses[index] == "success" else "cancel refused",
             )
-        return results
+            for index, request in enumerate(orders)
+        ]
 
     async def cancel_all(self, symbol: str | None = None) -> None:
         """Cancel the bot's tagged orders; the account's other orders are left resting."""

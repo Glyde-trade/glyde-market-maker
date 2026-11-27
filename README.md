@@ -796,6 +796,11 @@ only identity mismatches and refusals without a retry hint stop the run. With
 cancelled once it outlasts that bound. A live start cancels the bot's own tagged orders left by a
 killed run. Under systemd with `WatchdogSec=` and `NotifyAccess=main`, the bot pings the watchdog
 every 5 seconds while its event loop runs, so a wedged process is killed and restarted.
+An HTTP 429 or a rate/budget refusal on an order or cancel is a definite refusal, not an unknown
+outcome: resting quotes stay and the strategy backs off (30s doubling to 300s, at least any
+`Retry-After`). Cancels share one signed action per 16 orders. To keep venue requests low, set
+`quote_refresh: changed_levels` (only quotes that moved past the refresh tolerance are replaced)
+and `max_quote_actions_per_minute`.
 
 ### Offline quote-resilience checks
 
