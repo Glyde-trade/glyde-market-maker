@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import random
 import re
+import socket
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
 from contextlib import AsyncExitStack, suppress
@@ -55,6 +57,22 @@ from .transport import ClientFactory, JsonObject, MarketClient
 
 RECONNECT_INITIAL_SECONDS = 1.0
 RECONNECT_MAX_SECONDS = 30.0
+WATCHDOG_PING_SECONDS = 5.0
+
+
+async def _systemd_heartbeat() -> None:
+    """Ping systemd's WatchdogSec= while the event loop runs; a wedged process is restarted."""
+    address = os.environ.get("NOTIFY_SOCKET")
+    if not address:
+        return
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    while True:
+        with suppress(OSError), socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify:
+            notify.sendto(b"WATCHDOG=1", address)
+        await asyncio.sleep(WATCHDOG_PING_SECONDS)
+
+
 _T = TypeVar("_T")
 
 
@@ -66,6 +84,8 @@ def _failure_label(error: BaseException) -> str:
     # reasonCode is a sanitized constant; raw frames are never logged.
     if isinstance(error, SubscriptionDeferred):
         return f"{error.reason_code}, retry after {error.retry_after:g}s"
+    if isinstance(error, StreamDisconnected) and str(error).startswith("live stream fault ("):
+        return f"{type(error).__name__}: {error}"  # Built from constants and type names only.
     return type(error).__name__
 
 
@@ -384,6 +404,7 @@ async def _run_session(
         reference_stream: AsyncGenerator[JsonObject, None] | None = None
         resources = AsyncExitStack()
         tasks: list[asyncio.Task[None] | asyncio.Task[bool]] = []
+        heartbeat: asyncio.Task[None] | None = None
         risk_stop = None
 
         async def observe_paper() -> None:
@@ -471,6 +492,9 @@ async def _run_session(
                         live, config.symbols, allow_existing_exposure=allow_existing_exposure
                     )
                     cleanup_allowed = True
+                    # A previous run killed mid-quote (watchdog, OOM) leaves tagged orders behind.
+                    for symbol in config.symbols:
+                        await managed.cancel_all(symbol)
                 elif live is not None:
                     # Reconcile: cancel what the fresh venue snapshot still shows before quoting.
                     for symbol in config.symbols:
@@ -725,8 +749,13 @@ async def _run_session(
                             raise OneApiError("strategy task exited unexpectedly")
                 return None if stop.is_set() else dropped
 
+            keep_quotes = (
+                float(config.risk.keep_quotes_on_disconnect_seconds) if live is not None else 0.0
+            )
+            sweep_due: float | None = None  # Quotes kept through a drop are swept at this time.
+
             async def retire(dropped: StreamDisconnected) -> None:
-                nonlocal tasks
+                nonlocal tasks, sweep_due
                 if paper_result is not None:
                     paper_result.pause("disconnect")
                 results, tasks = await managed.interrupt(tasks), []
@@ -743,15 +772,20 @@ async def _run_session(
                 # An unknown outcome or risk halt still ends the run; only flat state reconnects.
                 if not guard.resume_after_disconnect():
                     raise dropped
-                for strategy in strategies.values():
-                    await strategy.stop()
+                if keep_quotes:
+                    # Resting quotes stay up through a short outage; reconnect reconciles them.
+                    sweep_due = time.monotonic() + keep_quotes
+                else:
+                    for strategy in strategies.values():
+                        await strategy.stop()
                 strategies.clear()
                 paused.clear()
                 paused_since.clear()
                 if paper_result is not None:
                     paper_result.resume("stale")  # Reconnect restarts every market fresh.
                 await resources.aclose()
-                await sweep()
+                if sweep_due is None:
+                    await sweep()
                 if live is not None:
                     await live.close()
                 await observer.publish(guard, paper=paper)
@@ -788,12 +822,33 @@ async def _run_session(
                 return True
 
             retry_after: float | None = None  # Set once a connection must be retried.
+
+            async def back_off(seconds: float) -> bool:
+                """Wait before reconnecting, sweeping kept quotes when their bound passes."""
+                nonlocal sweep_due
+                resume_at = time.monotonic() + seconds
+                while True:
+                    now = time.monotonic()
+                    if sweep_due is not None and now >= sweep_due:
+                        report(
+                            f"{config.mode.upper()}: still disconnected after {keep_quotes:g}s; "
+                            "cancelling kept quotes"
+                        )
+                        await sweep()
+                        sweep_due = None
+                    if now >= resume_at:
+                        return False
+                    until = resume_at if sweep_due is None else min(resume_at, sweep_due)
+                    if await _stopped_within(stop, max(0.0, until - now)):
+                        return True
+
+            heartbeat = asyncio.create_task(_systemd_heartbeat())
             while True:
                 if retry_after is not None:
                     attempts += 1
                     delay = RECONNECT_INITIAL_SECONDS * 2 ** min(attempts - 1, 16)
                     delay = min(delay, RECONNECT_MAX_SECONDS) * random.uniform(0.5, 1)
-                    if await _stopped_within(stop, max(delay, retry_after)):
+                    if await back_off(max(delay, retry_after)):
                         return
                     if live is not None:
                         live = LiveStateClient(source, config, metrics=metrics)
@@ -852,6 +907,7 @@ async def _run_session(
                         await live.close()
                     retry_after = _retry_floor(error)
                     continue
+                sweep_due = None  # The reconnect reconcile cancelled any kept quotes.
                 if stop.is_set():
                     return
                 if not first:
@@ -871,7 +927,11 @@ async def _run_session(
                 retry_after = _retry_floor(dropped)
                 report(
                     f"{config.mode.upper()}: stream disconnected ({_failure_label(dropped)}); "
-                    "quotes retired, reconnecting"
+                    + (
+                        f"quotes kept up to {keep_quotes:g}s, reconnecting"
+                        if sweep_due is not None
+                        else "quotes retired, reconnecting"
+                    )
                 )
         except BaseException as error:
             if isinstance(error, RiskViolation):
@@ -887,6 +947,8 @@ async def _run_session(
                 risk_reasons.append(guard.halted)
             raise
         finally:
+            if heartbeat is not None:
+                heartbeat.cancel()
             for task in tasks:
                 task.cancel()
             if tasks:

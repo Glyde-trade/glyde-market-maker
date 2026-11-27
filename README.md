@@ -397,6 +397,7 @@ For diagnostic logs, use `glyde-mm report path/to/.glyde-mm/logs`.
 | `risk.stale_book_seconds` | Maximum book source/arrival age |
 | `risk.max_stale_pause_seconds` | Longest stale-book pause before the run stops, default 300 |
 | `risk.max_engine_halt_seconds` | Longest wait while Glyde reports its engine halted, default 1800 |
+| `risk.keep_quotes_on_disconnect_seconds` | Live quotes kept through a stream drop before cancelling, default 0 (cancel at once), max 300 |
 | `risk.account_age_seconds` | Maximum account-observation age |
 
 PMM sizing follows Hummingbot's linear bid/ask adjustment, adapted to signed perpetual
@@ -789,6 +790,12 @@ engine/projection refusal code), proof and reconnects keep waiting; that time do
 `max_stale_pause_seconds` and is bounded by `max_engine_halt_seconds` (default 1800). Resting
 orders survive a halt by design, so once health is READY the bot re-sends refused cancels, proves
 them, reconciles its tagged orders and resumes quoting with any fill counted as inventory. Private evidence caches are bounded; exhaustion stops the session.
+A malformed or partial frame from a degraded engine resnapshots and reconnects like a socket drop;
+only identity mismatches and refusals without a retry hint stop the run. With
+`risk.keep_quotes_on_disconnect_seconds` set, quotes stay resting through a short drop and are
+cancelled once it outlasts that bound. A live start cancels the bot's own tagged orders left by a
+killed run. Under systemd with `WatchdogSec=` and `NotifyAccess=main`, the bot pings the watchdog
+every 5 seconds while its event loop runs, so a wedged process is killed and restarted.
 
 ### Offline quote-resilience checks
 

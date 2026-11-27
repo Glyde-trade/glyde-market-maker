@@ -61,7 +61,19 @@ def counter(value: object) -> int:
     return int(value)
 
 
-# Stream sequencing faults that a fresh snapshot repairs; every other stream fault is fatal.
+# A frame naming another owner, group or symbol is never resnapshotted into trust, and a
+# refusal without a retry hint is final: these stay fatal.
+FATAL_FAULTS = frozenset(
+    {
+        "WebSocket subscription refused",
+        "unexpected stream group",
+        "stream binding mismatch",
+        "private stream owner mismatch",
+        "conflicting streamed fill identity",
+        "book stream symbol mismatch",
+    }
+)
+# Stream sequencing faults that a fresh snapshot repairs.
 RESNAPSHOT_FAULTS = frozenset(
     {
         "live stream requires resnapshot",
@@ -69,6 +81,20 @@ RESNAPSHOT_FAULTS = frozenset(
         "live stream baseline or predecessor missing",
     }
 )
+
+
+def stream_fault(error: BaseException) -> tuple[str, bool]:
+    """Invalidation reason and whether a fresh snapshot may replace the broken stream."""
+    if type(error) is OneApiError and str(error) in FATAL_FAULTS:
+        return str(error), False
+    if type(error) is OneApiError and str(error) in RESNAPSHOT_FAULTS:
+        # Sequencing breaks (an engine restart opens a new epoch) cost no evidence a
+        # fresh snapshot lacks: retire quotes and resubscribe, as on a socket drop.
+        return str(error), True
+    # A degraded engine can emit malformed or partial frames; the next snapshot is authoritative.
+    # OneApiError texts are fixed constants; other errors name only their type, never frame data.
+    detail = str(error) if type(error) is OneApiError else type(error).__name__
+    return f"live stream fault ({detail})"[:200], True
 
 
 class LiveStateClient:
@@ -319,7 +345,8 @@ class LiveStateClient:
             elif reconnectable(error):
                 self.invalidate("live stream disconnected", disconnected=True)
             else:
-                self.invalidate("live stream invalid, gapped or disconnected")
+                reason, disconnected = stream_fault(error)
+                self.invalidate(reason, disconnected=disconnected)
         finally:
             await stream.aclose()
 
@@ -336,12 +363,8 @@ class LiveStateClient:
                 and str(error) == "live stream continuity gap"
             ):
                 self.metrics.count("gaps")
-            if type(error) is OneApiError and str(error) in RESNAPSHOT_FAULTS:
-                # Sequencing breaks (an engine restart opens a new epoch) cost no evidence a
-                # fresh snapshot lacks: retire quotes and resubscribe, as on a socket drop.
-                self.invalidate(str(error), disconnected=True)
-            else:
-                self.invalidate("live stream invalid, gapped or disconnected")
+            reason, disconnected = stream_fault(error)
+            self.invalidate(reason, disconnected=disconnected)
             raise
 
     def _consume(self, frame: JsonObject) -> None:

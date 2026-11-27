@@ -280,6 +280,7 @@ Each entry in `markets` has these keys:
 | `stale_book_seconds` | `5` | Positive source/arrival freshness limit, at most 3600 seconds at runtime. |
 | `max_stale_pause_seconds` | `300` | Positive bound on one stale-book pause. A stale market retires its quotes and resumes on a fresh book; staying stale longer ends the run as a `stale_book`/`stale_book_source` risk stop. |
 | `max_engine_halt_seconds` | `1800` | Positive bound on waiting while Glyde reports its engine halted or not ready. Halt time does not count against `max_stale_pause_seconds`; once health is READY the bot re-cancels, proves and reconciles its orders, then resumes quoting. |
+| `keep_quotes_on_disconnect_seconds` | `0` | Live only. Resting quotes stay up this long after a dropped or faulted stream instead of being cancelled at once; reconnecting within it reconciles them, otherwise they are cancelled. `0` cancels on every drop. At most 300. |
 | `account_age_seconds` | `10` | Positive account-observation age limit, at most 3600 seconds at runtime. |
 | `max_orders_per_minute` | 60 | Rolling individual placement-attempt budget, integer 1–6000, shared by all markets. |
 | `max_total_notional` | null | Optional positive gross position-plus-orders bound across markets; mandatory with `markets`. No cross-asset netting. |
