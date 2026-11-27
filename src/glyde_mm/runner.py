@@ -60,7 +60,7 @@ RECONNECT_MAX_SECONDS = 30.0
 WATCHDOG_PING_SECONDS = 5.0
 
 
-async def _systemd_heartbeat() -> None:
+async def systemd_heartbeat() -> None:
     """Ping systemd's WatchdogSec= while the event loop runs; a wedged process is restarted."""
     address = os.environ.get("NOTIFY_SOCKET")
     if not address:
@@ -407,7 +407,6 @@ async def _run_session(
         reference_stream: AsyncGenerator[JsonObject, None] | None = None
         resources = AsyncExitStack()
         tasks: list[asyncio.Task[None] | asyncio.Task[bool]] = []
-        heartbeat: asyncio.Task[None] | None = None
         risk_stop = None
 
         async def observe_paper() -> None:
@@ -845,7 +844,6 @@ async def _run_session(
                     if await _stopped_within(stop, max(0.0, until - now)):
                         return True
 
-            heartbeat = asyncio.create_task(_systemd_heartbeat())
             while True:
                 if retry_after is not None:
                     attempts += 1
@@ -952,8 +950,6 @@ async def _run_session(
                 risk_reasons.append(guard.halted)
             raise
         finally:
-            if heartbeat is not None:
-                heartbeat.cancel()
             for task in tasks:
                 task.cancel()
             if tasks:

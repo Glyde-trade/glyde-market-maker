@@ -10,7 +10,7 @@ import pytest
 from test_quote_resilience import CANCEL_BOUND_SECONDS, FreshWire, episode, until
 from test_quote_resilience import config as live_config
 
-from glyde_mm import runner
+from glyde_mm import cli, runner
 from glyde_mm.client import OneApiError, reconnectable
 from glyde_mm.live_state import ResnapshotFault, StreamFault, stream_fault
 
@@ -73,6 +73,14 @@ async def test_malformed_frame_reconnects_instead_of_ending_the_run(tmp_path):
     assert not wire.orders()
 
 
+async def settle(wire, predicate, seconds=10):
+    """A reconnect after a retryAfter hint can outlast the 2s cancel bound on a slow runner."""
+    async with asyncio.timeout(seconds):
+        while not predicate():
+            wire.changed.clear()
+            await wire.changed.wait()
+
+
 async def test_kept_quotes_rest_through_a_short_drop_then_reconcile(tmp_path):
     wire, selected = FreshWire(), keeping("5")
     async with episode(wire, selected, tmp_path) as (task, stop):
@@ -81,8 +89,14 @@ async def test_kept_quotes_rest_through_a_short_drop_then_reconcile(tmp_path):
         wire.socket.queue.put_nowait({**DEFERRED, "retryAfter": 1})
         await asyncio.sleep(0.5)
         assert set(wire.orders()) == originals and wire.connections == 1
-        await until(wire, lambda: wire.connections == 2 and len(wire.orders()) == 4)
-        await until(wire, lambda: set(wire.orders()).isdisjoint(originals))
+        await settle(
+            wire,
+            lambda: (
+                wire.connections == 2
+                and len(wire.orders()) == 4
+                and set(wire.orders()).isdisjoint(originals)
+            ),
+        )
         assert not task.done()
         stop.set()
         await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
@@ -109,7 +123,7 @@ async def test_heartbeat_pings_the_systemd_notify_socket(tmp_path, monkeypatch):
         notify.bind(path)
         notify.setblocking(False)
         monkeypatch.setenv("NOTIFY_SOCKET", path)
-        heartbeat = asyncio.create_task(runner._systemd_heartbeat())
+        heartbeat = asyncio.create_task(runner.systemd_heartbeat())
         await asyncio.sleep(0.2)
         heartbeat.cancel()
         pings = []
@@ -117,3 +131,29 @@ async def test_heartbeat_pings_the_systemd_notify_socket(tmp_path, monkeypatch):
             while True:
                 pings.append(notify.recv(64))
     assert len(pings) >= 2 and set(pings) == {b"WATCHDOG=1"}
+
+
+async def test_run_pings_systemd_while_it_waits_before_starting(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "WATCHDOG_PING_SECONDS", 0.05)
+    waiting = asyncio.Event()
+
+    async def halted_engine_wait(*args, stop_event, **kwargs):
+        waiting.set()
+        await stop_event.wait()
+
+    monkeypatch.setattr(cli, "run_strategy", halted_engine_wait)
+    path = str(tmp_path / "notify")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify:
+        notify.bind(path)
+        notify.setblocking(False)
+        monkeypatch.setenv("NOTIFY_SOCKET", path)
+        run = asyncio.create_task(cli.run_with_signals(live_config(), tmp_path))
+        await waiting.wait()
+        await asyncio.sleep(0.2)
+        cli.signal.raise_signal(cli.signal.SIGINT)
+        await asyncio.wait_for(run, CANCEL_BOUND_SECONDS)
+        pings = []
+        with contextlib.suppress(BlockingIOError):
+            while True:
+                pings.append(notify.recv(64))
+    assert len(pings) >= 2

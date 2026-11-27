@@ -18,6 +18,7 @@ from .paper_result import PaperResult
 from .preflight import LivePreflightRefused, summary
 from .risk import RiskViolation
 from .runner import run as run_strategy
+from .runner import systemd_heartbeat
 from .version import build_identity
 
 
@@ -47,6 +48,8 @@ async def run_with_signals(
     automatic = False
     interrupted = False
     failed = False
+    # Started before any startup wait (engine halt, reconcile): systemd never kills a waiting run.
+    heartbeat = asyncio.create_task(systemd_heartbeat())
 
     def automatic_stop() -> None:
         nonlocal automatic
@@ -78,6 +81,7 @@ async def run_with_signals(
         failed = True
         raise
     finally:
+        heartbeat.cancel()
         if timer is not None:
             timer.cancel()
         for kind, handler in previous.items():
