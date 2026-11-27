@@ -4,6 +4,12 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 ## [Unreleased]
 
+- A live stream failure now says why it stopped instead of the bare
+  `live stream invalid, gapped or disconnected`. The message names the fault (`invalid`,
+  `gapped` or `disconnected`), the raw validation error, the frame's channel and group, the
+  expected versus received sequence, and the WebSocket close code and reason. A refused
+  subscription names Glyde's `reasonCode` and refusal text. The run log gains a bounded
+  `stream_fault` event, and `glyde-mm report` shows the run's last one.
 - A routine account check no longer ends a run with `order_outcome_unknown` or
   `cancel_outcome_unknown` while an order or cancel is still being written. The check now
   waits for the in-flight action to finish instead of mistaking its durable intent record
