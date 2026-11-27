@@ -4,6 +4,14 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 ## [Unreleased]
 
+- A fill landing while the strategy is busy requoting no longer ends a live run with
+  `live stream consumer overflow` (shown as `live stream invalid, gapped or disconnected`
+  before the stream-fault diagnostics below). Books arrive at ~20/s, so a requote that held
+  the consumer for more than ~1.5 s filled the 32-event queue, and the next owner cut carrying
+  a fill was fatal, typically a few minutes into a run. Owner cuts now coalesce into one
+  queued event that carries every undelivered fill, and evict the oldest queued book when the
+  queue is full. Fills are never dropped; a backlog beyond 4096 undelivered fills still fails
+  closed.
 - A live stream failure now says why it stopped instead of the bare
   `live stream invalid, gapped or disconnected`. The message names the fault (`invalid`,
   `gapped` or `disconnected`), the raw validation error, the frame's channel and group, the

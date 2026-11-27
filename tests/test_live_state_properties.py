@@ -242,6 +242,7 @@ class CacheHistory(RuleBasedStateMachine):
             frame = self.cache._events.get_nowait()
             if frame is None or self.unsafe:
                 continue
+            frame = self.cache._deliver(frame)
             if frame["channel"] == "l2Book":
                 current = replace(book_from_wire(frame["data"]), received_at=self.now)
                 try:
