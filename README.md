@@ -382,7 +382,7 @@ For diagnostic logs, use `glyde-mm report path/to/.glyde-mm/logs`.
 | `strategy_config.order_amount` | Quantity per level in base units |
 | `strategy_config.bid_spread` / `ask_spread` | Fractions around the reference price |
 | `strategy_config.order_refresh_time` | Seconds between quote comparisons; default 30 |
-| `strategy_config.inventory_skew_enabled` | PMM sizing skew, default false; enabling it can enlarge one side up to 2x, still subject to shared risk caps |
+| `strategy_config.inventory_skew_enabled` | PMM sizing skew toward `inventory_target_position`, default true; it can enlarge one side up to 2x, still subject to shared risk caps. Set false for fixed sizes |
 | `strategy_config.inventory_target_base_ratio` | Optional PMM target signed position value / account equity, fraction 0–1; `'0.01'` targets 1% long exposure, `'0'` flat; requires inventory skew |
 | `strategy_config.inventory_target_position` | Existing signed base-unit target, default zero; cannot combine a nonzero position target with a ratio target |
 | `strategy_config.inventory_range_multiplier` | Positive skew range multiplier, default 1, times total two-sided ladder quantity; ratio mode caps the range at half equity / quote-reference price |
@@ -391,9 +391,9 @@ For diagnostic logs, use `glyde-mm report path/to/.glyde-mm/logs`.
 | `strategy_config.refresh_tolerance_pct` | Keep original IDs when every planned price moves by at most this percentage of its old price (`'0.1'` = 0.1%); `null` default disables tolerance, `'0'` keeps exact matches |
 | `strategy_config.max_order_age` | Retire quotes after this many seconds regardless of tolerance or refresh interval; default 300, maximum 86400 |
 | `risk.max_orders_per_minute` | Integer 1–6000, default 60; rolling count of individual submitted orders across all batches, including venue refusals; exceeding it stops quoting and cancels |
-| `risk.max_position` | Maximum absolute projected position, including outstanding orders |
+| `risk.max_position` | Maximum absolute projected position, including outstanding orders. An order that would breach it is dropped before sending (the side adding inventory stops quoting); the run continues |
 | `risk.max_order_notional` | Maximum USDC notional per order |
-| `risk.max_daily_loss` | Daily equity-loss kill switch in USDC |
+| `risk.max_daily_loss` | Daily equity-loss kill switch in USDC. Past half of it, the position cap shrinks linearly to 0 at the limit, so a losing day can only reduce inventory |
 | `risk.stale_book_seconds` | Maximum book source/arrival age |
 | `risk.max_stale_pause_seconds` | Longest stale-book pause before the run stops, default 300 |
 | `risk.max_engine_halt_seconds` | Longest wait while Glyde reports its engine halted, default 1800 |

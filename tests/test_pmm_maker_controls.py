@@ -12,7 +12,7 @@ import pytest
 from glyde_mm.client import OneApiClient, book_from_wire, trades_from_wire
 from glyde_mm.config import Config
 from glyde_mm.paper import PaperExchange
-from glyde_mm.risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
+from glyde_mm.risk import RiskGuard, RiskLimits, RiskManagedClient
 from glyde_mm.strategies.factory import create_strategy, validate_strategy_config
 from glyde_mm.strategies.pure_market_making import StrategyContext
 from glyde_mm.testing import FakeOneApiServer
@@ -116,7 +116,9 @@ async def test_ratio_target_and_inventory_range_use_actual_equity(
 
 
 async def test_ratio_target_is_off_without_skew_flag_and_cannot_bypass_risk(monkeypatch, tmp_path):
-    async with stack(monkeypatch, tmp_path, inventory_target_base_ratio="1") as (
+    async with stack(
+        monkeypatch, tmp_path, inventory_skew_enabled=False, inventory_target_base_ratio="1"
+    ) as (
         paper,
         strategy,
         *_,
@@ -129,10 +131,13 @@ async def test_ratio_target_is_off_without_skew_flag_and_cannot_bypass_risk(monk
         max_position="0.1",
         inventory_skew_enabled=True,
         inventory_target_base_ratio="0.01",
-    ) as (paper, strategy, *_):
-        with pytest.raises(RiskViolation, match="max_position"):
-            await strategy.on_tick()
-        assert await paper.open_orders() == []
+    ) as (paper, strategy, guard, *_):
+        await strategy.on_tick()
+        # A skewed size past the cap is dropped, never sent; the run continues.
+        resting = await paper.open_orders()
+        for side in ("buy", "sell"):
+            assert sum((row.quantity for row in resting if row.side == side), D(0)) <= D("0.1")
+        assert guard.halted is None
 
 
 async def test_refresh_tolerance_keeps_real_ids_until_price_moves_outside(monkeypatch, tmp_path):
@@ -203,11 +208,15 @@ async def test_levels_space_each_side_and_all_levels_share_position_cap(monkeypa
     async with stack(monkeypatch, tmp_path / "limited", max_position="0.2", order_levels=3) as (
         paper,
         strategy,
+        guard,
         *_,
     ):
-        with pytest.raises(RiskViolation, match="max_position"):
-            await strategy.on_tick()
-        assert await paper.open_orders() == []
+        await strategy.on_tick()
+        # Outer levels past the shared cap are dropped; inner levels still quote.
+        resting = await paper.open_orders()
+        for side in ("buy", "sell"):
+            assert sum((row.quantity for row in resting if row.side == side), D(0)) <= D("0.2")
+        assert 0 < len(resting) < 6 and guard.halted is None
 
 
 @pytest.mark.parametrize(

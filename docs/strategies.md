@@ -274,7 +274,7 @@ Each entry in `markets` has these keys:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `max_position` | `0.01` | Worst possible signed position including pending/open quotes; multi-market entries supply their own cap. |
+| `max_position` | `0.01` | Worst possible signed position including pending/open quotes; multi-market entries supply their own cap. An order that would breach it is dropped before sending and the run continues; past half of `max_daily_loss` the cap shrinks linearly to 0. |
 | `max_order_notional` | `10` | Positive per-order USDC bound, using a conservative price reference. |
 | `max_daily_loss` | `5` | Equity fall from the persisted UTC-day baseline; includes unrealized changes and transfers. |
 | `stale_book_seconds` | `5` | Positive source/arrival freshness limit, at most 3600 seconds at runtime. |
@@ -310,7 +310,7 @@ Together with the five execution keys, this is every `PureMarketMakingConfig` ke
 | `order_levels` | 1 | Integer 1–50 per side; one means no extra ladder. |
 | `order_level_spread` | `0.001` | Nonnegative additive price fraction per level, below 1. |
 | `order_level_amount` | `0` | Nonnegative additive base quantity per level. |
-| `inventory_skew_enabled` | false | Enable linear sizing toward target; multipliers stay between 0 and 2. |
+| `inventory_skew_enabled` | true | Linear sizing toward target; multipliers stay between 0 and 2. Set false for fixed sizes. |
 | `inventory_target_position` | `0` | Finite signed base-position target. |
 | `inventory_target_base_ratio` | null | Optional 0–1 signed-position-value/equity target; only effective with skew; cannot combine with a nonzero position target. |
 | `inventory_range_multiplier` | `1` | Positive multiplier on two-sided ladder quantity; ratio mode also caps range at half equity/reference price. |
@@ -384,10 +384,9 @@ glyde-mm doctor ./my-paper.yaml
 glyde-mm paper ./my-paper.yaml
 ```
 
-For PMM sizing skew instead of adaptive-price `inventory_skewed`, copy
-`examples/paper.yaml` and set `inventory_skew_enabled: true` with a reviewed signed
-target. It can increase one side up to twice its configured quantity, so budget all
-levels. Cancel-before-replace releases capacity only after confirmed outcomes.
+PMM sizing skew (`inventory_skew_enabled`) is on by default with a target of 0. It can
+increase one side up to twice its configured quantity, so budget all levels; set it false
+for fixed sizes, or use the adaptive-price `inventory_skewed` strategy instead. Cancel-before-replace releases capacity only after confirmed outcomes.
 
 All strategies share account loss/rate state, per-order bounds and pending-order
 reservations. More levels do not grant extra risk capacity. Loss caps are not

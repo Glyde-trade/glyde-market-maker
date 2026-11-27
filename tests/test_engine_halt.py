@@ -23,7 +23,7 @@ from glyde_mm.client import (
     SubscriptionDeferred,
     engine_unavailable,
 )
-from glyde_mm.risk import RiskViolation
+from glyde_mm.risk import RiskViolation, StaleMarket
 from glyde_mm.runner import risk_state_path
 
 SAFETY = {"channel": "glydeSafety", "data": {"ready": False, "trading": False}}
@@ -153,7 +153,7 @@ async def test_halt_longer_than_the_stale_window_with_a_fill_on_resume_keeps_quo
     assert not any("reconnect window" in line for line in lines)
 
 
-async def test_fill_on_resume_that_exhausts_the_cap_stops_with_nothing_resting(tmp_path):
+async def test_fill_on_resume_near_the_cap_sends_only_bids_that_fit_and_does_not_stop(tmp_path):
     wire, selected = HaltingWire(), halting_config("0.015")
     async with episode(wire, selected, tmp_path) as (task, _):
         await until(wire, lambda: len(wire.orders()) == 4)
@@ -162,13 +162,23 @@ async def test_fill_on_resume_that_exhausts_the_cap_stops_with_nothing_resting(t
         await run_until(task, lambda: wire.refused_cancels, seconds=2)
         await asyncio.sleep(1.5)
         assert not task.done()
+        sent_before_resume = len(wire.actions)
         wire.resume_with_fill()
-        # Another 0.01 bid on a 0.01 long would breach the 0.015 cap: the guard refuses it.
-        with pytest.raises(RiskViolation, match="max_position"):
+        # A full 0.01 bid on a 0.01 long would breach the 0.015 cap: only bids that fit are sent
+        # (inventory skew shrinks them) and the cap stops nothing. This fake publishes no books
+        # after resume, so the run later ends on its stale-book bound instead.
+        with pytest.raises(StaleMarket):
             await asyncio.wait_for(task, 8)
+    btc = 0  # The fake venue's BTC asset id.
+    bids = [
+        row
+        for _, action in wire.actions[sent_before_resume:]
+        if action["type"] == "order"
+        for row in action["orders"]
+        if row["a"] == btc and row["b"]
+    ]
+    assert sum((D(row["s"]) for row in bids), D(0)) <= D("0.005")
     assert btc_position(wire) == D("0.01")
-    assert not wire.orders()
-    assert json.loads(risk_state_path(selected, tmp_path).read_text())["execution"] is None
 
 
 async def test_halt_past_the_halt_budget_latches_the_unconfirmed_cancels(tmp_path):

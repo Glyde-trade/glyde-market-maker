@@ -200,15 +200,16 @@ def test_corrupt_persisted_state_refuses_startup(tmp_path):
         guard(path)
 
 
-def test_entire_batch_is_checked_before_any_order_is_sent():
+def test_an_order_over_the_position_cap_is_dropped_and_the_rest_are_sent():
     async def scenario():
         g, _ = guard()
         raw = FakeClient()
         client = RiskManagedClient(raw, g)
-        with pytest.raises(RiskViolation, match="max_position"):
-            await client.place_orders([Order(quantity=D("0.06")), Order(quantity=D("0.06"))])
-        assert raw.placed == [] and g.pending == {}
-        assert raw.all_cancels == 1
+        results = await client.place_orders([Order(quantity=D("0.06")), Order(quantity=D("0.06"))])
+        # The batch is checked cumulatively before sending: the second buy would breach the cap.
+        assert [r.status for r in results] == ["resting", "rejected"]
+        assert results[1].error == "max_position"
+        assert len(raw.placed) == 1 and raw.all_cancels == 0 and g.halted is None
 
     asyncio.run(scenario())
 
@@ -693,3 +694,19 @@ def test_cleanup_cancels_only_bot_orders_and_keeps_foreign_exposure():
         assert g.open_orders == [manual] and not g.pending
 
     asyncio.run(scenario())
+
+
+def test_daily_loss_shrinks_the_position_cap_until_only_reducing_orders_fit():
+    g, _ = guard()  # Day starts at equity 100; max_daily_loss 5, max_position 0.1.
+    assert g.loss_headroom() == 1
+    g.update_account(Account(equity=D("97.5")))  # Half the loss budget used: full cap.
+    assert g.loss_headroom() == 1
+    g.update_account(Account(equity=D("96.25"), positions={"BTC": D("0.04")}))
+    assert g.loss_headroom() == D("0.5")  # Cap is now 0.05.
+    with pytest.raises(RiskViolation, match="max_position"):
+        g.validate_order("BTC", "buy", D("0.04"), D("99"))
+    g.validate_order("BTC", "sell", D("0.04"), D("101"))
+    g.update_account(Account(equity=D("95.01"), positions={"BTC": D("0.04")}))
+    with pytest.raises(RiskViolation, match="max_position"):
+        g.validate_order("BTC", "buy", D("0.001"), D("99"))
+    g.validate_order("BTC", "sell", D("0.04"), D("101"))  # Flattening is always allowed.

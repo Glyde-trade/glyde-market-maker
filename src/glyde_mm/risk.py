@@ -23,7 +23,13 @@ from .client import (
 )
 from .config import RiskConfig
 from .live_state import terminal_order_status
-from .models import CancelRequest, CancelResult, bot_client_order_id, is_bot_order
+from .models import (
+    CancelRequest,
+    CancelResult,
+    OrderResult,
+    bot_client_order_id,
+    is_bot_order,
+)
 from .risk_state import RiskStateStore
 
 if TYPE_CHECKING:
@@ -34,7 +40,6 @@ if TYPE_CHECKING:
         HistoricalOrder,
         OpenOrder,
         OrderRequest,
-        OrderResult,
         TradingClient,
     )
 
@@ -489,6 +494,15 @@ class RiskGuard:
             self.reference_check(book)
         return book
 
+    def loss_headroom(self) -> Decimal:
+        """Fraction of the position cap allowed today: 1 until half of max_daily_loss is used,
+        then falling linearly to 0 at the limit, so a losing day can only reduce inventory."""
+        if self._equity_start is None or self.account_state is None:
+            return Decimal(1)
+        loss = self._equity_start - self.account_state.equity
+        half = self.limits.max_daily_loss / 2
+        return min(Decimal(1), max(Decimal(0), (self.limits.max_daily_loss - loss) / half))
+
     def validate_order(self, symbol: str, side: str, quantity: Decimal, price: Decimal) -> None:
         book = self.check_fresh(symbol)
         if side not in ("buy", "sell") or not _positive(quantity) or not _positive(price):
@@ -498,8 +512,9 @@ class RiskGuard:
             raise RiskViolation("max_order_notional")
         if self.position_limits and symbol not in self.position_limits:
             raise RiskViolation("unconfigured_market")
-        position_cap = self.position_limits.get(symbol, self.limits.max_position)
         assert self.account_state is not None
+        position_cap = self.position_limits.get(symbol, self.limits.max_position)
+        position_cap *= self.loss_headroom()
         position = self.account_state.positions.get(symbol, Decimal("0"))
         pending_ids = set(self.pending)
         outstanding = list(self.pending.values()) + [
@@ -516,7 +531,11 @@ class RiskGuard:
                 buys += order.quantity
             else:
                 sells += order.quantity
-        if position + buys > position_cap or position - sells < -position_cap:
+        # Check only the side this order adds to: an order reducing exposure always fits, even
+        # when a shrunken (loss-scaled) cap is already below the current position.
+        if (side == "buy" and position + buys > position_cap) or (
+            side == "sell" and position - sells < -position_cap
+        ):
             raise RiskViolation("max_position")
 
         if self.limits.max_total_notional is not None:
@@ -817,10 +836,32 @@ class RiskManagedClient:
                 self.guard.update_account(await self.client.account())
                 self.guard.set_open_orders(await self.client.open_orders())
                 self._ensure_running()
+                over_cap: set[str] = set()
                 for order in prepared:
-                    self.guard.reserve(order)
                     assert order.client_order_id is not None
+                    try:
+                        self.guard.reserve(order)
+                    except RiskViolation as error:
+                        # Over the position cap: drop this order (the side adding inventory)
+                        # and keep quoting the rest instead of stopping the run.
+                        if str(error) != "max_position":
+                            raise
+                        over_cap.add(order.client_order_id)
+                        continue
                     reserved.append(order.client_order_id)
+                if over_cap and self.metrics:
+                    self.metrics.refused("max_position", len(over_cap))
+                skipped = [
+                    OrderResult(
+                        "rejected", client_order_id=order.client_order_id, error="max_position"
+                    )
+                    for order in prepared
+                    if order.client_order_id in over_cap
+                ]
+                requested = [order.client_order_id for order in prepared]
+                prepared = [order for order in prepared if order.client_order_id not in over_cap]
+                if not prepared:
+                    return skipped
                 self.guard.consume_order_rate(len(prepared))
             except BaseException as error:
                 for key in reserved:
@@ -881,7 +922,15 @@ class RiskManagedClient:
                     self.metrics.refused(
                         "venue_rejected", sum(r.status == "rejected" for r in results)
                     )
-                return results
+                if not skipped:
+                    return results
+                # Report in the caller's order, the dropped over-cap orders as rejected.
+                by_key = {row.client_order_id: row for row in skipped}
+                by_key.update(
+                    (order.client_order_id, row)
+                    for order, row in zip(prepared, results, strict=True)
+                )
+                return [by_key[key] for key in requested]
             except BaseException as error:
                 if not dispatched:
                     # Nothing reached Glyde, so no outcome is unknown: e.g. a peer book expiring

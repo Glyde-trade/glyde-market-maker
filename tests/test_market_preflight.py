@@ -38,7 +38,7 @@ def selected():
         mode="live",
         owner="0x" + "1" * 40,
         vault_address="0x" + "2" * 40,
-        strategy_config={"order_amount": "0.2"},
+        strategy_config={"order_amount": "0.2", "inventory_skew_enabled": False},
         risk=RiskConfig(max_position=D(1), max_order_notional=D(25)),
     )
 
@@ -246,7 +246,7 @@ def test_actual_cli_pass_and_changed_config_refusal(tmp_path, monkeypatch, capsy
                 "mode": "live",
                 "owner": selected().owner,
                 "vault_address": selected().vault_address,
-                "strategy_config": {"order_amount": "0.2"},
+                "strategy_config": {"order_amount": "0.2", "inventory_skew_enabled": False},
                 "risk": {"max_position": "1", "max_order_notional": "25"},
             }
         )
@@ -363,7 +363,9 @@ async def test_bid_floor_cannot_be_satisfied_by_the_higher_ask_or_skew_budget(tm
 @pytest.mark.parametrize("amount,expected", [("0.20001", 1), ("0.20002", 0)])
 async def test_configured_native_lot_is_not_inferred_from_szdecimals(tmp_path, amount, expected):
     public, lines = Public(), []
-    config = replace(selected(), strategy_config={"order_amount": amount})
+    config = replace(
+        selected(), strategy_config={"order_amount": amount, "inventory_skew_enabled": False}
+    )
     assert (
         await check(config, tmp_path, client_factory=public.factory, report=lines.append)
         == expected
