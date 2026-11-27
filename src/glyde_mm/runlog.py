@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,11 +21,25 @@ _FIELDS = {
     "book_stale": {"market", "reason"},
     "book_fresh": {"market", "paused_ms"},
     "run_ended": {"outcome"},
+    "stream_fault": {
+        "kind",
+        "cause",
+        "reason",
+        "channel",
+        "group",
+        "expected",
+        "received",
+        "close_code",
+    },
 }
 _COUNTERS = {"progress", "reconnected", "book_fresh"}
 # Markets are config-order indexes, like metrics labels; reasons are a fixed set.
 STALE_REASONS = frozenset({"stale_book", "stale_book_source", "stale_peer"})
 _OUTCOMES = {"completed", "stopped", "cancelled", "risk_stop", "transport_error", "error"}
+_FAULT_KINDS = {"invalid", "gapped", "disconnected"}
+# Stream faults log identifiers and the bot's own short error constants, never free text.
+_FAULT_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
+FAULT_REASON = re.compile(r"(?!.*0x)[A-Za-z][A-Za-z0-9 ,.:;'()/_-]{0,199}")
 _STRATEGIES = {
     "pure_market_making",
     "avellaneda_market_making",
@@ -32,6 +47,26 @@ _STRATEGIES = {
     "inventory_skewed",
     "plugin",
 }
+
+
+def _valid_fault(fields: dict[str, object]) -> bool:
+    def optional(name: str, pattern: re.Pattern[str]) -> bool:
+        value = fields[name]
+        return value is None or (isinstance(value, str) and bool(pattern.fullmatch(value)))
+
+    def counter(name: str) -> bool:
+        value = fields[name]
+        return value is None or (type(value) is int and 0 <= value <= 2**64 - 1)
+
+    return (
+        fields["kind"] in _FAULT_KINDS
+        and isinstance(fields["cause"], str)
+        and bool(_FAULT_NAME.fullmatch(fields["cause"]))
+        and optional("reason", FAULT_REASON)
+        and optional("channel", _FAULT_NAME)
+        and optional("group", _FAULT_NAME)
+        and all(counter(name) for name in ("expected", "received", "close_code"))
+    )
 
 
 class RunLog:
@@ -100,6 +135,8 @@ class RunLog:
             or fields["reason"] not in STALE_REASONS
         ):
             raise ValueError("invalid diagnostic pause")
+        if event == "stream_fault" and not _valid_fault(fields):
+            raise ValueError("invalid diagnostic stream fault")
         if self._file.tell() + 512 > self.max_bytes:
             self._file.close()
             for index in range(self.backups, 0, -1):

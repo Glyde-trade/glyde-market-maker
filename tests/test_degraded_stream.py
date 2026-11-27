@@ -11,8 +11,8 @@ from test_quote_resilience import CANCEL_BOUND_SECONDS, FreshWire, episode, unti
 from test_quote_resilience import config as live_config
 
 from glyde_mm import runner
-from glyde_mm.client import OneApiError
-from glyde_mm.live_state import stream_fault
+from glyde_mm.client import OneApiError, reconnectable
+from glyde_mm.live_state import ResnapshotFault, StreamFault, stream_fault
 
 DEFERRED = {
     "channel": "error",
@@ -42,21 +42,21 @@ def keeping(seconds):
 
 
 @pytest.mark.parametrize(
-    ("error", "reason", "resnapshot"),
+    ("error", "resnapshot"),
     [
-        (KeyError("glyde"), "live stream fault (KeyError)", True),
-        (ValueError("bad px 61000"), "live stream fault (ValueError)", True),
-        (OneApiError("invalid live batch membership"), None, True),
-        (OneApiError("live stream continuity gap"), "live stream continuity gap", True),
-        (OneApiError("private stream owner mismatch"), "private stream owner mismatch", False),
-        (OneApiError("WebSocket subscription refused"), "WebSocket subscription refused", False),
+        (KeyError("glyde"), True),
+        (ValueError("bad decimal"), True),
+        (OneApiError("invalid live batch membership"), True),
+        (OneApiError("live stream continuity gap"), True),
+        (OneApiError("private stream owner mismatch"), False),
+        (OneApiError("WebSocket subscription refused (UNSPECIFIED)"), False),
     ],
 )
-def test_only_identity_faults_and_final_refusals_stay_fatal(error, reason, resnapshot):
-    text, disconnected = stream_fault(error)
-    assert disconnected is resnapshot
-    assert text == (reason or f"live stream fault ({error})")
-    assert "61000" not in text  # Frame data is never echoed.
+def test_only_identity_faults_and_final_refusals_stay_fatal(error, resnapshot):
+    fault = stream_fault("invalid", error, channel="l2Book")
+    assert isinstance(fault, StreamFault) and fault.cause is error
+    assert isinstance(fault, ResnapshotFault) is resnapshot
+    assert reconnectable(fault) is resnapshot
 
 
 async def test_malformed_frame_reconnects_instead_of_ending_the_run(tmp_path):
