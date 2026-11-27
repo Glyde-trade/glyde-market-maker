@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import AsyncGenerator, Sequence
 from dataclasses import replace
@@ -32,6 +33,7 @@ from .models import (
     OrderResult,
     is_bot_order,
 )
+from .runlog import FAULT_REASON
 from .transport import JsonObject, MarketClient
 
 OWNER_CHANNELS = ("clearinghouseState", "openOrders", "orderUpdates", "userFills")
@@ -71,6 +73,66 @@ RESNAPSHOT_FAULTS = frozenset(
 )
 
 
+_FAULT_KINDS = frozenset({"invalid", "gapped", "disconnected"})
+_IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
+
+
+def _identifier(value: object) -> str | None:
+    return value if isinstance(value, str) and _IDENTIFIER.fullmatch(value) else None
+
+
+def _count(value: object) -> int | None:
+    return value if type(value) is int else None
+
+
+class StreamFault(OneApiError):
+    """Why the live stream stopped: which fault, on which frame, and the raw validation error.
+
+    Fields are protocol names, counters and the bot's own error text; never frame payloads.
+    """
+
+    def __init__(self, kind: str, cause: BaseException, **frame: object) -> None:
+        if kind not in _FAULT_KINDS:
+            raise ValueError("unknown stream fault kind")
+        self.kind, self.cause = kind, cause
+        self.channel, self.group = (
+            _identifier(frame.get("channel")),
+            _identifier(frame.get("group")),
+        )
+        self.expected, self.received = _count(frame.get("expected")), _count(frame.get("received"))
+        closed = cause if isinstance(cause, StreamDisconnected) else None
+        self.close_code = closed.close_code if closed else None
+        self.close_reason = closed.close_reason if closed else None
+        text = " ".join(str(cause).split())[:200]
+        detail = [f"{type(cause).__name__}: {text}" if text else type(cause).__name__]
+        if self.channel:
+            detail.append(f"channel {self.channel}")
+        if self.group:
+            detail.append(f"group {self.group}")
+        if self.expected is not None or self.received is not None:
+            detail.append(f"expected sequence {self.expected}, received {self.received}")
+        super().__init__(f"live stream {kind} ({'; '.join(detail)})")
+
+    def fields(self) -> dict[str, object]:
+        """Bounded run-log fields: a fault kind, an exception class and protocol identifiers."""
+        text = str(self.cause) if type(self.cause) is OneApiError else ""
+        reason = text if FAULT_REASON.fullmatch(text) else None
+        return {
+            "kind": self.kind,
+            "cause": type(self.cause).__name__,
+            "reason": reason,
+            "channel": self.channel,
+            "group": self.group,
+            "expected": self.expected,
+            "received": self.received,
+            "close_code": self.close_code,
+        }
+
+
+class ResnapshotFault(StreamFault, StreamDisconnected):
+    """A sequencing break or transport drop that a fresh snapshot repairs."""
+
+
 class LiveStateClient:
     def __init__(
         self, source: MarketClient, config: Config, *, metrics: Metrics | None = None
@@ -91,6 +153,8 @@ class LiveStateClient:
         self._cancelled: dict[str, str] = {}
         self._awaiting: dict[str, OrderResult] = {}
         self._known: dict[str, OrderRequest] = {}
+        # The frame being validated, so a rejection can name its channel and sequence.
+        self._frame: dict[str, object] = {}
 
     def subscriptions(self) -> list[JsonObject]:
         subscriptions = [
@@ -309,7 +373,9 @@ class LiveStateClient:
         try:
             async for frame in stream:
                 self.consume(frame)
-            self.invalidate("live stream disconnected", disconnected=True)
+            self.invalidate(
+                ResnapshotFault("disconnected", StreamDisconnected("server ended the stream"))
+            )
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -317,9 +383,9 @@ class LiveStateClient:
             if isinstance(error, SubscriptionDeferred):
                 self.invalidate(error)  # Keep its retryAfter for the runner's backoff.
             elif reconnectable(error):
-                self.invalidate("live stream disconnected", disconnected=True)
+                self.invalidate(ResnapshotFault("disconnected", error))
             else:
-                self.invalidate("live stream invalid, gapped or disconnected")
+                self.invalidate(StreamFault("disconnected", error))
         finally:
             await stream.aclose()
 
@@ -336,17 +402,19 @@ class LiveStateClient:
                 and str(error) == "live stream continuity gap"
             ):
                 self.metrics.count("gaps")
+            context = self._frame
             if type(error) is OneApiError and str(error) in RESNAPSHOT_FAULTS:
                 # Sequencing breaks (an engine restart opens a new epoch) cost no evidence a
                 # fresh snapshot lacks: retire quotes and resubscribe, as on a socket drop.
-                self.invalidate(str(error), disconnected=True)
+                self.invalidate(ResnapshotFault("gapped", error, **context))
             else:
-                self.invalidate("live stream invalid, gapped or disconnected")
+                self.invalidate(StreamFault("invalid", error, **context))
             raise
 
     def _consume(self, frame: JsonObject) -> None:
         self.check()
         channel = frame.get("channel")
+        self._frame = {"channel": channel}
         if channel in {"pong", "subscriptionResponse"}:
             return
         if channel == "error":
@@ -360,6 +428,7 @@ class LiveStateClient:
             raise OneApiError("live stream requires resnapshot")
         meta = frame["glyde"]
         group = meta["group"]
+        self._frame["group"] = group
         owner_group = group == "mm-owner"
         expected = set(OWNER_CHANNELS) if owner_group else {"l2Book"}
         if not owner_group and group not in {
@@ -404,6 +473,7 @@ class LiveStateClient:
         ):
             raise OneApiError("invalid live batch membership")
         seq = counter(meta["sequence"])
+        self._frame["received"] = seq
         if seq == 0:
             raise OneApiError("invalid initial stream sequence")
         cursor = meta["cursor"]
@@ -413,6 +483,7 @@ class LiveStateClient:
         previous = self._groups.get(group)
         installed = self._account is not None if owner_group else previous is not None
         if previous is not None and installed:
+            self._frame["expected"] = counter(previous["sequence"]) + 1
             if (
                 meta["session"] != previous["session"]
                 or meta["epoch"] != previous["epoch"]

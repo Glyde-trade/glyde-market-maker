@@ -73,6 +73,24 @@ class OutcomeUnknown(OneApiError):
 class StreamDisconnected(OneApiError):
     """The socket closed or its transport failed; resubscribe from a fresh snapshot."""
 
+    close_code: int | None = None
+    close_reason: str | None = None
+
+
+def socket_closed(error: ConnectionClosed | OSError) -> StreamDisconnected:
+    """A drop that names its close code and reason, or that no close frame arrived."""
+    if isinstance(error, OSError):
+        return StreamDisconnected(f"WebSocket disconnected ({type(error).__name__})")
+    close = error.rcvd
+    if close is None:
+        return StreamDisconnected("WebSocket disconnected (no close frame)")
+    reason = close.reason if _REFUSAL_TEXT.fullmatch(close.reason or "") else None
+    dropped = StreamDisconnected(
+        f"WebSocket disconnected (close {close.code}{f' {reason}' if reason else ''})"
+    )
+    dropped.close_code, dropped.close_reason = close.code, reason
+    return dropped
+
 
 class SubscriptionDeferred(StreamDisconnected):
     """The server refused a subscription for now; resubscribe no sooner than retry_after."""
@@ -134,7 +152,15 @@ def subscription_refusal(frame: dict[str, Any]) -> OneApiError:
     if reason == "UNSPECIFIED" and frame.get("data") in _RESUBSCRIBE_TEXT:
         # Glyde's uncoded projection refusals: a fresh snapshot repairs both.
         return SubscriptionDeferred(_RESUBSCRIBE_TEXT[frame["data"]], 0.0)
-    return OneApiError("WebSocket subscription refused")
+    text = refusal_text(frame.get("data"))
+    return OneApiError(f"WebSocket subscription refused ({reason}{text})")
+
+
+def refusal_text(value: object) -> str:
+    """Glyde's short constant refusal text, or nothing when it could carry anything else."""
+    if isinstance(value, str) and _REFUSAL_TEXT.fullmatch(value) and "0x" not in value:
+        return f": {value}"
+    return ""
 
 
 def reconnectable(error: BaseException) -> bool:
@@ -575,14 +601,7 @@ class OneApiClient:
             if isinstance(refusal, str) and _ENGINE_UNAVAILABLE_TEXT in refusal.lower():
                 raise EngineUnavailable("exchange refused the action: engine unavailable")
             # Glyde's refusal texts are short constants; anything else stays generic.
-            reason = (
-                f": {refusal}"
-                if isinstance(refusal, str)
-                and _REFUSAL_TEXT.fullmatch(refusal)
-                and "0x" not in refusal
-                else ""
-            )
-            raise ActionRefused(f"exchange refused the action{reason}")
+            raise ActionRefused(f"exchange refused the action{refusal_text(refusal)}")
         try:
             statuses = result["response"]["data"]["statuses"]
             if not isinstance(statuses, list) or len(statuses) != count:
@@ -772,15 +791,15 @@ class OneApiClient:
                     except ValueError:
                         raise OneApiError("invalid WebSocket JSON") from None
                     if not isinstance(frame, dict):
-                        raise OneApiError("WebSocket subscription refused")
+                        raise OneApiError(f"non-object WebSocket frame ({type(frame).__name__})")
                     if frame.get("channel") == "error":
                         raise subscription_refusal(frame)
                     yield frame
                     if rotate_at is not None and time.monotonic() >= rotate_at:
                         # Reconnect with a fresh credential before the server ends the lease.
                         raise StreamDisconnected("read credential rotation")
-            except (ConnectionClosed, OSError):
-                raise StreamDisconnected("WebSocket disconnected") from None
+            except (ConnectionClosed, OSError) as error:
+                raise socket_closed(error) from None
             finally:
                 task.cancel()
                 with suppress(asyncio.CancelledError):

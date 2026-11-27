@@ -11,7 +11,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-from .runlog import _COUNTERS, _FIELDS, _OUTCOMES, _STRATEGIES, STALE_REASONS
+from .runlog import _COUNTERS, _FIELDS, _OUTCOMES, _STRATEGIES, STALE_REASONS, _valid_fault
 
 _RUN = re.compile(r"run-([0-9a-f]{32})")
 _SEGMENT = re.compile(r"events(?:\.([1-9][0-9]?))?\.jsonl")
@@ -71,6 +71,8 @@ def _validate(row: object, run_id: str) -> dict[str, Any]:
         or row["reason"] not in tuple(STALE_REASONS)
     ):
         raise ValueError("Invalid diagnostic pause.")
+    elif event == "stream_fault" and not _valid_fault(row):
+        raise ValueError("Invalid diagnostic stream fault.")
     return row
 
 
@@ -129,6 +131,7 @@ def _read_run(path: Path, budget: list[int]) -> dict[str, Any]:
         raise ValueError("Diagnostic records follow an exit event.")
     assert identity is not None
     progress = next((row for row in reversed(rows) if row["event"] == "progress"), None)
+    fault = next((row for row in reversed(rows) if row["event"] == "stream_fault"), None)
     return {
         "run_id": run_id,
         **identity,
@@ -138,6 +141,9 @@ def _read_run(path: Path, budget: list[int]) -> dict[str, Any]:
         "history_truncated": rows[0]["sequence"] != 1,
         "segments": len(segments),
         "last_progress": {key: progress[key] for key in _FIELDS["progress"]} if progress else None,
+        "last_stream_fault": (
+            {key: fault[key] for key in sorted(_FIELDS["stream_fault"])} if fault else None
+        ),
     }
 
 
