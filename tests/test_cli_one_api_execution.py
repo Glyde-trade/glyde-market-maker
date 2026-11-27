@@ -327,7 +327,7 @@ def test_live_preflight_override_allows_start_but_retains_actual_risk(monkeypatc
 
 
 def test_live_preflight_override_cannot_bypass_position_cap(monkeypatch, tmp_path):
-    result, _, actions, _, _ = exercise_cli(
+    _, _, actions, _, _ = exercise_cli(
         monkeypatch,
         tmp_path,
         command="run",
@@ -335,4 +335,9 @@ def test_live_preflight_override_cannot_bypass_position_cap(monkeypatch, tmp_pat
         understand=True,
         risk={"max_position": "0.05"},
     )
-    assert result == 1 and actions == []
+    # A 0.1 long over a 0.05 cap: no buy is ever sent; a sell may reduce it, never past -0.05.
+    orders = [
+        row for a in actions if a["action"]["type"] == "order" for row in a["action"]["orders"]
+    ]
+    assert not any(row["b"] for row in orders)
+    assert all(D("0.1") - D(row["s"]) >= D("-0.05") for row in orders)

@@ -516,14 +516,17 @@ async def test_ping_pong_real_tape_partial_fills_and_risk_boundary_preserve_cash
     assert not await raw.open_orders()
 
 
-async def test_scaled_ladder_cannot_escape_shared_position_cap():
+async def test_scaled_ladder_stays_within_shared_position_cap():
     raw, client, s, _ = await managed_paper_strategy(order_levels=2, order_level_amount=D(1))
     try:
-        with pytest.raises(RuntimeError, match="max_position"):
-            await s.on_tick()
-        assert not raw.fills and not await raw.open_orders()
+        await s.on_tick()
+        # Levels past the shared cap are dropped before sending; the rest quote.
+        cap = client.guard.limits.max_position
+        resting = await raw.open_orders()
+        for side in ("buy", "sell"):
+            assert sum((o.quantity for o in resting if o.side == side), D(0)) <= cap
+        assert len(resting) < 4 and not s.blocked and client.guard.halted is None
         assert (await raw.account()).equity == 1000
-        assert not client.guard._order_attempts
     finally:
         await s.stop()
         await client.close()

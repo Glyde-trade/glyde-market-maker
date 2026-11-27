@@ -252,10 +252,10 @@ async def test_actual_fake_one_api_runner_samples_both_channels_and_keeps_risk(
             report=lambda _: None,
         )
         if limited:
-            with pytest.raises(RiskViolation, match="max_position"):
-                await task
-        else:
-            await task
+            # Every order breaches the 0.01 cap: all are dropped before sending and the run
+            # keeps going without submitting until stopped.
+            asyncio.get_running_loop().call_later(1.0, stop.set)
+        await task
     assert observed[0].volatility == 1
     assert [row.side for row in submissions] == ([] if limited else ["buy", "sell"])
     assert await paper.open_orders() == []

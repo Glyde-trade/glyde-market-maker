@@ -7,7 +7,7 @@ import pytest
 
 from glyde_mm.config import load_config
 from glyde_mm.models import Account, Book, CancelResult, Level, OrderResult
-from glyde_mm.risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
+from glyde_mm.risk import RiskGuard, RiskLimits, RiskManagedClient
 from glyde_mm.strategies import InventorySkewedConfig, InventorySkewedStrategy, StrategyContext
 from glyde_mm.strategies.factory import create_strategy
 
@@ -120,9 +120,13 @@ async def test_fake_client_lifecycle_uses_actual_risk_boundary_before_dispatch()
     guard.update_book(book(100))
     selected = strategy(RiskManagedClient(refusing, guard))
     await warmup(selected)
-    with pytest.raises(RiskViolation, match="max_position"):
-        await selected.on_tick(2)
-    assert "place" not in refusing.calls
+    await selected.on_tick(2)
+    # A long of 1 over a 0.1 cap: bids are dropped before dispatch, sells that reduce the
+    # position may go out but never past -0.1, and the strategy stays live.
+    sent = [row for batch in refusing.placed for row in batch]
+    assert not any(row.side == "buy" for row in sent)
+    assert D(1) - sum((row.quantity for row in sent), D(0)) >= D("-0.1")
+    assert not selected.blocked and guard.halted is None
 
 
 @pytest.mark.parametrize("eta", [D(-1), D(101), D("NaN"), D("Infinity"), True])

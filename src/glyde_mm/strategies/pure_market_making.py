@@ -75,7 +75,7 @@ class PureMarketMakingConfig:
     order_levels: int = 1
     order_level_spread: Decimal = Decimal("0.001")
     order_level_amount: Decimal = ZERO
-    inventory_skew_enabled: bool = False
+    inventory_skew_enabled: bool = True
     inventory_target_position: Decimal = ZERO
     inventory_target_base_ratio: Decimal | None = None
     inventory_range_multiplier: Decimal = ONE
