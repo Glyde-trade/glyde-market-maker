@@ -73,6 +73,14 @@ async def test_malformed_frame_reconnects_instead_of_ending_the_run(tmp_path):
     assert not wire.orders()
 
 
+async def settle(wire, predicate, seconds=10):
+    """A reconnect after a retryAfter hint can outlast the 2s cancel bound on a slow runner."""
+    async with asyncio.timeout(seconds):
+        while not predicate():
+            wire.changed.clear()
+            await wire.changed.wait()
+
+
 async def test_kept_quotes_rest_through_a_short_drop_then_reconcile(tmp_path):
     wire, selected = FreshWire(), keeping("5")
     async with episode(wire, selected, tmp_path) as (task, stop):
@@ -81,8 +89,14 @@ async def test_kept_quotes_rest_through_a_short_drop_then_reconcile(tmp_path):
         wire.socket.queue.put_nowait({**DEFERRED, "retryAfter": 1})
         await asyncio.sleep(0.5)
         assert set(wire.orders()) == originals and wire.connections == 1
-        await until(wire, lambda: wire.connections == 2 and len(wire.orders()) == 4)
-        await until(wire, lambda: set(wire.orders()).isdisjoint(originals))
+        await settle(
+            wire,
+            lambda: (
+                wire.connections == 2
+                and len(wire.orders()) == 4
+                and set(wire.orders()).isdisjoint(originals)
+            ),
+        )
         assert not task.done()
         stop.set()
         await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
