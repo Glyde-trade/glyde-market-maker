@@ -20,7 +20,7 @@ from glyde_mm.client import (
     subscription_refusal,
 )
 from glyde_mm.config import Config, RiskConfig
-from glyde_mm.live_state import LiveStateClient, StreamFault
+from glyde_mm.live_state import LiveStateClient, ResnapshotFault, StreamFault
 from glyde_mm.runlog import RunLog
 
 OWNER = "0x" + "1" * 40
@@ -66,7 +66,8 @@ def test_malformed_frame_keeps_the_raw_validation_error_and_frame_type():
     with pytest.raises(KeyError):
         live.consume({"channel": "notice", "data": {}})
     failure = live._failure
-    assert type(failure) is StreamFault and not reconnectable(failure)
+    # A degraded engine's malformed frame resnapshots instead of ending the run.
+    assert type(failure) is ResnapshotFault and reconnectable(failure)
     assert failure.kind == "invalid" and failure.channel == "notice"
     assert str(failure) == "live stream invalid (KeyError: 'glyde'; channel notice)"
     assert failure.fields()["cause"] == "KeyError" and failure.fields()["reason"] is None

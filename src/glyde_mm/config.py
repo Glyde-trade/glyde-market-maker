@@ -38,6 +38,8 @@ class RiskConfig:
     max_stale_pause_seconds: Decimal = Decimal("300")
     # While Glyde reports its engine halted, the bot waits this long instead (not counted above).
     max_engine_halt_seconds: Decimal = Decimal("1800")
+    # Resting quotes survive a dropped stream this long; unrecovered by then, they are swept.
+    keep_quotes_on_disconnect_seconds: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True)
@@ -115,8 +117,13 @@ class Config:
         cap = self.risk.max_orders_per_minute
         if type(cap) is not int or not 1 <= cap <= 6000:
             raise ValueError("max_orders_per_minute must be an integer in 1..6000")
+        keep = self.risk.keep_quotes_on_disconnect_seconds
+        if not isinstance(keep, Decimal) or not keep.is_finite() or not 0 <= keep <= 300:
+            raise ValueError("keep_quotes_on_disconnect_seconds must be from 0 to 300")
         for name, value in vars(self.risk).items():
-            if name == "max_orders_per_minute" or (name == "max_total_notional" and value is None):
+            if name in ("max_orders_per_minute", "keep_quotes_on_disconnect_seconds") or (
+                name == "max_total_notional" and value is None
+            ):
                 continue
             if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
                 raise ValueError("risk limits must be finite and positive")
