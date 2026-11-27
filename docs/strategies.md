@@ -304,6 +304,8 @@ Together with the five execution keys, this is every `PureMarketMakingConfig` ke
 | `bid_spread` | `0.001` | Nonnegative bid fraction below 1. |
 | `ask_spread` | `0.001` | Nonnegative ask fraction below 1. |
 | `order_refresh_tolerance_pct` | null | Alias in the same units; configuring both tolerance names refuses. |
+| `quote_refresh` | `replace_all` | `replace_all` cancels and re-places every quote on each refresh. `changed_levels` keeps each quote whose side and size match a target level and whose price is within the refresh tolerance (exact price when unset), and cancels then places only the rest. Safety, max-age and minimum-spread checks still replace a quote. |
+| `max_quote_actions_per_minute` | null | Cap on order entries placed plus cancelled by refreshes per rolling minute. Cancels go first, inner levels are placed first, and the rest waits for budget. Stop and safety sweeps are not capped. null means no cap. |
 | `filled_order_delay` | 0 | Finite 0–86400-second pause after identified own paper fills, including partials; nonzero live setting refuses. |
 | `order_levels` | 1 | Integer 1–50 per side; one means no extra ladder. |
 | `order_level_spread` | `0.001` | Nonnegative additive price fraction per level, below 1. |

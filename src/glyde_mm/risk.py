@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from .client import (
     ActionRefused,
     EngineUnavailable,
+    RateLimited,
     StreamDisconnected,
     engine_unavailable,
     reconnectable,
@@ -894,6 +895,9 @@ class RiskManagedClient:
                         raise
                     await self._refuse_undispatched(error, len(prepared))
                     raise
+                if refused and isinstance(error, RateLimited):
+                    # Nothing was placed and nothing is unknown: the strategy backs off.
+                    raise
                 if refused and isinstance(error, EngineUnavailable):
                     # Retire quotes and wait the halt out exactly as a stream drop does.
                     raise StreamDisconnected("exchange refused orders: engine unavailable") from (
@@ -919,6 +923,10 @@ class RiskManagedClient:
                         r.status not in ("cancelled", "already_closed") for r in results
                     ):
                         raise RiskViolation("cancel_outcome_unknown")
+                except RateLimited:
+                    # Refused before processing: every order still rests, nothing is unknown.
+                    self.guard.finish_execution(owned)
+                    raise
                 except Exception as error:
                     # A late or missing receipt is not an unknown outcome once the venue
                     # shows every order terminal. Retry each first: a batch failure can
@@ -944,6 +952,8 @@ class RiskManagedClient:
                         "quotes_cancelled", sum(r.status == "cancelled" for r in results)
                     )
                 return results
+            except RateLimited:
+                raise
             except BaseException:
                 await self._cancel_and_halt("cancel_outcome_unknown")
                 raise
