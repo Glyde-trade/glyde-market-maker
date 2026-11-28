@@ -31,6 +31,7 @@ _REASONS = frozenset(
         "max_total_notional",
         "daily_loss",
         "order_rate_limit",
+        "rate_limited",
         "client_closed",
         "other",
     }
