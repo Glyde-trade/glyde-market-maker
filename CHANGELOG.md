@@ -4,6 +4,8 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 ## [Unreleased]
 
+## [0.7.1]
+
 - Order-entry pacing follows the limits Glyde reports. The client reads
   `glydeOrderRateLimits` once and paces to the place and cancel buckets the server admits;
   against a server that does not report them it defaults to Glyde's current limits (place
