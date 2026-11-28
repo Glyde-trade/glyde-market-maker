@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from collections.abc import AsyncGenerator, Sequence
@@ -186,6 +187,14 @@ class LiveStateClient:
         self._known: dict[str, OrderRequest] = {}
         # The frame being validated, so a rejection can name its channel and sequence.
         self._frame: dict[str, object] = {}
+        self._skipped_orders: set[str] = set()
+
+    def _skip_foreign_order(self, row: object) -> None:
+        key = repr(row.get("oid")) if isinstance(row, dict) else repr(row)
+        if key not in self._skipped_orders and len(self._skipped_orders) < 8192:
+            self._skipped_orders.add(key)
+            raw = json.dumps(row, default=str)[:500]
+            print(f"LIVE: skipped unparseable untagged open order {raw}", flush=True)
 
     def subscriptions(self) -> list[JsonObject]:
         subscriptions = [
@@ -592,10 +601,20 @@ class LiveStateClient:
         if type(stamp) is not int or not 0 <= stamp <= 2**63 - 1:
             raise OneApiError("invalid account source timestamp")
         account = account_from_wire(account_data)
-        orders = orders_from_wire(roots["openOrders"]["orders"])
-        for order in orders:
-            if counter(order.order_id) == 0 or order.quantity <= 0 or order.price <= 0:
-                raise OneApiError("invalid streamed open order")
+        orders = []
+        for row in roots["openOrders"]["orders"]:
+            try:
+                order = orders_from_wire([row])[0]
+                if counter(order.order_id) == 0 or order.quantity <= 0 or order.price <= 0:
+                    raise OneApiError("invalid streamed open order")
+            except (OneApiError, ValueError, KeyError, TypeError):
+                if is_bot_order(row.get("cloid") if isinstance(row, dict) else None):
+                    raise OneApiError("invalid streamed open order") from None
+                # Another trader's order the bot cannot price, e.g. a pending Market IOC the
+                # backend lists with limitPx "0" (fixed in glyde #9372): skip it, log once.
+                self._skip_foreign_order(row)
+                continue
+            orders.append(order)
         if len({o.order_id for o in orders}) != len(orders):
             raise OneApiError("duplicate streamed order")
         updates = roots["orderUpdates"]
