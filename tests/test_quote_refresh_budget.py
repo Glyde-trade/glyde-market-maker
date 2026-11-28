@@ -138,6 +138,28 @@ async def test_http_429_on_an_action_is_a_definite_rate_limit_refusal(unsigned):
     assert refused.value.retry_after == 7.0
 
 
+async def test_order_rate_limit_names_its_wait(unsigned):
+    body = {
+        "status": "err",
+        "code": "ORDER_RATE_LIMITED",
+        "response": "Glyde: ORDER_RATE_LIMITED; retry in 3s",
+        "retryAfter": 3,
+    }
+    client = live_client(
+        httpx.MockTransport(
+            lambda request: httpx.Response(429, headers={"Retry-After": "3"}, json=body)
+        )
+    )
+    with pytest.raises(RateLimited) as refused:
+        await client.exchange({"type": "cancel", "cancels": []})
+    assert refused.value.retry_after == 3.0
+    assert str(refused.value) == "exchange refused the action: rate limited, retry in 3s"
+    with pytest.raises(RateLimited) as in_body:
+        OneApiClient._statuses(body, 1)
+    assert in_body.value.retry_after == 3.0
+    assert "retry in 3s" in str(in_body.value)
+
+
 def test_budget_refusal_text_is_a_rate_limit():
     with pytest.raises(RateLimited):
         OneApiClient._statuses({"status": "err", "response": "HL request budget exhausted"}, 1)

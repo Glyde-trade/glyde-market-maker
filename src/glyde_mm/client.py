@@ -66,7 +66,7 @@ class RateLimited(ActionRefused):
     """Glyde refused an action for request rate or venue budget: nothing took effect; back off."""
 
     def __init__(self, message: str, retry_after: float = 0.0) -> None:
-        super().__init__(message)
+        super().__init__(f"{message}, retry in {retry_after:g}s" if retry_after > 0 else message)
         self.retry_after = retry_after
 
 
@@ -191,6 +191,17 @@ def _retry_after_seconds(value: str | None) -> float:
     except ValueError:
         return 0.0
     return min(max(seconds, 0.0), SOCKET_RETRY_MAX_DELAY)
+
+
+def _rate_limit_seconds(value: object) -> float:
+    """Glyde's Retry-After (header or ORDER_RATE_LIMITED body), bounded; 0 when absent."""
+    try:
+        seconds = float(cast(Any, value) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(seconds):
+        return 0.0
+    return min(max(seconds, 0.0), RATE_LIMIT_RETRY_MAX_SECONDS)
 
 
 def wire_decimal(value: Decimal) -> str:
@@ -440,15 +451,9 @@ class OneApiClient:
                 pass
         if response.status_code == 429 and action:
             # A 429 is answered before the action is processed: a definite refusal.
-            try:
-                retry_after = float(response.headers.get("Retry-After") or 0)
-            except ValueError:
-                retry_after = 0.0
-            if not math.isfinite(retry_after):
-                retry_after = 0.0
             raise RateLimited(
                 "exchange refused the action: rate limited",
-                min(max(retry_after, 0.0), RATE_LIMIT_RETRY_MAX_SECONDS),
+                _rate_limit_seconds(response.headers.get("Retry-After")),
             )
         if response.status_code >= 500 and action:
             raise OutcomeUnknown("exchange outcome unknown; reconcile the original request")
@@ -623,7 +628,10 @@ class OneApiClient:
             if isinstance(refusal, str) and _ENGINE_UNAVAILABLE_TEXT in refusal.lower():
                 raise EngineUnavailable("exchange refused the action: engine unavailable")
             if isinstance(refusal, str) and _RATE_LIMITED_TEXT.search(refusal):
-                raise RateLimited(f"exchange refused the action{refusal_text(refusal)}")
+                raise RateLimited(
+                    "exchange refused the action: rate limited",
+                    _rate_limit_seconds(result.get("retryAfter")),
+                )
             # Glyde's refusal texts are short constants; anything else stays generic.
             raise ActionRefused(f"exchange refused the action{refusal_text(refusal)}")
         try:

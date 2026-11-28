@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -42,6 +43,8 @@ if TYPE_CHECKING:
         OrderRequest,
         TradingClient,
     )
+
+_LOG = logging.getLogger("glyde_mm")
 
 
 PROOF_RETRY_INITIAL_SECONDS = 0.25
@@ -901,6 +904,14 @@ class RiskManagedClient:
                 dispatched = True
                 try:
                     results = await self.client.place_orders(prepared)
+                except RateLimited as error:
+                    # Refused before processing: nothing was placed, so nothing is unknown.
+                    for order in prepared:
+                        self.guard.pending.pop(order.client_order_id or "", None)
+                    self.guard.finish_execution(owned)
+                    refused = True
+                    self._rate_limited(error, len(prepared))
+                    raise
                 except ActionRefused:
                     # Glyde refused the whole action: nothing was placed, so there is no
                     # unknown outcome to reconcile and none of these orders to cancel.
@@ -987,9 +998,10 @@ class RiskManagedClient:
                         r.status not in ("cancelled", "already_closed") for r in results
                     ):
                         raise RiskViolation("cancel_outcome_unknown")
-                except RateLimited:
+                except RateLimited as error:
                     # Refused before processing: every order still rests, nothing is unknown.
                     self.guard.finish_execution(owned)
+                    self._rate_limited(error, len(orders))
                     raise
                 except Exception as error:
                     # A late or missing receipt is not an unknown outcome once the venue
@@ -1021,6 +1033,12 @@ class RiskManagedClient:
             except BaseException:
                 await self._cancel_and_halt("cancel_outcome_unknown")
                 raise
+
+    def _rate_limited(self, error: RateLimited, count: int) -> None:
+        """A rate refusal is a visible back-off, not a fault: say how long to wait."""
+        _LOG.warning("%s (%d orders not sent)", error, count)
+        if self.metrics:
+            self.metrics.refused("rate_limited", count)
 
     async def cancel_all(self, symbol: str | None = None) -> None:
         async with self._lock:
