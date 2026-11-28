@@ -4,6 +4,32 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 ## [Unreleased]
 
+## [0.7.0]
+
+- Glyde rate-limit refusals are definitive. Glyde admits order entries per account per
+  minute, counted per entry: place 30 (burst 15), cancel 20 (burst 10). The client now paces
+  every action to those buckets, sends at most 15 places or 10 cancels per action, and waits
+  out a refusal's Retry-After before the next one. A rate-refused cancel in the sweep (mid-run,
+  on reconnect and at shutdown) is resent for up to 300s instead of latching
+  `cancel_outcome_unknown`. Live `pure_market_making` runs default
+  `max_quote_actions_per_minute` to 50 (#120).
+- `glyde-mm stop` reads `openOrders` and `historicalOrders` first and cancels only the
+  persisted originals still resting, at most 10 per action, waiting out Retry-After. The stop
+  report and `STOP` line name the failure class (`rate_limited`, `timeout` or
+  `stop_unconfirmed`), still with no exception text or addresses (#121).
+- A planned read-credential rotation (about every 4.5 minutes) keeps the resting quotes and
+  is not a fault. On the new socket the strategies adopt their quotes when the fresh snapshot
+  shows exactly those quotes; anything else takes the full reconcile. Events log
+  `read_rotation` / `read_rotated` and metrics count `read_rotations_total`, so real drops
+  stay visible (#122).
+- A stale account read is a drop that resnapshots, not a risk stop: quotes are pulled, the
+  stream reconnects, and the run ends only past the 300s reconnect window.
+- A timed-out first connect, and an unresolved startup cancel latch, retry inside the same
+  300s window instead of exiting for a supervisor restart.
+- An untagged open order the bot cannot parse (for example a pending Market IOC or a trigger
+  order listed with `limitPx` "0") is skipped and logged once, instead of failing the owner
+  snapshot.
+
 - A fill landing while the strategy is busy requoting no longer ends a live run with
   `live stream consumer overflow` (shown as `live stream invalid, gapped or disconnected`
   before the stream-fault diagnostics below). Books arrive at ~20/s, so a requote that held
