@@ -460,6 +460,23 @@ ruff check .
 
 Tests use fake One API clients/servers and require no network or credentials.
 
+### New action shapes need the Glyde order-shape contract
+
+A bot change that sends an action shape Glyde has not seen before must first pass the
+Glyde Prime order-shape contract. A new shape is a new action `type`, a new grouping, a
+new time-in-force, a trigger or reduce-only combination, or a new way of batching modifies
+or cancels. Add the shape to `SHAPES` in
+[`services/prime/crates/prime-engine/tests/order_shape_contract.rs`](https://github.com/Glyde-trade/glyde/blob/master/services/prime/crates/prime-engine/tests/order_shape_contract.rs)
+in the Glyde repository, then run this from the Glyde checkout:
+
+```sh
+cd services/prime && cargo test --locked -p prime-engine --test order_shape_contract
+```
+
+The contract signs the shape through Glyde's engine, Hyperliquid adapter and signer.
+It fails if the shape would stop the adapter or halt trading for everyone. On 28 Nov 2026
+a batchModify that only the signer refused did exactly that.
+
 ## Optional chat alerts
 
 Alerts are **off by default**. To opt in, put only the enable flag and environment
