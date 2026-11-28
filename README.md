@@ -19,12 +19,12 @@ bash scripts/founder-setup.sh            # pick a preset, paste owner + vault, p
 
 | Preset | Logic | Where it sits in the book |
 |---|---|---|
-| [`tight-ladder`](configs/founders/tight-ladder.yaml) | Fixed spreads, 20 small levels, gentle inventory skew | Inner: ~0.03% to ~0.13% from mid, $3 apart |
-| [`hl-anchored`](configs/founders/hl-anchored.yaml) | Fixed spreads centred on Hyperliquid's mid, not Glyde's | Near: 0.08% to 0.26% |
+| [`tight-ladder`](configs/founders/tight-ladder.yaml) | Fixed spreads, 12 small levels, gentle inventory skew | Inner: ~0.03% to ~0.12% from mid, ~$5 apart |
+| [`hl-anchored`](configs/founders/hl-anchored.yaml) | Fixed spreads centred on Hyperliquid's mid, not Glyde's | Near: 0.08% to 0.22% |
 | [`adaptive-vol`](configs/founders/adaptive-vol.yaml) | Avellaneda: spread follows measured volatility and inventory | Mid: from 0.15%, widening when the market moves |
 | [`inventory-shy`](configs/founders/inventory-shy.yaml) | Avellaneda pricing, shrinks the side that would grow its position | Mid: from 0.3% |
-| [`grid-wall`](configs/founders/grid-wall.yaml) | Static grid that doesn't follow the price | Wide: 24 levels across ±2.5% of today's price |
-| [`deep-book`](configs/founders/deep-book.yaml) | Fixed spreads, larger size, slow refresh | Outer: 0.8% to 1.7% |
+| [`grid-wall`](configs/founders/grid-wall.yaml) | Static grid that doesn't follow the price | Wide: 16 levels across ±2.5% of today's price |
+| [`deep-book`](configs/founders/deep-book.yaml) | Fixed spreads, larger size, slow refresh | Outer: 0.8% to 1.64% |
 
 Stop with Ctrl-C in the bot's terminal, or `~/glyde-mm/<preset>/stop.sh` from another one.
 
@@ -52,6 +52,9 @@ to start your bot or find out why it stopped.
   `~/glyde-mm/<preset>/.agent-key` (readable only by you).
 - **Orders are post-only and at least $10 each.** Levels too close to the price, or skewed below
   $10, are skipped rather than sent.
+- **Glyde allows each account 30 order placements and 20 cancels per minute.** Presets are sized
+  for that, which is why each runs 12–24 orders and the team spreads across accounts. Adding levels
+  makes the bot hit `rate limited` and churn instead of filling the book.
 - **A preflight PASS lasts 5 minutes.** `start.sh` runs it right before starting; if you miss the
   BTC prompt, just run `start.sh` again.
 

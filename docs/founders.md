@@ -12,14 +12,16 @@ of six copies of one bot.
 
 | Preset | Logic | Book area | Resting size (approx.) |
 |---|---|---|---|
-| `tight-ladder` | Pure market making: fixed spreads, 20 small levels, gentle inventory skew | Inner, ~0.03%–0.13% from mid, $3 apart | ~$940 |
-| `hl-anchored` | Pure market making centred on **Hyperliquid's** live mid; stops if Glyde and HL disagree by over 1% | Near, 0.08%–0.26% | ~$460 |
-| `adaptive-vol` | Avellaneda–Stoikov: spread and centre follow measured volatility and inventory | Mid, from 0.15%, wider in fast markets | ~$285 |
-| `inventory-shy` | Avellaneda pricing that shrinks orders on the side that would grow its position | Mid, from 0.3% | ~$380 |
-| `grid-wall` | Static grid that doesn't chase the price | Wide, 24 levels across ±2.5% of the price at setup | ~$425 |
-| `deep-book` | Pure market making, larger size, slow refresh, rarely fills | Outer, 0.8%–1.7% | ~$720 |
+| `tight-ladder` | Pure market making: fixed spreads, 12 small levels, gentle inventory skew | Inner, ~0.03%–0.12% from mid, ~$5 apart | ~$500 |
+| `hl-anchored` | Pure market making centred on **Hyperliquid's** live mid; stops if Glyde and HL disagree by over 1% | Near, 0.08%–0.22% | ~$350 |
+| `adaptive-vol` | Avellaneda–Stoikov: spread and centre follow measured volatility and inventory | Mid, from 0.15%, wider in fast markets | ~$215 |
+| `inventory-shy` | Avellaneda pricing that shrinks orders on the side that would grow its position | Mid, from 0.3% | ~$285 |
+| `grid-wall` | Static grid that doesn't chase the price | Wide, 16 levels across ±2.5% of the price at setup | ~$285 |
+| `deep-book` | Pure market making, larger size, slow refresh, rarely fills | Outer, 0.8%–1.64% | ~$440 |
 
-Sizes are at BTC ≈ $59k and include both sides. Glyde needs margin for resting orders, so keep a
+Sizes are at BTC ≈ $59k and include both sides. Glyde allows each account 30 order placements and
+20 cancels per minute, so each preset keeps 12–24 orders that live for minutes, not seconds; the
+book fills up because each founder adds their own account's budget. Glyde needs margin for resting orders, so keep a
 few hundred dollars more than the resting size in the account. Losses are expected to be small;
 each preset has a $15 daily-loss stop and a position cap.
 
