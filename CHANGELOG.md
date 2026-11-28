@@ -4,6 +4,14 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 ## [Unreleased]
 
+- A fill arriving while the live event queue is full no longer ends the run with
+  `live stream invalid, gapped or disconnected`. A busy BTC book filled the 32-slot queue with
+  snapshots while the bot was placing a 40-order ladder, and the next fill tripped
+  `live stream consumer overflow` (seen live within seconds to minutes of start). The fill now
+  takes the slot of a frame a busy consumer may skip: an empty owner cut first, then a book
+  superseded by a later queued book for the same market, then the oldest book. A queue holding
+  only fills still stops the run.
+
 - A routine account check no longer ends a run with `order_outcome_unknown` or
   `cancel_outcome_unknown` while an order or cancel is still being written. The check now
   waits for the in-flight action to finish instead of mistaking its durable intent record

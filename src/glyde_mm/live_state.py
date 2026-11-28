@@ -129,16 +129,67 @@ class LiveStateClient:
         if not self._events.full():
             self._events.put_nowait(None)
 
+    @staticmethod
+    def _replaceable(frame: JsonObject | None) -> bool:
+        # Books are full snapshots and empty owner cuts are already applied to account
+        # state, so a busy consumer may skip them; fills must never be dropped.
+        return frame is not None and (
+            frame.get("channel") == "l2Book"
+            or (frame.get("channel") == "mmOwner" and not frame.get("fills"))
+        )
+
     def _emit(self, frame: JsonObject) -> None:
         if self._events.full():
-            # Books are full snapshots and empty owner cuts are already applied to account
-            # state, so a busy consumer may skip them; fills must never be dropped.
-            if frame.get("channel") == "l2Book" or (
-                frame.get("channel") == "mmOwner" and not frame.get("fills")
-            ):
+            if self._replaceable(frame):
                 return
-            raise OneApiError("live stream consumer overflow")
+            if not self._evict_replaceable():
+                raise OneApiError("live stream consumer overflow")
         self._events.put_nowait(frame)
+
+    def _evict_replaceable(self) -> bool:
+        """Free one slot for a fill by dropping a queued frame a busy consumer may skip.
+
+        A busy book stream fills the queue with snapshots while the consumer is placing
+        orders; a fill arriving then must not end the run. Prefer, in order: an empty
+        owner cut (already applied), a book superseded by a later queued book for the
+        same market, then the oldest book. Returns False when only fills are queued.
+        """
+        queued = [self._events.get_nowait() for _ in range(self._events.qsize())]
+
+        def book_coin(row: JsonObject | None) -> object:
+            data = row.get("data") if row is not None else None
+            return data.get("coin") if isinstance(data, dict) else None
+
+        victim = next(
+            (
+                i
+                for i, row in enumerate(queued)
+                if self._replaceable(row) and row and row.get("channel") == "mmOwner"
+            ),
+            None,
+        )
+        if victim is None:
+            victim = next(
+                (
+                    i
+                    for i, row in enumerate(queued)
+                    if self._replaceable(row)
+                    and any(
+                        later is not None
+                        and later.get("channel") == "l2Book"
+                        and book_coin(later) == book_coin(row)
+                        for later in queued[i + 1 :]
+                    )
+                ),
+                None,
+            )
+        if victim is None:
+            victim = next((i for i, row in enumerate(queued) if self._replaceable(row)), None)
+        if victim is not None:
+            del queued[victim]
+        for row in queued:
+            self._events.put_nowait(row)
+        return victim is not None
 
     def check(self) -> None:
         if self._failure:
