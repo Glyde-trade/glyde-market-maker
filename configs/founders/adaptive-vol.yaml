@@ -1,0 +1,39 @@
+# Founder preset: adaptive-vol
+# Avellaneda-Stoikov. Spread and quote centre move with measured volatility and inventory:
+# tighter in calm markets, wider in fast ones. 6 levels per side from >=0.15%, 0.04% apart.
+# Warms up on 4 consecutive 15-second price samples (~1 min) before the first quote; Glyde's
+# virtual book only timestamps real changes, so shorter buckets keep resetting the warmup.
+# Glyde allows each account 30 order placements and 20 cancels per minute; this preset is sized to stay
+# under that (fewer, longer-lived orders), since every reconnect also cancels and re-places them all.
+# Live config. scripts/founder-setup.sh fills in owner/vault and keeps your key out of this file.
+# One bot per Glyde account: every glyde-mm bot cancels all "gmm1"-tagged orders on its account
+# at startup and reconnect, so two bots on one account cancel each other.
+mode: live
+base_url: https://api.glyde.trade/v1
+symbol: BTC
+owner: 'REPLACE_WITH_YOUR_PUBLIC_GLYDE_ACCOUNT_ADDRESS'
+vault_address: 'REPLACE_WITH_YOUR_ASSIGNED_PUBLIC_VAULT_ADDRESS'
+mainnet: true
+private_key_env: GLYDE_API_PRIVATE_KEY
+strategy: avellaneda_market_making
+strategy_config:
+  order_amount: '0.0003'
+  order_levels: 6
+  order_level_spread: '0.0004'
+  order_level_amount: '0'
+  order_refresh_time: 60
+  refresh_tolerance_pct: '0.08'
+  max_order_age: 600
+  minimum_spread: '0.0015'
+  inventory_target_position: '0'
+  risk_factor: '1'
+  liquidity_kappa: '1'
+  volatility_samples: 4
+  sample_interval_ms: 15000
+risk:
+  max_position: '0.015'
+  max_order_notional: '60'
+  max_orders_per_minute: 300
+  max_daily_loss: '15'
+  stale_book_seconds: '45'
+  account_age_seconds: '10'

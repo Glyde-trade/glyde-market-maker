@@ -50,7 +50,7 @@ ruff format --check .
 ```
 
 CI runs the complete test suite and an isolated built-wheel install. Changes to packaging should
-also use the [package checks](README.md#package-releases).
+also use the [package checks](docs/reference.md#package-releases).
 
 ## Strategy and config submissions
 

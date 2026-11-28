@@ -16,7 +16,7 @@ mkdir my-glyde-mm
 cd my-glyde-mm
 ```
 
-For a pinned wheel instead, use the [README release install command](../README.md#start-in-five-minutes)
+For a pinned wheel instead, use the [README release install command](reference.md#start-in-five-minutes)
 and consult that release's supported flags.
 Already installed an older version? Use `pipx upgrade glyde-market-maker` for its configured source,
 or `pipx uninstall glyde-market-maker` before choosing a different install source.

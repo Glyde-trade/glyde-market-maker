@@ -5,6 +5,8 @@ body:
   - type: markdown
     attributes:
       value: |
+        Running a founder bot? `bash scripts/report-bug.sh ~/glyde-mm/<preset>` fills this in for you
+        (redacted) and checks for an existing issue first.
         Never post signing keys, read credentials, authorization headers or signed requests.
         Use `glyde-mm report <logdir>` for a bounded summary; review it before sharing.
         Describe suspected security vulnerabilities privately to the repository maintainers.
@@ -21,12 +23,25 @@ body:
     attributes:
       label: Where does it happen?
       options:
-        - Installation or diagnostics
+        - Live on Glyde (founder preset)
+        - Live mode (own config)
         - Paper mode
-        - Live mode
+        - Installation or diagnostics
         - Not sure
     validations:
       required: true
+  - type: dropdown
+    id: preset
+    attributes:
+      label: Founder preset
+      options:
+        - Not a founder preset
+        - tight-ladder
+        - hl-anchored
+        - adaptive-vol
+        - inventory-shy
+        - grid-wall
+        - deep-book
   - type: textarea
     id: reproduction
     attributes:

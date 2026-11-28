@@ -1,0 +1,37 @@
+# Founder preset: deep-book
+# Pure market making, wide. 8 levels per side from 0.8% to 1.64% with larger size, slow refresh.
+# Gives the outer book real depth; rarely fills.
+# Glyde allows each account 30 order placements and 20 cancels per minute; this preset is sized to stay
+# under that (fewer, longer-lived orders), since every reconnect also cancels and re-places them all.
+# Live config. scripts/founder-setup.sh fills in owner/vault and keeps your key out of this file.
+# One bot per Glyde account: every glyde-mm bot cancels all "gmm1"-tagged orders on its account
+# at startup and reconnect, so two bots on one account cancel each other.
+mode: live
+base_url: https://api.glyde.trade/v1
+symbol: BTC
+owner: 'REPLACE_WITH_YOUR_PUBLIC_GLYDE_ACCOUNT_ADDRESS'
+vault_address: 'REPLACE_WITH_YOUR_ASSIGNED_PUBLIC_VAULT_ADDRESS'
+mainnet: true
+private_key_env: GLYDE_API_PRIVATE_KEY
+strategy: pure_market_making
+strategy_config:
+  bid_spread: '0.008'
+  ask_spread: '0.008'
+  order_amount: '0.0004'
+  order_levels: 8
+  order_level_spread: '0.0012'
+  order_level_amount: '0.00002'
+  order_refresh_time: 180
+  refresh_tolerance_pct: '0.2'
+  max_order_age: 1800
+  minimum_spread: '0.005'
+  inventory_skew_enabled: false
+  hanging_orders_enabled: false
+  max_quote_actions_per_minute: 20
+risk:
+  max_position: '0.025'
+  max_order_notional: '60'
+  max_orders_per_minute: 300
+  max_daily_loss: '15'
+  stale_book_seconds: '45'
+  account_age_seconds: '10'
