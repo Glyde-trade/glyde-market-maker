@@ -18,6 +18,7 @@ from typing import Any, TypeVar
 
 from .alerts import notify_session
 from .client import (
+    DEFAULT_QUOTE_ACTIONS_PER_MINUTE,
     OneApiClient,
     OneApiError,
     OneApiHTTPError,
@@ -317,6 +318,23 @@ async def _run_session(
     allow_existing_exposure: bool = False,
 ) -> None:
     selected = {market.symbol: market for market in config.market_configs()}
+    if config.mode == "live":
+        # Refreshes stay inside Glyde's per-account order-entry rate unless configured otherwise.
+        selected = {
+            symbol: replace(
+                market,
+                strategy_config={
+                    "max_quote_actions_per_minute": DEFAULT_QUOTE_ACTIONS_PER_MINUTE,
+                    **market.strategy_config,
+                },
+            )
+            if isinstance(
+                validate_strategy_config(market.strategy, market.strategy_config),
+                PureMarketMakingConfig,
+            )
+            else market
+            for symbol, market in selected.items()
+        }
     references = {}
     for symbol, market_config in selected.items():
         policy = validate_strategy_config(market_config.strategy, market_config.strategy_config)

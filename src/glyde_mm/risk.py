@@ -11,8 +11,9 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from .client import (
     ActionRefused,
@@ -45,10 +46,13 @@ if TYPE_CHECKING:
     )
 
 _LOG = logging.getLogger("glyde_mm")
+_T = TypeVar("_T")
 
 
 PROOF_RETRY_INITIAL_SECONDS = 0.25
 PROOF_RETRY_MAX_SECONDS = 5.0
+# A rate refusal sends nothing, so a cancel sweep waits it out and resends, this long at most.
+RATE_LIMIT_RETRY_WINDOW_SECONDS = 300.0
 
 
 class RiskViolation(RuntimeError):
@@ -686,7 +690,9 @@ class RiskManagedClient:
         unproven_error: Exception | None = None
         for request in requests:
             try:
-                results = await self.client.cancel_orders([request])
+                results = await self._resending_rate_limited(
+                    partial(self.client.cancel_orders, [request])
+                )
                 if len(results) != 1:
                     raise RiskViolation("cancel_outcome_unknown")
                 result = results[0]
@@ -708,7 +714,7 @@ class RiskManagedClient:
         if unproven and not await self._venue_proves_closed(unproven, unproven_error):
             failure = failure or unproven_error
         try:
-            await self.client.cancel_all(symbol)
+            await self._resending_rate_limited(lambda: self.client.cancel_all(symbol))
         except Exception as error:
             if deferrable and failure is None and reconnectable(error):
                 # A transient read failure leaves no unknown original; the next connection's
@@ -723,9 +729,24 @@ class RiskManagedClient:
         self.guard.finish_execution(owned)
         self._retire_owned(symbol)
 
+    async def _resending_rate_limited(self, call: Callable[[], Awaitable[_T]]) -> _T:
+        """A RateLimited refusal is definitive (nothing was sent): wait as told and resend."""
+        deadline = time.monotonic() + RATE_LIMIT_RETRY_WINDOW_SECONDS
+        while True:
+            try:
+                return await call()
+            except RateLimited as error:
+                wait = max(error.retry_after, 1.0)
+                if time.monotonic() + wait > deadline:
+                    raise
+                self._rate_limited(error, 0)
+                await asyncio.sleep(wait)
+
     async def _cancel_one(self, request: CancelRequest) -> bool:
         try:
-            results = await self.client.cancel_orders([request])
+            results = await self._resending_rate_limited(
+                lambda: self.client.cancel_orders([request])
+            )
         except Exception:
             return False
         return len(results) == 1 and results[0].status in ("cancelled", "already_closed")
