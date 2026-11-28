@@ -1,5 +1,5 @@
 """Glyde caps a signed order/cancel/modify action at 16 entries, and refuses larger ones whole.
-Its per-account buckets (place burst 15, cancel burst 10) set the smaller sizes actually sent.
+A smaller per-account bucket burst (reported by glydeOrderRateLimits) shrinks the size sent.
 
 Seen live on 26 Nov 2026: 8 levels per side (16 quotes) ran; 10 or more ended ~30s later with
 ``RiskViolation: cancel_outcome_unknown`` and no quote placed. The refusal left the bot hunting
@@ -16,7 +16,7 @@ import pytest
 from test_risk import FakeClient, Order, guard
 
 from glyde_mm.client import (
-    MAX_PLACE_ENTRIES,
+    MAX_ACTION_ENTRIES,
     ActionRefused,
     EngineUnavailable,
     OneApiClient,
@@ -95,15 +95,15 @@ async def exercise(orders, *, refuse=(), modify=False):
 async def test_quotes_are_split_into_actions_glyde_accepts(count):
     results, actions, fake = await exercise(quotes(count))
     sizes = [len(action["orders"]) for action in actions]
-    assert all(1 <= size <= MAX_PLACE_ENTRIES for size in sizes)
-    assert sum(sizes) == count and len(sizes) == -(-count // MAX_PLACE_ENTRIES)
+    assert all(1 <= size <= MAX_ACTION_ENTRIES for size in sizes)
+    assert sum(sizes) == count and len(sizes) == -(-count // MAX_ACTION_ENTRIES)
     assert [row.status for row in results] == ["resting"] * count
     assert len(fake.info({"type": "openOrders", "user": OWNER})) == count
 
 
 async def test_modifies_are_split_too():
     results, actions, _ = await exercise(quotes(20), modify=True)
-    assert [len(action["modifies"]) for action in actions] == [15, 5]
+    assert [len(action["modifies"]) for action in actions] == [16, 4]
     assert [row.status for row in results] == ["resting"] * 20
 
 
@@ -123,8 +123,8 @@ async def test_a_refused_first_action_raises_with_glydes_reason():
 async def test_a_refused_later_action_keeps_placed_orders_and_sends_no_more():
     results, actions, fake = await exercise(quotes(40), refuse={1})
     assert len(actions) == 2  # The third action is never sent.
-    assert [row.status for row in results] == ["resting"] * 15 + ["rejected"] * 25
-    assert len(fake.info({"type": "openOrders", "user": OWNER})) == 15
+    assert [row.status for row in results] == ["resting"] * 16 + ["rejected"] * 24
+    assert len(fake.info({"type": "openOrders", "user": OWNER})) == 16
 
 
 class RefusingClient(FakeClient):
