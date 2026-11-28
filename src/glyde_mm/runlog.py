@@ -18,6 +18,9 @@ _FIELDS = {
     "progress": {"book_messages", "pending_orders", "paper_fills"},
     "disconnected": set(),
     "reconnected": {"attempts", "downtime_ms"},
+    # A planned read-credential rotation is not a disconnect fault.
+    "read_rotation": set(),
+    "read_rotated": {"downtime_ms"},
     "book_stale": {"market", "reason"},
     "book_fresh": {"market", "paused_ms"},
     "run_ended": {"outcome"},
@@ -32,7 +35,7 @@ _FIELDS = {
         "close_code",
     },
 }
-_COUNTERS = {"progress", "reconnected", "book_fresh"}
+_COUNTERS = {"progress", "reconnected", "read_rotated", "book_fresh"}
 # Markets are config-order indexes, like metrics labels; reasons are a fixed set.
 STALE_REASONS = frozenset({"stale_book", "stale_book_source", "stale_peer"})
 _OUTCOMES = {"completed", "stopped", "cancelled", "risk_stop", "transport_error", "error"}

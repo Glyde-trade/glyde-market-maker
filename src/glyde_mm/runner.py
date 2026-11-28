@@ -22,6 +22,7 @@ from .client import (
     OneApiClient,
     OneApiError,
     OneApiHTTPError,
+    ReadRotation,
     StreamDisconnected,
     SubscriptionDeferred,
     book_from_wire,
@@ -34,7 +35,7 @@ from .dashboard import SnapshotPublisher
 from .live_state import LiveStateClient, StreamFault
 from .market_preflight import require_preflight
 from .metrics import Metrics
-from .models import Book, CancelRequest
+from .models import Book, CancelRequest, is_bot_order
 from .paper import PaperExchange
 from .paper_result import PaperResult
 from .preflight import check_live_exposure
@@ -59,6 +60,8 @@ from .transport import ClientFactory, JsonObject, MarketClient
 
 RECONNECT_INITIAL_SECONDS = 1.0
 RECONNECT_MAX_SECONDS = 30.0
+# Quotes stay up through a planned read rotation at least this long before they are swept.
+ROTATION_KEEP_SECONDS = 30.0
 WATCHDOG_PING_SECONDS = 5.0
 
 
@@ -90,6 +93,12 @@ def _failure_label(error: BaseException) -> str:
         # One API errors carry sanitized, credential-free messages by contract.
         return f"{type(error).__name__}: {error}"
     return type(error).__name__
+
+
+def _planned_rotation(error: BaseException | None) -> bool:
+    """A read-credential rotation, raised directly or wrapped as a live stream fault."""
+    cause = getattr(error, "cause", None)
+    return isinstance(error, ReadRotation) or isinstance(cause, ReadRotation)
 
 
 async def _stopped_within(stop: asyncio.Event, seconds: float) -> bool:
@@ -482,6 +491,8 @@ async def _run_session(
             if paper is not None:
                 subscriptions += [{"type": "trades", "coin": symbol} for symbol in selected]
 
+            rotating = False  # The current reconnect follows a planned read rotation.
+
             async def open_streams() -> dict[str, Book]:
                 nonlocal stream, reference_stream
                 stream = live.stream() if live is not None else source.stream(subscriptions)
@@ -498,7 +509,7 @@ async def _run_session(
                             if book.symbol not in selected:
                                 raise OneApiError("book market mismatch")
                             books[book.symbol] = book
-                metrics.connected()
+                metrics.connected(planned=rotating)
                 if references:
                     public_config = replace(
                         config,
@@ -803,6 +814,42 @@ async def _run_session(
             )
             sweep_due: float | None = None  # Quotes kept through a drop are swept at this time.
 
+            async def retire_strategies() -> None:
+                for strategy in strategies.values():
+                    await strategy.stop()
+                strategies.clear()
+                paused.clear()
+                paused_since.clear()
+
+            async def adopt_kept_quotes(books: dict[str, Book]) -> bool:
+                """After a planned rotation, keep quoting with the same strategies and quotes.
+
+                Only when the fresh snapshot shows exactly the bot quotes the strategies hold;
+                anything else takes the full reconcile (cancel and re-place).
+                """
+                if live is None or not strategies or set(strategies) != set(selected):
+                    return False
+                expected: set[str] = set()
+                for strategy in strategies.values():
+                    active = getattr(strategy, "_active", None)
+                    if not isinstance(active, dict):
+                        return False
+                    expected |= set(active)
+                for book in books.values():
+                    guard.update_book(book)
+                    metrics.book(guard.books[book.symbol])
+                await managed.refresh_account()
+                venue = {
+                    row.order_id
+                    for row in await managed.open_orders()
+                    if is_bot_order(row.client_order_id) and row.symbol in selected
+                }
+                if venue != expected:
+                    return False
+                for symbol, strategy in strategies.items():
+                    await strategy.on_book(guard.check_fresh(symbol))
+                return True
+
             async def retire(dropped: StreamDisconnected) -> None:
                 nonlocal tasks, sweep_due
                 if paper_result is not None:
@@ -821,16 +868,21 @@ async def _run_session(
                 # An unknown outcome or risk halt still ends the run; only flat state reconnects.
                 if not guard.resume_after_disconnect():
                     raise dropped
-                if keep_quotes and not isinstance(dropped, StaleAccount):
+                if rotating:
+                    # A planned rotation keeps quotes and strategies; the new socket's snapshot
+                    # adopts them when it shows exactly the quotes the strategies hold.
+                    sweep_due = time.monotonic() + max(keep_quotes, ROTATION_KEEP_SECONDS)
+                elif keep_quotes and not isinstance(dropped, StaleAccount):
                     # Resting quotes stay up through a short outage; reconnect reconciles them.
                     # Without a fresh account the bot cannot price its exposure: pull them.
                     sweep_due = time.monotonic() + keep_quotes
                 else:
                     for strategy in strategies.values():
                         await strategy.stop()
-                strategies.clear()
-                paused.clear()
-                paused_since.clear()
+                if not rotating:
+                    strategies.clear()
+                    paused.clear()
+                    paused_since.clear()
                 if paper_result is not None:
                     paper_result.resume("stale")  # Reconnect restarts every market fresh.
                 await resources.aclose()
@@ -926,9 +978,15 @@ async def _run_session(
                     continue
                 if books is None or stop.is_set():
                     return
+                adopted = False
                 try:
-                    await start_quoting(books, first)
+                    adopted = rotating and await adopt_kept_quotes(books)
+                    if not adopted:
+                        if rotating:
+                            await retire_strategies()
+                        await start_quoting(books, first)
                 except Exception as error:
+                    rotating = False
                     # A deferral can arrive after the books, while waiting for the account cut;
                     # a slow reconnect reconcile can also outlast the first books' freshness.
                     retryable = reconnectable(error) or (
@@ -956,13 +1014,17 @@ async def _run_session(
                         await live.close()
                     retry_after = _retry_floor(error)
                     continue
-                sweep_due = None  # The reconnect reconcile cancelled any kept quotes.
+                sweep_due = None  # The reconcile cancelled any kept quotes, or adopted them.
+                rotating = False
                 if stop.is_set():
                     return
                 if not first:
                     downtime_ms = round((time.monotonic() - dropped_at) * 1000)
-                    journal.emit("reconnected", attempts=attempts, downtime_ms=downtime_ms)
-                    report(f"{config.mode.upper()}: reconnected after {attempts} attempt(s)")
+                    if adopted:
+                        journal.emit("read_rotated", downtime_ms=downtime_ms)
+                    else:
+                        journal.emit("reconnected", attempts=attempts, downtime_ms=downtime_ms)
+                        report(f"{config.mode.upper()}: reconnected after {attempts} attempt(s)")
                     if paper_result is not None:
                         paper_result.resume("disconnect")
                 first, attempts = False, 0
@@ -970,20 +1032,25 @@ async def _run_session(
                 if dropped is None:
                     return
                 dropped_at = time.monotonic()
-                journal.emit("disconnected")
-                if isinstance(dropped, StreamFault):
-                    journal.emit("stream_fault", **dropped.fields())
+                rotating = _planned_rotation(dropped) and not paused
+                if rotating:
+                    journal.emit("read_rotation")
+                else:
+                    journal.emit("disconnected")
+                    if isinstance(dropped, StreamFault):
+                        journal.emit("stream_fault", **dropped.fields())
                 await retire(dropped)
                 failing_since = time.monotonic()  # A sweep waiting out a halt is not counted.
                 retry_after = _retry_floor(dropped)
-                report(
-                    f"{config.mode.upper()}: stream disconnected ({_failure_label(dropped)}); "
-                    + (
-                        f"quotes kept up to {keep_quotes:g}s, reconnecting"
-                        if sweep_due is not None
-                        else "quotes retired, reconnecting"
+                if not rotating:
+                    report(
+                        f"{config.mode.upper()}: stream disconnected ({_failure_label(dropped)}); "
+                        + (
+                            f"quotes kept up to {keep_quotes:g}s, reconnecting"
+                            if sweep_due is not None
+                            else "quotes retired, reconnecting"
+                        )
                     )
-                )
         except BaseException as error:
             if isinstance(error, RiskViolation):
                 risk_stop = str(error)

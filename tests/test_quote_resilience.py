@@ -12,10 +12,11 @@ from decimal import Decimal as D
 import httpx
 import pytest
 from market_receipt import approved_market
-from test_multi_market_live import MarketWire
+from test_multi_market_live import MarketSocket, MarketWire
+from test_stream_reconnect import until as run_until
 
 from glyde_mm import runner
-from glyde_mm.client import OneApiClient
+from glyde_mm.client import OneApiClient, ReadRotation
 from glyde_mm.config import Config, MarketConfig, RiskConfig
 from glyde_mm.models import BOT_CLOID_PREFIX, bot_client_order_id, is_bot_order
 from glyde_mm.risk import RiskViolation
@@ -406,3 +407,56 @@ async def test_stale_account_pulls_quotes_and_reconnects_instead_of_stopping(tmp
         finally:
             feeder.cancel()
     wire.assert_no_duplicate_cancels()
+
+
+class RotatingSocket(MarketSocket):
+    """Raises the client's planned read rotation when the test queues ROTATE."""
+
+    async def __anext__(self):
+        frame = await self.queue.get()
+        if frame == "ROTATE":
+            raise ReadRotation("read credential rotation")
+        if frame is None:
+            raise StopAsyncIteration
+        return json.dumps(frame)
+
+
+class RotatingWire(FreshWire):
+    def connect(self, url, **kwargs):
+        super().connect(url, **kwargs)
+        return RotatingSocket(self)
+
+
+async def test_read_rotation_keeps_resting_quotes_and_is_not_a_fault(tmp_path, monkeypatch):
+    # #122: every planned read rotation (~4.5 min) retired and re-placed the whole ladder.
+    monkeypatch.setattr(runner, "RECONNECT_INITIAL_SECONDS", 0.05)
+    wire, selected, lines = RotatingWire(), config(), []
+
+    async def feed():
+        while True:
+            wire.refresh("BTC", "ETH")
+            await asyncio.sleep(0.1)
+
+    async with episode(wire, selected, tmp_path, report=lines.append) as (task, stop):
+        await until(wire, lambda: len(wire.orders()) == 4)
+        feeder = asyncio.create_task(feed())
+        try:
+            original, before = set(wire.orders()), len(wire.actions)
+            wire.socket.queue.put_nowait("ROTATE")
+            # An adopted rotation sends no HTTP, so poll the run instead of the wire.
+            await run_until(task, lambda: wire.connections == 2)
+            await asyncio.sleep(0.5)
+            assert set(wire.orders()) == original and not task.done()
+            assert len(wire.actions) == before  # Nothing cancelled or re-placed.
+            assert not any("stream disconnected" in line for line in lines)
+            stop.set()
+            await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
+        finally:
+            feeder.cancel()
+    assert not wire.orders()
+    events = [
+        json.loads(row)["event"]
+        for path in tmp_path.rglob("events.jsonl")
+        for row in path.read_text().splitlines()
+    ]
+    assert "read_rotation" in events and "disconnected" not in events
