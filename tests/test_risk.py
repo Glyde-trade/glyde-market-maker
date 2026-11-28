@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from glyde_mm.models import BOT_CLOID_PREFIX, OpenOrder, bot_client_order_id
-from glyde_mm.risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation
+from glyde_mm.risk import RiskGuard, RiskLimits, RiskManagedClient, RiskViolation, StaleAccount
 
 
 @dataclass(frozen=True)
@@ -162,7 +162,7 @@ def test_stale_account_and_crossed_book_refuse():
     g, now = guard()
     now[0] += 11
     g.update_book(Book(timestamp_ms=1_700_000_000_001, received_at=111))
-    with pytest.raises(RiskViolation, match="stale_account"):
+    with pytest.raises(StaleAccount, match="stale_account"):
         g.check_fresh("BTC")
     g.update_account(Account(received_at=111))
     g.update_book(Book(bids=(Level(D("102")),), timestamp_ms=1_700_000_000_002, received_at=111))

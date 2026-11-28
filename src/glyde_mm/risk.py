@@ -62,6 +62,17 @@ class VenueSweepDeferred(StreamDisconnected):
     """Every known original is confirmed closed; only the venue sweep awaits a fresh read."""
 
 
+class StaleAccount(StreamDisconnected):
+    """The account read is older than account_age_seconds: pull quotes and resnapshot.
+
+    A drop, not a risk stop (GLYDE-159 account resnapshots stall 40-120s); the runner's
+    reconnect window still ends the run if the account stays stale.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("stale_account")
+
+
 @dataclass(frozen=True)
 class RiskLimits:
     max_position: Decimal = Decimal("0.001")
@@ -489,7 +500,7 @@ class RiskGuard:
         if not -1 <= source_age <= self.limits.stale_book_seconds:
             raise StaleMarket(symbol, "stale_book_source")
         if account is None or not 0 <= now - account.received_at <= self.limits.account_age_seconds:
-            raise RiskViolation("stale_account")
+            raise StaleAccount()
         if self.reference_check is not None:
             self.reference_check(book)
         return book
@@ -801,9 +812,13 @@ class RiskManagedClient:
 
     async def _refuse_undispatched(self, error: BaseException, count: int) -> None:
         """Clean up after refusing orders that were never sent; the caller re-raises error."""
-        reason = str(error) if isinstance(error, RiskViolation) else "pretrade_refused"
+        reason = (
+            str(error) if isinstance(error, (RiskViolation, StaleAccount)) else "pretrade_refused"
+        )
         if self.metrics:
             self.metrics.refused(reason, count)
+        if isinstance(error, StaleAccount):
+            return  # Nothing was sent; the runner treats it as a drop and retires quotes.
         if (
             self.isolate_stale_markets
             and isinstance(error, StaleMarket)
