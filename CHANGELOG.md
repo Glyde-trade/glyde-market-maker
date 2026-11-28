@@ -4,6 +4,13 @@ GitHub version tags/releases are the publication record; Unreleased changes requ
 
 ## [Unreleased]
 
+- Order-entry pacing follows the limits Glyde reports. The client reads
+  `glydeOrderRateLimits` once and paces to the place and cancel buckets the server admits;
+  against a server that does not report them it defaults to Glyde's current limits (place
+  120/min burst 60, cancel 240/min burst 80) instead of v0.7.0's place 30/15 and cancel 20/10.
+  Actions carry up to 16 entries, so a 40-level ladder re-places in one burst. Retry-After is
+  always honoured. Live `max_quote_actions_per_minute` defaults to 360.
+
 ## [0.7.0]
 
 - Glyde rate-limit refusals are definitive. Glyde admits order entries per account per

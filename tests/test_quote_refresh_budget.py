@@ -7,6 +7,7 @@ request budget was exhausted. These pin the cheaper refresh and the back-off.
 from __future__ import annotations
 
 import asyncio
+import json
 from decimal import Decimal as D
 
 import httpx
@@ -14,6 +15,7 @@ import pytest
 from test_pure_market_making import Client, book
 from test_risk import FakeClient, guard
 
+from glyde_mm import client as client_module
 from glyde_mm.client import EntryBucket, OneApiClient, RateLimited
 from glyde_mm.config import Config
 from glyde_mm.models import CancelRequest, OrderRequest, bot_client_order_id
@@ -189,26 +191,53 @@ async def test_cancels_share_one_signed_action(unsigned, monkeypatch):
     assert len(sent) == 1 and [r.status for r in results] == ["cancelled"] * 10
 
 
-async def test_cancels_split_to_glydes_cancel_burst(unsigned, monkeypatch):
-    # 28 Nov 2026 (#120): a 16-entry cancel used 16 of the account's 10-entry cancel burst.
-    sent = []
+def cancel_receipts(sent, limits=None):
+    """An exchange that records cancel batch sizes; /info answers glydeOrderRateLimits."""
 
     def handler(request):
-        count = len(__import__("json").loads(request.content)["action"]["cancels"])
+        body = json.loads(request.content)
+        if request.url.path.endswith("/info"):
+            if limits is None:
+                return httpx.Response(400, text="Glyde: unsupported request")
+            return httpx.Response(200, json=limits)
+        count = len(body["action"]["cancels"])
         sent.append(count)
         return httpx.Response(
             200,
             json={"status": "ok", "response": {"data": {"statuses": ["success"] * count}}},
         )
 
-    client = live_client(httpx.MockTransport(handler))
+    return httpx.MockTransport(handler)
 
-    async def asset(symbol):
-        return 0, None
 
+async def asset(symbol):
+    return 0, None
+
+
+@pytest.mark.paced
+async def test_cancels_split_to_the_cancel_burst(unsigned, monkeypatch):
+    # 28 Nov 2026 (#120): a 16-entry cancel used 16 of the account's 10-entry cancel burst.
+    monkeypatch.setattr(client_module, "ORDER_ENTRY_RATES", {"cancel": (600, 10)})
+    sent = []
+    client = live_client(cancel_receipts(sent))
     monkeypatch.setattr(client, "_asset", asset)
     await client.cancel_orders([CancelRequest("BTC", order_id=str(i)) for i in range(25)])
-    assert sent == [10, 10, 5]
+    assert sent == [10, 10, 5]  # An older server reports no limits: the defaults apply.
+
+
+@pytest.mark.paced
+async def test_server_reported_limits_replace_the_defaults(unsigned, monkeypatch):
+    sent = []
+    limits = {
+        "place": {"perMinute": 600, "burst": 30, "maxBatch": 40},
+        "cancel": {"perMinute": 600, "burst": 4, "maxBatch": 6},
+        "maxDebtSeconds": 10,
+    }
+    client = live_client(cancel_receipts(sent, limits))
+    monkeypatch.setattr(client, "_asset", asset)
+    await client.cancel_orders([CancelRequest("BTC", order_id=str(i)) for i in range(6)])
+    assert sent == [4, 2]
+    assert client._buckets["place"].burst == 30
 
 
 @pytest.mark.paced
@@ -230,6 +259,8 @@ async def test_client_waits_out_a_refusal_before_the_next_action(unsigned, monke
     sent = []
 
     def handler(request):
+        if request.url.path.endswith("/info"):
+            return httpx.Response(400, text="Glyde: unsupported request")
         sent.append(asyncio.get_running_loop().time())
         if len(sent) == 1:
             return httpx.Response(429, headers={"Retry-After": "1"})

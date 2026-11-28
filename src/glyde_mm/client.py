@@ -117,15 +117,15 @@ class SubscriptionDeferred(StreamDisconnected):
 MAX_ACTION_ENTRIES = 16
 # Glyde admits order entries per account per minute, counted per entry (backend
 # order_rate_limits.go): (entries per minute, burst). Actions are split to the burst and paced
-# so a ladder never asks for more than the bucket holds.
-ORDER_ENTRY_RATES = {"place": (30, 15), "cancel": (20, 10)}
+# so a ladder never asks for more than the bucket holds. The server's own figures, read from
+# `glydeOrderRateLimits`, replace these defaults (#9445's) when it reports them.
+ORDER_ENTRY_RATES = {"place": (120, 60), "cancel": (240, 80)}
 ACTION_BUCKETS = {
     "order": ("place", "orders"),
     "batchModify": ("place", "modifies"),
     "cancel": ("cancel", "cancels"),
     "cancelByCloid": ("cancel", "cancels"),
 }
-MAX_PLACE_ENTRIES = min(MAX_ACTION_ENTRIES, ORDER_ENTRY_RATES["place"][1])
 MAX_CANCEL_ENTRIES = min(MAX_ACTION_ENTRIES, ORDER_ENTRY_RATES["cancel"][1])
 # Refresh entries per minute that both buckets admit at their sustained rates.
 DEFAULT_QUOTE_ACTIONS_PER_MINUTE = sum(rate for rate, _ in ORDER_ENTRY_RATES.values())
@@ -386,6 +386,7 @@ class OneApiClient:
         self._read_credential: tuple[str, float] | None = None
         self._read_lock = asyncio.Lock()
         self._buckets = {name: EntryBucket(*rate) for name, rate in ORDER_ENTRY_RATES.items()}
+        self._rates_read = not self._buckets
 
     async def __aenter__(self) -> OneApiClient:
         return self
@@ -541,6 +542,23 @@ class OneApiClient:
             private=body.get("type") in {"clearinghouseState", "openOrders", "historicalOrders"},
         )
 
+    async def _entries_per_action(self, bucket_name: str) -> int:
+        """Entries one signed action may carry, after adopting the server's reported limits."""
+        if not self._rates_read:
+            self._rates_read = True
+            try:
+                reported = await self.info({"type": "glydeOrderRateLimits"})
+            except OneApiError:
+                reported = None  # An older server: keep the defaults.
+            for name in self._buckets:
+                row = reported.get(name) if isinstance(reported, dict) else None
+                rate = row.get("perMinute") if isinstance(row, dict) else None
+                burst = row.get("burst") if isinstance(row, dict) else None
+                if type(rate) is int and type(burst) is int and rate > 0 and burst > 0:
+                    self._buckets[name] = EntryBucket(rate, burst)
+        bucket = self._buckets.get(bucket_name)
+        return MAX_ACTION_ENTRIES if bucket is None else min(MAX_ACTION_ENTRIES, int(bucket.burst))
+
     async def meta(self) -> dict[str, Any]:
         result = await self.info({"type": "meta"})
         self._assets = {
@@ -652,15 +670,16 @@ class OneApiClient:
         orders: Sequence[OrderRequest],
         action: Callable[[Sequence[Any]], Awaitable[dict[str, Any]]],
     ) -> list[OrderResult]:
-        """Send at most MAX_PLACE_ENTRIES per signed action, in order.
+        """Send at most one place bucket's burst (and 16) entries per signed action, in order.
 
         A refusal of the first action means nothing was placed and is raised. Once an earlier
         action has placed orders, a refused later action (and every one after it, which is
         not sent) is reported per order as rejected, so placed orders stay accounted for.
         """
         results: list[OrderResult] = []
-        for start in range(0, len(rows), MAX_PLACE_ENTRIES):
-            part = slice(start, start + MAX_PLACE_ENTRIES)
+        size = await self._entries_per_action("place")
+        for start in range(0, len(rows), size):
+            part = slice(start, start + size)
             try:
                 results.extend(self._order_results(await action(rows[part]), orders[part]))
             except ActionRefused:
@@ -768,7 +787,7 @@ class OneApiClient:
         )
 
     async def cancel_orders(self, orders: Sequence[CancelRequest]) -> list[CancelResult]:
-        # One signed action per wire type and MAX_CANCEL_ENTRIES chunk, not one per order:
+        # One signed action per wire type and cancel-burst chunk, not one per order:
         # every action costs Glyde a venue request.
         by_id: list[tuple[int, dict[str, Any]]] = []
         by_cloid: list[tuple[int, dict[str, Any]]] = []
@@ -783,9 +802,10 @@ class OneApiClient:
                     raise ValueError("invalid cancel client_order_id")
                 by_cloid.append((index, {"asset": asset, "cloid": request.client_order_id}))
         statuses: dict[int, Any] = {}
+        size = await self._entries_per_action("cancel")
         for kind, rows in (("cancel", by_id), ("cancelByCloid", by_cloid)):
-            for start in range(0, len(rows), MAX_CANCEL_ENTRIES):
-                part = rows[start : start + MAX_CANCEL_ENTRIES]
+            for start in range(0, len(rows), size):
+                part = rows[start : start + size]
                 action = {"type": kind, "cancels": [wire for _, wire in part]}
                 for (index, _), status in zip(
                     part, self._statuses(await self.exchange(action), len(part)), strict=True
