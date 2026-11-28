@@ -285,7 +285,11 @@ def main(argv: list[str] | None = None) -> int:
             from .shutdown import stop_bot
 
             stop_result, path = asyncio.run(stop_bot(selected, config_path.parent / ".glyde-mm"))
-            print(f"STOP {','.join(selected.symbols)}: {stop_result['outcome']} | report={path}")
+            failure = f" ({stop_result['failure']})" if stop_result.get("failure") else ""
+            print(
+                f"STOP {','.join(selected.symbols)}: {stop_result['outcome']}{failure} "
+                f"| report={path}"
+            )
             if stop_result["outcome"] != "stopped":
                 print(
                     "Cancellation NOT confirmed; check the venue before restarting.",

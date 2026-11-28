@@ -7,17 +7,24 @@ import fcntl
 import hashlib
 import json
 import os
-from collections.abc import Callable, Iterator
+import time
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, AbstractContextManager, contextmanager
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Self, TypeVar
 from uuid import uuid4
 
-from .client import OneApiClient
+from .client import MAX_CANCEL_ENTRIES, OneApiClient, RateLimited
 from .config import Config
-from .models import CancelRequest, TradingClient, is_bot_order
-from .risk import RiskGuard, RiskViolation
+from .models import CancelRequest, OpenOrder, TradingClient, is_bot_order
+from .risk import RiskGuard, RiskViolation, venue_proves_closed
+
+_T = TypeVar("_T")
+
+# After the runner exits, cancels may wait out Glyde's order-entry pacing and Retry-After.
+STOP_CANCEL_SECONDS = 120.0
 
 
 def _paths(config: Config, directory: Path) -> tuple[Path, Path, Path]:
@@ -118,6 +125,69 @@ def _write_report(path: Path, result: dict[str, Any]) -> None:
         os.fsync(handle.fileno())
 
 
+def _resting(request: CancelRequest, orders: list[OpenOrder]) -> bool:
+    cloid = (request.client_order_id or "").lower()
+    return any(
+        row.symbol == request.symbol
+        and (
+            (request.order_id is not None and row.order_id == request.order_id)
+            or (cloid and (row.client_order_id or "").lower() == cloid)
+        )
+        for row in orders
+    )
+
+
+async def _resend_rate_limited(call: Callable[[], Awaitable[_T]], deadline: float) -> _T:
+    """A RateLimited refusal sent nothing: wait out its Retry-After and send again."""
+    while True:
+        try:
+            return await call()
+        except RateLimited as error:
+            wait = max(error.retry_after, 1.0)
+            if time.monotonic() + wait > deadline:
+                raise
+            await asyncio.sleep(wait)
+
+
+async def _cancel_originals(
+    client: TradingClient, originals: list[CancelRequest], deadline: float
+) -> None:
+    """Cancel only the originals still resting, at most MAX_CANCEL_ENTRIES per action."""
+    if not originals:
+        return
+    resting = await client.open_orders()
+    read_history = getattr(client, "historical_orders", None)
+    history = await read_history() if read_history is not None else []
+    pending = [
+        row
+        for row in originals
+        if _resting(row, resting) and not venue_proves_closed([row], resting, history)
+    ]
+    for start in range(0, len(pending), MAX_CANCEL_ENTRIES):
+        part = pending[start : start + MAX_CANCEL_ENTRIES]
+        rows = await _resend_rate_limited(partial(client.cancel_orders, part), deadline)
+        if len(rows) != len(part) or any(
+            row.status not in {"cancelled", "already_closed"} for row in rows
+        ):
+            raise RiskViolation("cancel_outcome_unknown")
+        for original, row in zip(part, rows, strict=True):
+            if row.order_id not in (None, original.order_id) or (
+                row.client_order_id not in (None, original.client_order_id)
+            ):
+                raise RiskViolation("cancel_identity_mismatch")
+
+
+def _failure_class(error: BaseException) -> str:
+    """The stop report names a failure class only: never exception text or identifiers."""
+    while error is not None:
+        if isinstance(error, TimeoutError):
+            return "timeout"
+        if isinstance(error, RateLimited):
+            return "rate_limited"
+        error = error.__cause__ or error.__context__  # type: ignore[assignment]
+    return "stop_unconfirmed"
+
+
 async def stop_bot(
     config: Config,
     directory: Path,
@@ -146,31 +216,21 @@ async def stop_bot(
                 ownership = await _wait_for_runner(session)
             try:
                 if config.mode == "live":
-                    async with asyncio.timeout(wait_seconds):
+                    deadline = time.monotonic() + wait_seconds + STOP_CANCEL_SECONDS
+                    async with asyncio.timeout(wait_seconds + STOP_CANCEL_SECONDS):
                         async with client_factory(config) as client:
-                            failure = None
+                            failure: BaseException | None = None
                             try:
-                                originals = _originals(config, directory)
-                                for original in originals:
-                                    try:
-                                        rows = await client.cancel_orders([original])
-                                        if len(rows) != 1 or rows[0].status not in {
-                                            "cancelled",
-                                            "already_closed",
-                                        }:
-                                            raise RiskViolation("cancel_outcome_unknown")
-                                        if rows[0].order_id not in (None, original.order_id) or (
-                                            rows[0].client_order_id
-                                            not in (None, original.client_order_id)
-                                        ):
-                                            raise RiskViolation("cancel_identity_mismatch")
-                                    except Exception as error:
-                                        failure = error
+                                await _cancel_originals(
+                                    client, _originals(config, directory), deadline
+                                )
                             except Exception as error:
                                 failure = error
                             for symbol in config.symbols:
                                 try:
-                                    await client.cancel_all(symbol)
+                                    await _resend_rate_limited(
+                                        partial(client.cancel_all, symbol), deadline
+                                    )
                                 except Exception as error:
                                     failure = failure or error
                             remaining = await client.open_orders()
@@ -180,7 +240,7 @@ async def stop_bot(
                                 for row in remaining
                             )
                             if failure is not None or result["remaining_orders"]:
-                                raise RiskViolation("cancel_outcome_unknown")
+                                raise RiskViolation("cancel_outcome_unknown") from failure
                 else:
                     result["remaining_orders"] = 0
                 result["outcome"] = "stopped"
@@ -188,6 +248,6 @@ async def stop_bot(
                 ownership.__exit__(None, None, None)
     except Exception as error:
         # The report deliberately excludes exception text, credentials and account identifiers.
-        result["failure"] = "timeout" if isinstance(error, TimeoutError) else "stop_unconfirmed"
+        result["failure"] = _failure_class(error)
     _write_report(path, result)
     return result, path
