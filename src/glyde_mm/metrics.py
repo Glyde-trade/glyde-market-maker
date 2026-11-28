@@ -55,7 +55,14 @@ class Metrics:
         self._lock = threading.Lock()
         self._counts = {
             key: 0
-            for key in ("quotes_placed", "quotes_cancelled", "gaps", "reconnects", "stale_pauses")
+            for key in (
+                "quotes_placed",
+                "quotes_cancelled",
+                "gaps",
+                "reconnects",
+                "read_rotations",
+                "stale_pauses",
+            )
         }
         self._refused = dict.fromkeys(_REASONS, 0)
         self._fills = dict.fromkeys(self._symbols.values(), 0)
@@ -90,11 +97,12 @@ class Metrics:
             self.fill(fill.symbol)
         self._paper_fill_index = len(paper.fills)
 
-    def connected(self) -> None:
+    def connected(self, *, planned: bool = False) -> None:
+        """A new stream connection; a planned read rotation is not counted as a reconnect."""
         if self.enabled:
             with self._lock:
                 if self._connections:
-                    self._counts["reconnects"] += 1
+                    self._counts["read_rotations" if planned else "reconnects"] += 1
                 self._connections += 1
 
     def book(self, book: Book) -> None:

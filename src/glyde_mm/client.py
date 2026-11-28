@@ -100,6 +100,10 @@ def socket_closed(error: ConnectionClosed | OSError) -> StreamDisconnected:
     return dropped
 
 
+class ReadRotation(StreamDisconnected):
+    """A planned reconnect before the read credential's socket lease ends; not a fault."""
+
+
 class SubscriptionDeferred(StreamDisconnected):
     """The server refused a subscription for now; resubscribe no sooner than retry_after."""
 
@@ -896,7 +900,7 @@ class OneApiClient:
                     yield frame
                     if rotate_at is not None and time.monotonic() >= rotate_at:
                         # Reconnect with a fresh credential before the server ends the lease.
-                        raise StreamDisconnected("read credential rotation")
+                        raise ReadRotation("read credential rotation")
             except (ConnectionClosed, OSError) as error:
                 raise socket_closed(error) from None
             finally:
