@@ -43,6 +43,7 @@ from .risk import (
     RiskLimits,
     RiskManagedClient,
     RiskViolation,
+    StaleAccount,
     StaleMarket,
     VenueSweepDeferred,
     venue_proves_closed,
@@ -774,8 +775,9 @@ async def _run_session(
                 # An unknown outcome or risk halt still ends the run; only flat state reconnects.
                 if not guard.resume_after_disconnect():
                     raise dropped
-                if keep_quotes:
+                if keep_quotes and not isinstance(dropped, StaleAccount):
                     # Resting quotes stay up through a short outage; reconnect reconciles them.
+                    # Without a fresh account the bot cannot price its exposure: pull them.
                     sweep_due = time.monotonic() + keep_quotes
                 else:
                     for strategy in strategies.values():
@@ -888,7 +890,7 @@ async def _run_session(
                     )
                     if not retryable or (
                         first
-                        and not isinstance(error, SubscriptionDeferred)
+                        and not isinstance(error, (SubscriptionDeferred, StaleAccount))
                         and not await engine_halted(error)
                     ):
                         raise

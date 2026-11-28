@@ -350,3 +350,37 @@ async def test_manual_order_survives_live_start_quoting_and_shutdown(tmp_path):
     assert all(row["c"].startswith(BOT_CLOID_PREFIX) and len(row["c"]) == 34 for row in placed)
     cancels = [a for _, a in wire.actions if a["type"] in {"cancel", "cancelByCloid"}]
     assert cancels and all(row.get("o") != int(manual) for a in cancels for row in a["cancels"])
+
+
+async def test_stale_account_pulls_quotes_and_reconnects_instead_of_stopping(tmp_path, monkeypatch):
+    # GLYDE-159: account resnapshots stalled 40-120s while books stayed fresh, and the bot
+    # exited on stale_account (28 Nov 2026). It now retires its quotes and resnapshots.
+    monkeypatch.setattr(runner, "RECONNECT_INITIAL_SECONDS", 0.2)
+    wire = FreshWire()
+    selected = replace(config(), risk=replace(config().risk, account_age_seconds=D(1)))
+    owner_fresh = [True]
+
+    async def feed():
+        while True:
+            wire.ledger.now_ms = time.time_ns() // 1_000_000
+            wire.emit_book("BTC")
+            wire.emit_book("ETH")
+            if owner_fresh[0]:
+                wire.emit_owner()
+            await asyncio.sleep(0.1)
+
+    async with episode(wire, selected, tmp_path) as (task, _):
+        await until(wire, lambda: len(wire.orders()) == 4)
+        original = set(wire.orders())
+        feeder = asyncio.create_task(feed())
+        try:
+            owner_fresh[0] = False
+            await until(wire, lambda: not wire.orders())
+            assert not task.done()
+            owner_fresh[0] = True
+            await until(wire, lambda: len(wire.orders()) == 4)
+            assert set(wire.orders()).isdisjoint(original) and not task.done()
+            assert wire.connections >= 2
+        finally:
+            feeder.cancel()
+    wire.assert_no_duplicate_cancels()
