@@ -163,23 +163,44 @@ async def _wait_out_halt(
 
 
 async def _resolve_cancel_latch(
-    source: MarketClient, guard: RiskGuard, report: Callable[[str], object]
+    source: MarketClient,
+    guard: RiskGuard,
+    report: Callable[[str], object],
+    stop: asyncio.Event,
+    window: float,
 ) -> None:
-    """Clear a prior run's cancel latch when the venue proves every original terminal."""
-    if guard.halted != "cancel_outcome_unknown":
-        return
-    try:
-        open_orders = await source.open_orders()
-        history = await source.historical_orders()
-    except OneApiError as error:
-        reason = type(error).__name__
-        report(f"LIVE: cancel_outcome_unknown kept; order history unavailable ({reason})")
-        return
-    if guard.resolve_cancel_latch(open_orders, history):
-        await guard.flush_state()
-        report("LIVE: cancel_outcome_unknown resolved; order history shows every original closed")
-    else:
-        report("LIVE: cancel_outcome_unknown kept; order history lacks proof for an original")
+    """Clear a prior run's cancel latch once the venue proves every original terminal.
+
+    Proof can lag a restart (history unavailable, a cancel not yet visible), so it is retried
+    for the same bounded window a reconnect gets; past it the latch stays and the run stops.
+    """
+    deadline, delay, reported = time.monotonic() + window, RECONNECT_INITIAL_SECONDS, False
+    while guard.halted == "cancel_outcome_unknown":
+        try:
+            open_orders = await source.open_orders()
+            history = await source.historical_orders()
+        except OneApiError as error:
+            why = f"order history unavailable ({type(error).__name__})"
+        else:
+            if guard.resolve_cancel_latch(open_orders, history):
+                await guard.flush_state()
+                report(
+                    "LIVE: cancel_outcome_unknown resolved; "
+                    "order history shows every original closed"
+                )
+                return
+            why = "order history lacks proof for an original"
+        if time.monotonic() >= deadline:
+            report(f"LIVE: cancel_outcome_unknown kept past the {window:g}s window; {why}")
+            return
+        if not reported:
+            report(
+                f"LIVE: cancel_outcome_unknown unresolved ({why}); retrying for up to {window:g}s"
+            )
+            reported = True
+        if await _stopped_within(stop, delay):
+            return
+        delay = min(delay * 2, RECONNECT_MAX_SECONDS)
 
 
 async def report_paper_status(
@@ -357,7 +378,9 @@ async def _run_session(
             max_halt = float(config.risk.max_engine_halt_seconds)
 
             async def startup_reads() -> bool:
-                await _resolve_cancel_latch(source, guard, report)
+                await _resolve_cancel_latch(
+                    source, guard, report, stop, float(config.risk.max_stale_pause_seconds)
+                )
                 # All selected markets must pass before cleanup gains cancellation authority.
                 await check_live_exposure(
                     source, config.symbols, allow_existing_exposure=allow_existing_exposure
