@@ -306,17 +306,39 @@ async def lose_cancel_receipts(wire, selected, directory):
     return originals
 
 
-async def test_lost_cancel_receipt_keeps_originals_fenced_without_venue_history(tmp_path):
+async def test_lost_cancel_receipt_keeps_originals_fenced_without_venue_history(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(runner, "RECONNECT_INITIAL_SECONDS", 0.1)
     wire, selected, lines = FreshWire(), config(), []
     await lose_cancel_receipts(wire, selected, tmp_path)
     placements = sum(action["type"] == "order" for _, action in wire.actions)
     wire.refuse_history = True
+    # Startup retries the proof for the reconnect window, then stops with the latch kept.
+    selected = replace(selected, risk=replace(selected.risk, max_stale_pause_seconds=D("0.5")))
     async with episode(wire, selected, tmp_path, report=lines.append) as (task, _):
         with pytest.raises(RiskViolation, match="cancel_outcome_unknown"):
             await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
     assert sum(action["type"] == "order" for _, action in wire.actions) == placements
     assert json.loads(risk_state_path(selected, tmp_path).read_text())["execution"] is not None
-    assert any("cancel_outcome_unknown kept" in line for line in lines)
+    assert any("cancel_outcome_unknown kept past" in line for line in lines)
+
+
+async def test_startup_cancel_latch_retries_until_venue_history_returns(tmp_path, monkeypatch):
+    # 28 Nov 14:37: a restart found the latch before history could prove the cancels, and
+    # exited for systemd to restart. It now retries inside the reconnect window.
+    monkeypatch.setattr(runner, "RECONNECT_INITIAL_SECONDS", 0.1)
+    wire, selected, lines = FreshWire(), config(), []
+    originals = await lose_cancel_receipts(wire, selected, tmp_path)
+    wire.refuse_history = True
+    asyncio.get_running_loop().call_later(0.5, setattr, wire, "refuse_history", False)
+    async with episode(wire, selected, tmp_path, report=lines.append) as (task, stop):
+        await until(wire, lambda: len(wire.orders()) == 4)
+        assert set(wire.orders()).isdisjoint(originals) and not task.done()
+        stop.set()
+        await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
+    assert any("cancel_outcome_unknown unresolved" in line for line in lines)
+    assert any("cancel_outcome_unknown resolved" in line for line in lines)
 
 
 async def test_lost_cancel_receipt_resolves_at_startup_when_venue_history_proves_closed(tmp_path):
