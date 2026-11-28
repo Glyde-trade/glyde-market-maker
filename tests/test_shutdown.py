@@ -12,9 +12,16 @@ import pytest
 from eth_account import Account as Wallet
 
 from glyde_mm import cli
-from glyde_mm.client import OneApiClient, OneApiError
+from glyde_mm.client import OneApiClient, OneApiError, RateLimited
 from glyde_mm.config import Config
-from glyde_mm.models import Account, CancelResult, OpenOrder, OrderRequest, bot_client_order_id
+from glyde_mm.models import (
+    Account,
+    CancelResult,
+    HistoricalOrder,
+    OpenOrder,
+    OrderRequest,
+    bot_client_order_id,
+)
 from glyde_mm.paper import PaperExchange
 from glyde_mm.risk import RiskViolation
 from glyde_mm.runner import risk_state_path, run
@@ -125,12 +132,15 @@ async def test_unresolved_originals_attempted_before_discovery(tmp_path):
             }
         )
     )
+    source.rows.append(OpenOrder("7", "BTC", "buy", D("0.1"), D(98), "0x" + "a" * 32))
     result, _ = await stop_bot(config, tmp_path, client_factory=lambda _: source)
     assert result["outcome"] == "stopped"
-    assert source.events[0][0] == "originals"
-    assert source.events[0][1][0].client_order_id == "0x" + "a" * 32
-    assert len(source.events[0][1]) == 1
-    assert source.events[1:] == [("cancel", "BTC"), ("read",)]
+    # Resting originals are read first, then cancelled before discovery.
+    assert source.events[0] == ("read",)
+    assert source.events[1][0] == "originals"
+    assert source.events[1][1][0].client_order_id == "0x" + "a" * 32
+    assert len(source.events[1][1]) == 1
+    assert source.events[2:] == [("cancel", "BTC"), ("read",)]
     assert json.loads(risk_state_path(config, tmp_path).read_text())["execution"]
 
 
@@ -296,3 +306,61 @@ def test_stop_cli_paper_report(tmp_path, capsys):
     assert "stopped" in capsys.readouterr().out
     reports = list((tmp_path / ".glyde-mm" / "stops").glob("*.json"))
     assert len(reports) == 1
+
+
+class RateLimitedVenue(Source):
+    """#121: 25 persisted originals, 5 still resting, and a cancel bucket of 10 per action."""
+
+    def __init__(self):
+        super().__init__()
+        self.rows = [
+            OpenOrder(str(i), "BTC", "buy", D("0.1"), D(90), bot_client_order_id())
+            for i in range(10930, 10935)
+        ]
+        self.refusals = 0
+
+    async def historical_orders(self):
+        return [HistoricalOrder(str(i), "BTC", "canceled") for i in range(10935, 10955)]
+
+    async def cancel_orders(self, orders):
+        assert len(orders) <= 10
+        if self.refusals == 0:
+            self.refusals += 1
+            raise RateLimited("exchange refused the action: rate limited", 0.01)
+        self.events.append(("originals", orders))
+        ids = {row.order_id for row in orders}
+        self.rows = [row for row in self.rows if row.order_id not in ids]
+        return [CancelResult("cancelled", row.order_id, row.client_order_id) for row in orders]
+
+
+def originals_state(config, directory, ids):
+    rows = [{"symbol": "BTC", "order_id": str(i), "client_order_id": None} for i in ids]
+    risk_state_path(config, directory).write_text(
+        json.dumps({"execution": {"reason": "cancel_outcome_unknown", "originals": rows}})
+    )
+
+
+async def test_stop_after_a_rate_limited_crash_cancels_only_resting_originals(tmp_path):
+    config, venue = selected(), RateLimitedVenue()
+    originals_state(config, tmp_path, range(10930, 10955))
+    result, _ = await stop_bot(config, tmp_path, client_factory=lambda _: venue)
+    assert result["outcome"] == "stopped" and result["remaining_orders"] == 0
+    cancelled = [
+        row.order_id for event in venue.events if event[0] == "originals" for row in event[1]
+    ]
+    assert cancelled == [str(i) for i in range(10930, 10935)]  # Closed ones are skipped.
+
+
+async def test_stop_report_names_the_rate_limit_class(tmp_path, monkeypatch):
+    class AlwaysLimited(RateLimitedVenue):
+        async def cancel_orders(self, orders):
+            raise RateLimited("exchange refused the action: rate limited", 999)
+
+        async def cancel_all(self, symbol):
+            raise RateLimited("exchange refused the action: rate limited", 999)
+
+    config = selected()
+    originals_state(config, tmp_path, range(10930, 10935))
+    result, path = await stop_bot(config, tmp_path, client_factory=lambda _: AlwaysLimited())
+    assert result["outcome"] == "failed" and result["failure"] == "rate_limited"
+    assert "0x" not in path.read_text()
