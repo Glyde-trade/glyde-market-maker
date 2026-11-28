@@ -79,12 +79,12 @@ python -m pip install 'git+https://github.com/Glyde-trade/glyde-market-maker.git
 glyde-mm --version
 ```
 
-For a pinned release, the `v0.6.1` wheel remains available through
+For a pinned release, the `v0.7.0` wheel remains available through
 [pipx](https://pipx.pypa.io/stable/installation/), but does not include every current-master
 feature below:
 
 ```sh
-pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.6.1/glyde_market_maker-0.6.1-py3-none-any.whl'
+pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.7.0/glyde_market_maker-0.7.0-py3-none-any.whl'
 ```
 
 If environment creation reports that `ensurepip` is unavailable on Debian/Ubuntu, install the
