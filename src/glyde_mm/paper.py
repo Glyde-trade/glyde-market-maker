@@ -16,6 +16,7 @@ from .models import (
     CancelRequest,
     CancelResult,
     Fill,
+    ModifyRequest,
     OpenOrder,
     OrderRequest,
     OrderResult,
@@ -282,6 +283,46 @@ class PaperExchange:
                 self._remember_terminal(oid, order)
                 status = "filled"
             result.append(OrderResult(status, oid, order.client_order_id))
+        return result
+
+    async def modify_orders(self, orders: Sequence[ModifyRequest]) -> list[OrderResult]:
+        """Glyde's limit amend: same order, new price/size; post-only refusal removes it."""
+        result = []
+        for row in orders:
+            wire_decimal(row.order.quantity)
+            wire_decimal(row.order.price)
+            current = self._orders.get(row.order_id)
+            order = row.order
+            if (
+                current is None
+                or (current.symbol, current.side, current.reduce_only, current.time_in_force)
+                != (order.symbol, order.side, order.reduce_only, order.time_in_force)
+                or order.client_order_id not in (None, current.client_order_id)
+            ):
+                result.append(OrderResult("rejected", error="order cannot be amended"))
+                continue
+            book = self._books.get(order.symbol)
+            crosses = (
+                book is None
+                or book.mid is None
+                or (
+                    order.price >= book.asks[0].price
+                    if order.side == "buy"
+                    else order.price <= book.bids[0].price
+                )
+            )
+            amended = replace(order, client_order_id=current.client_order_id)
+            if crosses:
+                self._remember_terminal(row.order_id, self._remove(row.order_id))
+                result.append(
+                    OrderResult(
+                        "rejected", row.order_id, current.client_order_id, "post-only would cross"
+                    )
+                )
+                continue
+            self._remove(row.order_id)
+            self._rest(row.order_id, amended)
+            result.append(OrderResult("resting", row.order_id, current.client_order_id))
         return result
 
     async def cancel_orders(self, orders: Sequence[CancelRequest]) -> list[CancelResult]:

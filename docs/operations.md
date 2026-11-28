@@ -166,6 +166,7 @@ Refusal labels come from a fixed allowlist; arbitrary venue error text is omitte
 | Metric prefix `glyde_mm_` | Meaning |
 | --- | --- |
 | `quotes_placed_total` | Accepted resting/filled order receipts at the risk boundary; excludes unknown outcomes. |
+| `quotes_amended_total` | Accepted resting/filled amend receipts: a `changed_levels` quote moved in place instead of cancelled and re-placed. |
 | `quotes_cancelled_total` | Confirmed per-ID cancellation receipts observed by that boundary; excludes already-closed results. Extra venue orders discovered only inside raw cancel-all are not counted. |
 | `quotes_refused_total{reason}` | Definite venue rejections or pre-dispatch risk refusals, by fixed category; unknown writes are not counted as refusals. |
 | `fills_total{market}` | Delivered, identified fill events; partial fills count as events, not whole completed orders. Live history snapshots are not new fills. |
