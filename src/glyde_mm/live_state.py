@@ -28,7 +28,6 @@ from .models import (
     CancelRequest,
     CancelResult,
     Fill,
-    ModifyRequest,
     OpenOrder,
     OrderRequest,
     OrderResult,
@@ -277,7 +276,6 @@ class LiveStateClient:
                             and any(
                                 order.order_id == oid
                                 and order.client_order_id == self._known[oid].client_order_id
-                                and order.price == self._known[oid].price
                                 for order in self._orders
                             )
                         )
@@ -310,19 +308,6 @@ class LiveStateClient:
                 if len(self._known) > 8192:
                     self.invalidate("live order evidence budget exceeded")
                     raise OneApiError("live order evidence budget exceeded")
-        return results
-
-    async def modify_orders(self, orders: Sequence[ModifyRequest]) -> list[OrderResult]:
-        await self._current()
-        results = await self.source.modify_orders(orders)
-        if len(results) != len(orders):
-            self.invalidate("live action receipt mismatch")
-            raise OneApiError("live action receipt mismatch")
-        for row, result in zip(orders, results, strict=True):
-            if result.status in {"resting", "filled"} and result.order_id:
-                # Snapshots stay unqualified until they show the amended terms.
-                self._known[result.order_id] = row.order
-                self._awaiting[result.order_id] = result
         return results
 
     async def cancel_orders(self, requests: Sequence[CancelRequest]) -> list[CancelResult]:

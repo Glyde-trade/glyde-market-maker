@@ -18,7 +18,6 @@ from glyde_mm.models import (
     Book,
     CancelRequest,
     Fill,
-    ModifyRequest,
     OrderRequest,
     TradingClient,
     bot_client_order_id,
@@ -566,7 +565,7 @@ class PureMarketMakingStrategy:
                 raise
 
     async def _refresh_changed_levels(self, now: float) -> None:
-        """Keep quotes still close to their target level; amend, cancel and place the rest."""
+        """Keep quotes still close to their target level; cancel and place only the rest."""
         account = await self.context.client.account()
         if self.blocked:
             return
@@ -579,13 +578,10 @@ class PureMarketMakingStrategy:
         wanted = list(self.quotes(book, account))
         tolerance = self.config.price_refresh_tolerance
         stale = []
-        movable = []
         for oid, order in self._active.items():
             match = None
             age = now - self._placed_at.get(oid, now)
-            # An aged quote is replaced outright; a merely mispriced one can be moved in place.
-            fresh = age < self.config.max_order_age
-            if fresh and not self._order_must_go(order, mid):
+            if age < self.config.max_order_age and not self._order_must_go(order, mid):
                 match = next(
                     (
                         target
@@ -599,97 +595,22 @@ class PureMarketMakingStrategy:
                     ),
                     None,
                 )
-            if match is not None:
+            if match is None:
+                stale.append(oid)
+            else:
                 wanted.remove(match)
-            elif fresh:
-                movable.append(oid)
-            else:
-                stale.append(oid)
-        # A quote that only moved price keeps its order: one amend instead of a cancel, then a
-        # placement that would wait behind it (prod 2026-11-28: ~1s more per refreshed level).
-        amends = []
-        for oid in movable:
-            order = self._active[oid]
-            target = next(
-                (row for row in wanted if (row.side, row.quantity) == (order.side, order.quantity)),
-                None,
-            )
-            if target is None:
-                stale.append(oid)
-            else:
-                wanted.remove(target)
-                amends.append((oid, target))
         budget = self._action_budget()
-        if len(amends) + len(stale) > budget:
-            # Moved quotes go first; place nothing until each is amended or gone.
-            allowed = max(int(budget), 0)
-            if (await self._amend(amends[:allowed], now))[1]:
-                self._needs_refresh = True
-            if not self.blocked:
-                await self._cancel(stale[: max(allowed - len(amends), 0)])
+        if len(stale) > budget:
+            # Cancels come first; place nothing until every moved quote is gone.
+            await self._cancel(stale[: max(int(budget), 0)])
             self._wait_for_action_budget()
-            return
-        rejected, amend_filled = await self._amend(amends, now)
-        if self.blocked:
             return
         await self._cancel(stale)
         if self.blocked:
             return
-        wanted.extend(rejected)
         await self._place(
             wanted[: max(int(min(self._action_budget(), len(wanted))), 0)], now, generation
         )
-        self._needs_refresh = self._needs_refresh or amend_filled
-
-    async def _amend(
-        self, amends: list[tuple[str, OrderRequest]], now: float
-    ) -> tuple[list[OrderRequest], bool]:
-        """Move resting quotes in place; returns refused targets and whether one filled."""
-        if not amends:
-            return [], False
-        requests = [
-            ModifyRequest(
-                oid,
-                OrderRequest(
-                    target.symbol,
-                    target.side,
-                    target.quantity,
-                    target.price,
-                    client_order_id=self._active[oid].client_order_id,
-                    time_in_force="Alo",
-                ),
-            )
-            for oid, target in amends
-        ]
-        self._record_actions(len(requests))
-        results = await self.context.client.modify_orders(requests)
-        if len(results) != len(requests):
-            raise RuntimeError("amend outcome unavailable")
-        refused = []
-        immediate_fill = False
-        for (oid, target), request, result in zip(amends, requests, results, strict=True):
-            if result.client_order_id not in (None, request.order.client_order_id):
-                raise RuntimeError("amend identity mismatch")
-            if result.status == "resting" and result.order_id == oid:
-                self._active[oid] = request.order
-                self._placed_at[oid] = now
-            elif result.status == "filled":
-                if self.config.ping_pong_enabled:
-                    raise RiskViolation("ping_pong_fill_evidence")
-                immediate_fill = True
-                self._active.pop(oid, None)
-                self._placed_at.pop(oid, None)
-            elif result.status == "rejected":
-                refused.append((oid, target))
-            else:
-                raise RuntimeError("amend outcome unknown")
-        # A refused amend may have left the original resting or removed it; cancel it so
-        # the replacement placement can never sit beside an orphaned original.
-        await self._cancel([oid for oid, _ in refused])
-        self._active_since = min(self._placed_at.values(), default=None)
-        if immediate_fill and self.config.filled_order_delay > 0:
-            self._quote_after = self.context.clock() + self.config.filled_order_delay
-        return [target for _, target in refused], immediate_fill
 
     def _wait_for_action_budget(self) -> None:
         if self._action_times:

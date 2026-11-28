@@ -52,8 +52,7 @@ async def test_changed_levels_keeps_quotes_within_tolerance_and_replaces_the_res
     now[0] = 62.0
     await strategy.on_book(book("102", timestamp=3))  # 2% move: every level is out.
     await strategy.on_tick(62)
-    # Each moved level keeps its order: one amend action, no cancel or placement.
-    assert actions(client) == [("place", 4), ("modify", 4)]
+    assert actions(client) == [("place", 4), ("cancel", 4), ("place", 4)]
     assert len(strategy._active) == 4
 
 
@@ -66,8 +65,8 @@ async def test_action_cap_defers_a_refresh_until_the_minute_budget_frees():
     now[0] = 31.0
     await strategy.on_book(book("102", timestamp=2))
     await strategy.on_tick(31)
-    # Two entries left this minute: amend two moved quotes, nothing else yet.
-    assert actions(client) == [("place", 4), ("modify", 2)]
+    # Two entries left this minute: cancel two moved quotes, place nothing yet.
+    assert actions(client) == [("place", 4), ("cancel", 2)]
     assert not strategy.blocked
 
     now[0] = 45.0
@@ -76,15 +75,13 @@ async def test_action_cap_defers_a_refresh_until_the_minute_budget_frees():
 
     now[0] = 61.0
     await strategy.on_tick(61)
-    # The t=31 amends still count: the last two moved quotes are amended now.
-    assert actions(client)[2:] == [("modify", 2)]
-    assert sorted(order.price for order in strategy._active.values()) == [
-        D("99.96"),
-        D("100.98"),
-        D("103.02"),
-        D("104.04"),
-    ]
-    assert len(strategy._active) == 4
+    # The t=31 cancels still count: cancel the last two, place the two inner levels.
+    assert actions(client)[2:] == [("cancel", 2), ("place", 2)]
+    assert [order.price for order in strategy._active.values()] == [D("100.98"), D("103.02")]
+
+    now[0] = 92.0
+    await strategy.on_tick(92)
+    assert actions(client)[4:] == [("place", 2)] and len(strategy._active) == 4
 
 
 async def test_rate_limit_refusal_backs_off_and_keeps_resting_quotes():
@@ -94,10 +91,10 @@ async def test_rate_limit_refusal_backs_off_and_keeps_resting_quotes():
     resting = dict(strategy._active)
 
     async def refused(requests):
-        client.calls.append(("modify", tuple(requests)))
+        client.calls.append(("cancel", tuple(requests)))
         raise RateLimited("exchange refused the action: rate limited", 5.0)
 
-    client.modify_orders = refused
+    client.cancel_orders = refused
     now[0] = 31.0
     await strategy.on_book(book("102", timestamp=2))
     await strategy.on_tick(31)
