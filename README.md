@@ -2,324 +2,74 @@
 
 [![CI](https://github.com/Glyde-trade/glyde-market-maker/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Glyde-trade/glyde-market-maker/actions/workflows/ci.yml)
 
-A paper-first market maker for Glyde's One API. Python 3.11+, one YAML file and one command.
-Strategy designs are adapted from [Hummingbot](https://github.com/hummingbot/hummingbot)
-(Apache-2.0); see [NOTICE](NOTICE).
+Market-maker bots for Glyde's live BTC book, and the team's place to test Glyde and report what
+breaks. Python 3.11+, one YAML file per bot. Strategy designs are adapted from
+[Hummingbot](https://github.com/hummingbot/hummingbot) (Apache-2.0); see [NOTICE](NOTICE).
 
-See the [Hummingbot connector guide](docs/hummingbot.md) for the adapted
-`glyde_perpetual` connector and its offline qualification scope.
+## Glyde team: run a bot in three commands
 
-For SDK URLs, separate trading/read credentials, Python 0.24 examples and
-snapshot/reconnect rules, see the [One API developer quickstart](docs/one-api-quickstart.md).
-Source support does not establish that a
-deployment has enabled the corresponding API; start with public reads and paper.
-
-## Current status
-
-The features below describe **current master**; tagged wheels can lag behind it. Use the
-Git install in the quickstart for the new flags, and check `glyde-mm paper --help`.
-
-`glyde-mm paper <config>` runs the selected strategy through the risk layer into the paper
-exchange: pure market making places one simulated bid and one ask by default. Public books
-set quote prices; subsequent public trades can fill resting quotes using the simulator's
-approximate queue model. Remaining quotes are cancelled on exit. Paper mode never sends a
-trading action or reads signing credentials, and risk refusals prevent simulated placement too.
-
-`glyde-mm run <config>` with `mode: live` sends orders and cancellations through the same risk
-boundary to One API, using Hyperliquid-compatible SDK signing and the configured vault namespace.
-Offline fake-One-API CLI tests prove both paper quote sides fill, paper risk refusals place
-nothing, and shutdown leaves no simulated quotes. They also exercise signed live
-placement/cancellation and risk refusals before
-submission. They do not qualify a deployed account: live use still requires the API capabilities,
-registered account permissions and credentials. Refused or ambiguous actions stop quoting.
-
-Live startup requires a recent public market preflight for the **same effective config**:
+Each person runs **one bot on their own Glyde account**, each with a **different preset**, so the
+book gets several kinds of logic at different depths. Full walkthrough: [docs/founders.md](docs/founders.md).
 
 ```sh
-glyde-mm preflight live-small.yaml
-glyde-mm run live-small.yaml
+git clone https://github.com/Glyde-trade/glyde-market-maker.git && cd glyde-market-maker
+bash scripts/founder-setup.sh            # pick a preset, paste owner + vault, paste API wallet key (hidden)
+~/glyde-mm/<preset>/start.sh             # type BTC (capitals) when asked
 ```
 
-Preflight uses only public `meta` and `l2Book`, lists credential variable **names/presence**
-without reading values, and requires each selected `meta.universe` row's version-1
-`glydeOrderRules`. It checks the advertised `quantityStep` (which need not be a power of ten),
-`minimumNotionalUsd`, `priceTick`, decimal/significant-figure limits and integer-price exception.
-There is no fixed `minOrderSize` fallback. Missing, malformed or unsupported native rules
-refuse with FIX lines; `szDecimals` alone never supplies a venue minimum or lot.
+| Preset | Logic | Where it sits in the book |
+|---|---|---|
+| [`tight-ladder`](configs/founders/tight-ladder.yaml) | Fixed spreads, 20 small levels, gentle inventory skew | Inner: ~0.03% to ~0.13% from mid, $3 apart |
+| [`hl-anchored`](configs/founders/hl-anchored.yaml) | Fixed spreads centred on Hyperliquid's mid, not Glyde's | Near: 0.08% to 0.26% |
+| [`adaptive-vol`](configs/founders/adaptive-vol.yaml) | Avellaneda: spread follows measured volatility and inventory | Mid: from 0.15%, widening when the market moves |
+| [`inventory-shy`](configs/founders/inventory-shy.yaml) | Avellaneda pricing, shrinks the side that would grow its position | Mid: from 0.3% |
+| [`grid-wall`](configs/founders/grid-wall.yaml) | Static grid that doesn't follow the price | Wide: 24 levels across ±2.5% of today's price |
+| [`deep-book`](configs/founders/deep-book.yaml) | Fixed spreads, larger size, slow refresh | Outer: 0.8% to 1.7% |
 
-Minimum notional is checked on **both** rounded nominal bid and ask prices at the current
-book, before any maximum-size inventory skew; the higher ask cannot qualify an undersized
-bid. Grid checks include its lower levels. Per-order and one-sided budgets still use
-conservative maximum sizes/prices. These public checks do not model future volatility,
-private inventory skew or an external reference's future prices. Venue validation remains final.
-PASS is stored privately beside the config and expires after five minutes; config changes
-invalidate it. Receipts from the old checks are invalidated: run preflight again.
-Doctor, preflight and paper success do not verify private permissions, current positions or
-future prices. Live risk checks and typed confirmation still apply. The live wizard rounds its
-proposed amount up to the native lot and bid-side minimum, then preflights that frozen config
-against **unchanged** risk caps before private diagnostics and the preview. If the minimum
-cannot fit those caps, it refuses instead of raising a cap.
+Stop with Ctrl-C in the bot's terminal, or `~/glyde-mm/<preset>/stop.sh` from another one.
 
-See [Troubleshooting](docs/troubleshooting.md) for common refusals, unknown outcomes and reports.
+## Report a bug
 
-Follow [Your first market maker in 10 minutes](docs/first-market-maker.md) for the paper → report →
-small-live workflow. See the [strategy chooser](docs/strategies.md#strategy-chooser) and
-[risk-limit FAQ](docs/risk-limits.md) before changing a config.
-New to quoting? [Market making 101](docs/market-making-101.md) explains spreads, inventory,
-adverse selection, fees and why paper fills differ from live.
-
-Browse the five commented [paper configs in the gallery](configs/gallery/README.md), or
-[contribute a bug report, strategy idea or PR](CONTRIBUTING.md).
-
-For a persistent host, use the [VPS recipes](docs/vps.md): Docker Compose with a state
-volume and rotated logs, or a systemd paper service with a private env file.
-See the [changelog](CHANGELOG.md) and [upgrade notes for 0.2 users](docs/upgrading-from-0.2.md)
-before replacing an existing installation.
-
-> **Quickstart GIF — placeholder:** a captioned paper-mode `init → doctor → paper → Ctrl-C → report`
-> recording will go here. No demo recording is attached yet; use the
-> [text tutorial](docs/first-market-maker.md).
-
-## Start in five minutes
-
-**1. Install current source.** Use Python 3.11+ in a virtual environment:
+Open an issue on **this public repo**; it is the team's standard bug channel for Glyde testing.
 
 ```sh
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install 'git+https://github.com/Glyde-trade/glyde-market-maker.git'
-glyde-mm --version
+bash scripts/report-bug.sh ~/glyde-mm/<preset>
 ```
 
-For a pinned release, the `v0.6.1` wheel remains available through
-[pipx](https://pipx.pypa.io/stable/installation/), but does not include every current-master
-feature below:
+It collects the version, preset, run outcome, recent events, terminal tail and Glyde's health,
+redacts addresses and keys, shows you the issue, checks for an open issue with the same error, and
+posts only when you say yes (via the GitHub CLI, or it saves the text for you to paste).
 
-```sh
-pipx install 'https://github.com/Glyde-trade/glyde-market-maker/releases/download/v0.6.1/glyde_market_maker-0.6.1-py3-none-any.whl'
-```
+Using Claude Code? This repo ships a [`glyde-bot` skill](.claude/skills/glyde-bot/SKILL.md) that
+sets up, checks, diagnoses and reports bots the same way. Open Claude Code in this folder and ask it
+to start your bot or find out why it stopped.
 
-If environment creation reports that `ensurepip` is unavailable on Debian/Ubuntu, install the
-matching `python3-venv` package before continuing.
+## Rules that matter
 
-**2. Create a paper config.** The wizard asks for a market, strategy, beginner preset, reference price and limits. It never asks for
-or stores a private key, never enables live mode, and refuses to overwrite an existing file.
+- **One bot per account.** Bots cancel every `gmm1`-tagged order on their account at startup and
+  reconnect, so two bots on one account cancel each other.
+- **Never paste the API wallet key into chat, YAML, issues or logs.** Setup keeps it in
+  `~/glyde-mm/<preset>/.agent-key` (readable only by you).
+- **Orders are post-only and at least $10 each.** Levels too close to the price, or skewed below
+  $10, are skipped rather than sent.
+- **A preflight PASS lasts 5 minutes.** `start.sh` runs it right before starting; if you miss the
+  BTC prompt, just run `start.sh` again.
 
-```sh
-glyde-mm init
-```
+## More
 
-Or copy [examples/paper.yaml](examples/paper.yaml) to `glyde-mm.yaml`.
-Amounts are base units; spread fractions use `0.002` for **0.2%**. The default is one bid and one ask,
-refreshed every 60 seconds with the Conservative preset. Hanging orders are off.
-
-**3. Run paper first.** Quotes use the public live book; resting fills use the public
-trade tape with approximate queue position and partial fills. No trading key or
-funded account is needed; paper fills are not a prediction of live execution.
-
-```sh
-glyde-mm paper glyde-mm.yaml --duration 60s --report paper-result.json
-```
-
-The timer stops quoting and begins cleanup; Ctrl-C can stop it earlier. `--duration` accepts
-seconds, `s`, `m` or `h` (maximum 24 hours). `--report` creates a new private JSON result with
-simulated PnL, drawdown, fills, inventory, stop reason and cleanup status; use a fresh filename
-for each session. It differs from the diagnostic `glyde-mm report <logdir>` command.
-Review `PAPER SUMMARY` and `cleanup_confirmed` before considering live mode. Paper and live
-orders go through the same risk boundary; `paper` forces simulation even if the YAML says `live`.
-
-## Check your setup
-
-```sh
-glyde-mm doctor glyde-mm.yaml
-```
-
-Doctor validates YAML and strategy settings and checks public metadata plus a fresh
-book. It reports the quantity step and the runner's price tick at the current
-midpoint. Doctor does not certify native order-rule compliance; use public preflight
-for the advertised `glydeOrderRules` checks. Missing limits remain unavailable.
-Missing keys are optional in paper mode and fail the check in live mode.
-Configured credential variable names and presence are printed, never values.
-Clock diagnostics use the same public response's HTTP Date with request-latency
-and one-second rounding bounds; absent Date is explicitly unavailable. See
-[doctor and restart operations](docs/operations.md) for limits of this check.
-
-Ordinary doctor runs never send credentials. To check your configured live
-account's read permissions explicitly:
-
-```sh
-glyde-mm doctor live.yaml --private
-```
-
-This performs only authenticated `clearinghouseState` and `openOrders` reads;
-it prints neither balances nor addresses nor key values. Paper configurations
-refuse `--private` before connecting. Doctor never opens a WebSocket, constructs
-a signing wallet or submits an order. Even a successful private check does not
-prove trading-key authorization or that a live order would be accepted.
-Configuration, connectivity, stale/missing book and requested read-permission
-failures return a nonzero exit code.
-
-## Go live with small, explicit limits
-
-For a guided first session (v0.4.0+), see [live-wizard](docs/first-live-session.md):
-doctor → two-minute paper preview → typed confirmation → Conservative live run with a
-30-minute auto-stop and private final report. It currently supports one symbol.
-
-Create/authorize an API wallet for your Glyde trading account using Glyde's account controls. Use its
-**trading key**, not a main wallet seed phrase. Use the exact account and any assigned vault/namespace
-from your account's discovery data. A trading key is not a read credential; provide the separate read
-credential when the API requires one. This bot does not create credentials or grant permissions.
-
-Copy [examples/live-small.yaml](examples/live-small.yaml), replace the public account placeholder,
-and set any assigned vault address. Keep private keys out of YAML and shell history. For example,
-Bash can read the trading key without echoing it:
-
-```sh
-read -r -s -p 'Trading API key: ' GLYDE_API_PRIVATE_KEY
-export GLYDE_API_PRIVATE_KEY
-printf '\n'
-# Private reads are minted from the trading key; GLYDE_READ_API_KEY only overrides that.
-glyde-mm run live-small.yaml
-```
-
-Every run prints a pre-flight summary of mode, symbol, position/notional caps, daily-equity-loss
-threshold and freshness bounds. Live CLI startup requires typing the exact symbol (for example
-`BTC`); EOF or a mismatched answer refuses startup before account access. Paper never prompts.
-
-Live startup also refuses an existing position or open order on the selected symbol before
-creating the managed execution/cleanup lifecycle. Review the account before explicitly accepting
-that exposure:
-
-```sh
-glyde-mm run live-small.yaml --i-understand
-```
-
-This flag only permits starting alongside existing symbol exposure. It does not bypass typed
-confirmation, risk limits, stale-data checks or an unresolved original execution intent. Pre-flight
-reads are a startup snapshot, not a cross-process lock; continue using a dedicated account.
-
-`run` uses the YAML mode; live must be selected explicitly. Confirm the current market price,
-exchange minimum order size and precision. `order_amount × price` must fit `max_order_notional`;
-an example can be too small for the exchange or too large for its configured cap. Refused quotes
-must be corrected in the config, not retried with larger limits automatically.
-
-The defaults cap one order at **25 USDC**, absolute position at **0.001 BTC** and daily account equity
-loss at **5 USDC**. These are local guardrails, not a loss guarantee. Daily equity changes include
-transfers as well as trading PnL. Cleanup on disconnect or exit cancels only glyde-mm's own orders: every
-order it places carries a client order id tagged `0x676d6d31` ("gmm1"). Your other orders stay
-resting but still count toward its risk limits. A dedicated trading account is still recommended.
-Review remaining orders in your account if cancellation fails; loss of connectivity cannot guarantee
-a successful cancel.
-
-Unknown order/cancel outcomes stop new orders and retain the original identity. The bot does not
-resend an ambiguous order or replace it with a new nonce/ID. A stale book pauses that market
-(quotes retired, resumed from the next fresh book) for up to `risk.max_stale_pause_seconds`;
-longer staleness, unavailable account reads and daily-loss breaches stop quoting. Preserve the runtime risk-state directory across restarts so
-the daily-loss baseline is retained.
-
-## Fixed-range grid
-
-Use [examples/grid-paper.yaml](examples/grid-paper.yaml) to try evenly spaced levels inside a fixed
-price band. Set the band around the current book first. Levels below the midpoint buy; levels above
-it sell; no quote sits at the midpoint. Out-of-band markets cancel and wait, and rounding never
-moves quotes outside the band. Grid uses the same risk limits and cancel-before-replace lifecycle.
-
-```sh
-glyde-mm paper examples/grid-paper.yaml
-```
-
-For a beginner preset, run `glyde-mm init --output grid.yaml`, choose **grid**,
-then Conservative, Balanced or Active. Enter the current reference price: the
-wizard fixes a band at 90–110% of that value and budgets sizes within your caps.
-The band stays fixed until you edit the YAML; it does not follow a moving market.
-
-| Preset | Fixed levels | Refresh | Trade-off |
-| --- | --- | --- | --- |
-| Conservative | 3 | 60 seconds | Fewer, wider-spaced quotes and lower turnover |
-| Balanced | 5 | 30 seconds | More coverage inside the same band |
-| Active | 7 | 10 seconds | Denser quotes and more cancellation/refresh activity |
-
-`levels` counts the whole band, not levels per side. Midpoint, too-close and
-coarse-tick duplicate levels are skipped. All levels share the position cap;
-adding levels does not grant extra exposure. Try `glyde-mm doctor grid.yaml`,
-then `glyde-mm paper grid.yaml`. No preset enables live trading.
-
-The linear-level design references
-[Hummingbot's grid executor](https://github.com/hummingbot/hummingbot/blob/9af100d6822da7d2d0291a906c730ef172284ee2/hummingbot/strategy_v2/executors/grid_executor/grid_executor.py)
-(Apache-2.0; see NOTICE). This is a simple two-sided quoting grid using Glyde's
-shared lifecycle, without a separate paired take-profit executor or profit guarantee.
-
-## Inventory-skewed quoting
-
-Try [examples/inventory-skewed-paper.yaml](examples/inventory-skewed-paper.yaml)
-for Avellaneda-style prices plus smaller quotes on the side that increases
-inventory away from your target. Long above target: smaller bids; short below
-target: smaller asks. The side moving toward target keeps its configured size;
-this strategy never enlarges an order to chase the target.
-
-```sh
-glyde-mm paper examples/inventory-skewed-paper.yaml
-```
-
-`inventory_target_position` is a signed base position (zero means flat),
-`risk_factor` shifts reservation prices, and `order_amount_shape_factor` controls
-how strongly the away-from-target side shrinks (a Decimal from 0 to 100). Higher factors suppress it
-more; zero keeps Avellaneda's original sizes. Sizes round down to the market step;
-a quote below the minimum is omitted. A target is a preference, not an order or
-a risk-limit override. Existing/open orders still count toward the same caps.
-
-The wizard's Conservative, Balanced and Active presets include this strategy and
-always write paper YAML. Warmup needs 31 consecutive one-second samples with
-nonzero movement; gaps reset it. Exponential sizing is adapted from
-[Hummingbot's Avellaneda strategy](https://github.com/hummingbot/hummingbot/blob/9af100d6822da7d2d0291a906c730ef172284ee2/hummingbot/strategy/avellaneda_market_making/avellaneda_market_making.pyx)
-(Apache-2.0; see NOTICE), using signed perpetual exposure rather than spot wallet
-balances. Shared risk checks, cancel-before-replace, unknown-outcome stops and
-paper limitations apply. It is not a promise of profitable or target-reaching fills.
-
-## Quote around a public Hyperliquid reference
-
-For **pure market making**, choose `hyperliquid` at the wizard's quote-center
-prompt, or try [examples/external-reference-paper.yaml](examples/external-reference-paper.yaml):
-
-```sh
-glyde-mm paper examples/external-reference-paper.yaml
-```
-
-This subscribes to the same coin's public Hyperliquid mainnet `l2Book` at
-`wss://api.hyperliquid.xyz/ws`, following its
-[public subscription protocol](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/subscriptions).
-No Glyde credential, owner address or signed action is sent to Hyperliquid.
-All orders, paper fills, balance reads and position/notional/loss caps stay on
-Glyde. This is a price-reference option, not trading or transferring on another venue.
-
-The quote center is `HL mid × (1 + reference_skew_bps / 10000)`. Zero skew centers
-on HL; positive skew shifts both quotes up, negative down. Bid/ask spreads and
-levels retain their normal fractional units. Orders stay post-only: a candidate
-that would cross the actual Glyde best bid/ask is omitted, not converted to a taker.
-Grid and Avellaneda variants retain their own pricing and refuse this option.
-
-The guard compares the **raw** mids using `abs(Glyde mid - HL mid) / HL mid × 10000`.
-Above `max_reference_deviation_bps`, missing/invalid/regressed HL data, source or
-arrival age over `reference_stale_seconds`, or a reference disconnect pulls quotes
-and stops the run. It never falls back to the Glyde mid or reconnects silently;
-inspect the cause before restarting. Freshness/deviation are checked again after
-private account/open-order awaits before reserving a new batch. Cancellation can
-fail or arrive after a fill, so this is not a loss or instantaneous-cancel guarantee.
-
-The paper wizard's Conservative/Balanced/Active reference presets use deviation
-caps of 25/50/100 bps, zero skew and a three-second reference-age bound. YAML stays
-editable and paper-only. Skew is bounded to ±1000 bps, deviation to 0–1000 bps
-(excluding zero), and reference age to 0–60 seconds (excluding zero). Use the exact
-coin name on both venues; there is no symbol inference or FX conversion. Doctor
-checks the Glyde feed, not reference availability. Single-source book replay has
-no HL history and stops with `reference_unavailable` rather than inventing it.
+- [Founder guide](docs/founders.md): accounts, presets, start/stop, reading what the bot says
+- [Troubleshooting](docs/troubleshooting.md) and [risk limits](docs/risk-limits.md)
+- [Strategy and config reference](docs/strategies.md), [operations](docs/operations.md),
+  [full reference](docs/reference.md) (paper mode, multi-market, alerts, releases, internals)
+- [One API developer quickstart](docs/one-api-quickstart.md) for writing your own client
+- [Contributing](CONTRIBUTING.md) and [changelog](CHANGELOG.md)
 
 ## If something goes wrong
 
 From another terminal on the same machine, with the same config and credentials:
 
 ```sh
-glyde-mm stop configs/live.yaml
+glyde-mm stop ~/glyde-mm/<preset>/live.yaml   # or ~/glyde-mm/<preset>/stop.sh
 ```
 
 This requests a local runner stop, waits for its cleanup to finish, then cancels and
@@ -341,84 +91,6 @@ reconcile the original order IDs with the venue. A new explicit `run` after a su
 can start quoting again and still requires its live confirmation and usual risk checks.
 For diagnostic logs, use `glyde-mm report path/to/.glyde-mm/logs`.
 
-## Known limitations
-
-- Streaming paper fills approximate queue position from displayed depth and public
-  trades; they omit actual queue priority, hidden liquidity, fees, funding, margin
-  and liquidation. Book-only replay uses its existing depth-cross model, without a
-  trade tape. See [paper fill assumptions](docs/paper-fills.md). Recorded-book replay
-  needs a prior local recording and cannot reconstruct missing historical depth.
-- Live mode requires the requested Glyde capabilities and registered owner, namespace,
-  trading key and read credential. Doctor's optional private check proves read access
-  only; it cannot establish signing authority or order acceptance.
-- Native `glydeOrderRules` are optional public metadata: preflight refuses when absent.
-  The displayed runner tick is derived at the current midpoint; preflight checks its nominal
-  quotes against native price rules, and venue validation remains final.
-- Risk limits are local guardrails, not guaranteed loss bounds. Daily loss tracks equity
-  against a UTC-day baseline, including unrealized changes and transfers; it does not
-  flatten existing positions. Run one bot process per dedicated account: the local state
-  file is not a cross-process coordinator.
-- Disconnects, stale data and ambiguous writes stop quoting. Cleanup attempts cancellation
-  of the bot's own tagged orders only, but cannot guarantee success while disconnected. Keep persistent risk state and reconcile original orders after an unknown outcome;
-  restarting or deleting state is not reconciliation. Ambiguous order submissions are not
-  automatically resubmitted.
-- Strategies provide quoting logic, not a profit guarantee. The fixed grid does not manage
-  separate paired take-profit exits. The init wizard always writes paper configurations.
-
-## Configuration
-
-| Key | Meaning |
-| --- | --- |
-| `mode` | `paper` by default; `live` explicitly enables real trading |
-| `symbol` | Exact market symbol, such as `BTC` |
-| `owner` / `vault_address` | Public registered account and assigned namespace, never inferred |
-| `private_key_env` | Name of the signing-key environment variable |
-| `read_api_key_env` | Name of a separate private-read credential variable |
-| `strategy_config.ping_pong_enabled` | PMM paper-only boolean, default false: start both sides, then quote only opposite the latest identified fill (partials count) |
-| `strategy_config.price_floor` / `price_ceiling` | Optional quote-reference price bands: pull asks at/below the floor and bids at/above the ceiling; re-enter promptly when permitted |
-| `strategy_config.order_levels` | PMM/Avellaneda levels per side, 1–50; default 1 (no ladder). Glyde takes at most 16 orders per signed action, so larger ladders are sent as several actions |
-| `strategy_config.order_level_spread` | Add this fraction of reference price per level (e.g. `'0.001'` = 0.1% spacing) |
-| `strategy_config.order_level_amount` | Add this nonnegative base quantity per level; every level still shares risk caps |
-| `strategy_config.order_amount` | Quantity per level in base units |
-| `strategy_config.bid_spread` / `ask_spread` | Fractions around the reference price |
-| `strategy_config.order_refresh_time` | Seconds between quote comparisons; default 30 |
-| `strategy_config.inventory_skew_enabled` | PMM sizing skew toward `inventory_target_position`, default true; it can enlarge one side up to 2x, still subject to shared risk caps. Set false for fixed sizes |
-| `strategy_config.inventory_target_base_ratio` | Optional PMM target signed position value / account equity, fraction 0–1; `'0.01'` targets 1% long exposure, `'0'` flat; requires inventory skew |
-| `strategy_config.inventory_target_position` | Existing signed base-unit target, default zero; cannot combine a nonzero position target with a ratio target |
-| `strategy_config.inventory_range_multiplier` | Positive skew range multiplier, default 1, times total two-sided ladder quantity; ratio mode caps the range at half equity / quote-reference price |
-| `strategy_config.order_refresh_tolerance_pct` | Optional PMM spelling for refresh tolerance in percentage points (`'0.1'` = 0.1%); default null/off; cannot combine with `refresh_tolerance_pct` |
-| `strategy_config.filled_order_delay` | PMM streaming-paper delay in seconds after an identified own fill (partials count); default 0/off, at most 86400. Cancels remaining quotes and waits before new placement; live refuses this option until private-fill delivery is qualified |
-| `strategy_config.refresh_tolerance_pct` | Keep original IDs when every planned price moves by at most this percentage of its old price (`'0.1'` = 0.1%); `null` default disables tolerance, `'0'` keeps exact matches |
-| `strategy_config.max_order_age` | Retire quotes after this many seconds regardless of tolerance or refresh interval; default 300, maximum 86400 |
-| `risk.max_orders_per_minute` | Integer 1–6000, default 60; rolling count of individual submitted orders across all batches, including venue refusals; exceeding it stops quoting and cancels |
-| `risk.max_position` | Maximum absolute projected position, including outstanding orders. An order that would breach it is dropped before sending (the side adding inventory stops quoting); the run continues |
-| `risk.max_order_notional` | Maximum USDC notional per order |
-| `risk.max_daily_loss` | Daily equity-loss kill switch in USDC. Past half of it, the position cap shrinks linearly to 0 at the limit, so a losing day can only reduce inventory |
-| `risk.stale_book_seconds` | Maximum book source/arrival age |
-| `risk.max_stale_pause_seconds` | Longest stale-book pause before the run stops, default 300 |
-| `risk.max_engine_halt_seconds` | Longest wait while Glyde reports its engine halted, default 1800 |
-| `risk.keep_quotes_on_disconnect_seconds` | Live quotes kept through a stream drop before cancelling, default 0 (cancel at once), max 300 |
-| `risk.account_age_seconds` | Maximum account-observation age |
-
-PMM sizing follows Hummingbot's linear bid/ask adjustment, adapted to signed perpetual
-position value and account equity rather than spot wallet balances. At the target both
-sides keep their configured size; above target bids shrink and asks grow, and below target
-the opposite happens. The range and every configured ladder level affect that sizing.
-No strategy setting raises the account's position, notional, order-rate or loss limits.
-A fill delay is conservative: identified partial fills also pause quoting, duplicate
-prints do not extend it, and stale-source/stop cleanup continues during the pause.
-See the [Hummingbot PMM reference](https://github.com/hummingbot/hummingbot/tree/master/hummingbot/strategy/pure_market_making).
-
-Refresh controls apply to all strategies. Fills, changed quantities, price bands and safety
-checks override tolerance. No hanging-order mode is enabled: every tracked quote must be
-confirmed cancelled before replacement. Tolerated checks never extend the original quote age.
-The rate budget is saved in the existing risk-state file before dispatch, survives restart,
-and is never refunded by cancellation. Cancels remain available when the cap is exhausted.
-Do not delete risk state to bypass a stop; the cap belongs to this bot, not other processes.
-
-Keep decimal values quoted in YAML (the rate cap is an unquoted integer). The only default API origin is `https://api.glyde.trade`.
-No signing key is needed to browse a public book in paper mode. Private endpoints may refuse
-requests until account permissions and read authorization are configured.
 
 ## Docker
 
@@ -477,355 +149,3 @@ The contract signs the shape through Glyde's engine, Hyperliquid adapter and sig
 It fails if the shape would stop the adapter or halt trading for everyone. On 28 Nov 2026
 a batchModify that only the signer refused did exactly that.
 
-## Optional chat alerts
-
-Alerts are **off by default**. To opt in, put only the enable flag and environment
-variable **name** in your YAML:
-
-```yaml
-alerts_enabled: true
-alert_webhook_env: GLYDE_MM_ALERT_WEBHOOK
-```
-
-Set that variable to your chat webhook URL in the private `0600` env file; never put
-the URL in YAML, command arguments, screenshots or issues. The endpoint must accept a
-JSON POST with `text`, `event`, `mode`, `run_id` and `outcome` fields; use a local adapter
-if your chat provider requires another schema. HTTPS is required except loopback HTTP
-for local adapters/tests. Redirects are refused and proxy environment settings are ignored.
-
-The hook sends risk-stop, unconfirmed order/cancel, daily-equity-loss and session-end
-events for paper and live sessions **after trading cleanup**. Messages contain no raw exceptions, keys, balances,
-account addresses or order IDs. Webhook URLs and reflected HTTP diagnostics are not logged.
-Each event gets at most three attempts (0.2/0.4-second backoff for network errors, 429 or 5xx);
-requests time out after 1.5 seconds and the whole delivery batch has an 8-second deadline.
-Other 4xx responses are not retried. Missing/invalid configuration and failed delivery print
-a fixed warning without the URL; they never change the trading outcome or trigger order retries.
-
-Alerts are best effort, may duplicate after a lost response, and can be absent during a
-network/process failure. They are not a safety controller or proof that cancellation
-succeeded. Check local reports and the venue. Nothing is sent merely by adding an env var
-while `alerts_enabled` is false. This feature is included in v0.5.0.
-
-## Package releases
-
-The maintainer updates `project.version` in `pyproject.toml`, then creates the matching `v<version>`
-tag. The tag workflow builds the source archive and wheel, tests an isolated wheel installation,
-and attaches both to a GitHub Release using only the repository's `GITHUB_TOKEN`. Release packages
-embed the checked-out commit, which the isolated install check verifies against the build SHA.
-Release notes come from the matching version in [CHANGELOG.md](CHANGELOG.md); missing or
-duplicate version entries refuse release. Both CI and tag builds run `twine check --strict`
-on the distributions. LICENSE and NOTICE
-are included in the source and wheel archives. A mismatched tag fails before publishing;
-PR packaging checks do not create tags, releases or PyPI uploads.
-
-PyPI publishing is **disabled by default**. To enable trusted publishing, a maintainer must:
-
-1. Check the normalized project name `glyde-market-maker` on PyPI. An absent project is
-   not a reservation or a guarantee that registration will be accepted.
-2. Configure a pending or existing PyPI Trusted Publisher with owner `Glyde-trade`,
-   repository `glyde-market-maker`, workflow `release.yml`, environment `pypi`.
-3. Configure the repository's GitHub environment `pypi` (prefer tag restrictions and
-   required reviewers), then set the repository variable `PYPI_PUBLISH_ENABLED=true`.
-4. Push a new matching version tag. The publish job downloads only the distributions
-   checked in that same workflow run and authenticates via GitHub OIDC; no PyPI token,
-   password or long-lived publishing secret belongs in the repo or workflow.
-
-The existing GitHub Release still uses only `GITHUB_TOKEN`; OIDC permission is limited
-to the separate PyPI job. No project has been registered or uploaded by adding this workflow.
-See [PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/using-a-publisher/)
-and [pending publisher setup](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/).
-
-To run the same packaging check locally:
-
-```sh
-python -m pip install 'pip>=23' 'build>=1.2,<2' 'twine>=6,<7'
-python scripts/write-build-info.py "$(git rev-parse HEAD)"
-python -m build
-python -m twine check --strict dist/*
-python scripts/check-wheel-install.py dist/*.whl --expected-commit "$(git rev-parse HEAD)"
-```
-
-### Run diagnostics
-
-Every paper or live run writes private, rotated JSONL diagnostics under the config
-directory's `.glyde-mm/logs/run-<id>/`. Each segment includes the package version
-and source commit (or `unknown` when the installation has no commit metadata).
-The runner prints that identity at startup. Each run keeps at most four 1 MiB
-segments; older run directories remain until you remove them. Diagnostics contain
-mode, strategy, event counts and a fixed exit category, never keys, addresses,
-balances, order bodies or raw errors. Directory permissions are 0700 and files 0600.
-
-To prepare a support ticket without reading credentials or contacting the exchange:
-
-```bash
-glyde-mm report .glyde-mm/logs
-# Or choose one run directory to share only that session.
-```
-
-The command prints validated JSON with build identity, mode, strategy, last retained
-counters and exit category. A missing exit is labeled `incomplete`; it does not
-mean cleanup succeeded. Rotated-away history is explicit. Malformed logs are refused
-without printing their contents. Reports accept up to 50 runs / 64 MiB; select one
-run if the directory exceeds that limit. Review the summary before sharing it.
-
-### Try an offline paper-session report
-
-See [the end-to-end sample](docs/paper-session.md) for a recorded public-book
-fixture → real paper replay → support report, with actual output and a text
-screenshot. The supplied recording is clearly labeled synthetic; neither command
-needs network access, credentials or a private account. This example requires the
-current source checkout; it does not claim that a deployed account can trade.
-
-![Offline paper replay report: completed, 61 books, 2 simulated fills, zero pending orders](docs/images/paper-session-report.svg)
-
-### Compare paper strategies offline
-
-Record one public tape, then compare PMM, inventory-skewed, grid and HL-reference
-quotes under the same balance and risk caps:
-
-```sh
-glyde-mm record-tape --config examples/paper.yaml --minutes 5 --include-hl --tape-file tape.jsonl
-glyde-mm compare --config examples/paper.yaml --tape-file tape.jsonl --preset balanced
-```
-
-The table shows fill fragments, inventory range, marked PnL, maximum drawdown,
-two-sided quote uptime and risk stops. Missing recorded HL data is unavailable,
-never a fallback. Comparison is offline/paper-only, including with a live YAML.
-See [comparison assumptions and tape format](docs/compare-strategies.md).
-
-### Local read-only dashboard
-
-Each running bot prints its private dashboard snapshot path. In another terminal:
-
-```sh
-glyde-mm dashboard --state .glyde-mm/logs/run-<id>/dashboard.json --port 8080
-```
-
-Open `http://127.0.0.1:8080` for quotes, recent simulated fills, inventory,
-simulated PnL and risk state. It binds loopback only and has no trading controls or
-authentication. Finished or old snapshots are visibly stale. Live snapshots show
-tracked intents and daily equity change; live fills remain explicitly unavailable.
-See [dashboard scope and privacy](docs/dashboard.md).
-
-## Multiple markets, one account
-
-Current source supports a `markets` list in place of `symbol`:
-
-```yaml
-mode: paper
-strategy: pure_market_making
-strategy_config: {order_refresh_time: 30}
-markets:
-  - symbol: BTC
-    max_position: '0.001'
-    strategy_config: {order_amount: '0.0002', bid_spread: '0.01', ask_spread: '0.01'}
-  - symbol: ETH
-    strategy: inventory_skewed
-    max_position: '0.02'
-    strategy_config: {order_amount: '0.002'}
-risk:
-  max_total_notional: '150'
-  max_order_notional: '25'
-  max_daily_loss: '5'
-  max_orders_per_minute: 60
-```
-
-Start with `glyde-mm paper examples/multi-symbol-paper.yaml`. Review the example's
-amounts against current prices; these are editable examples, not sizing recommendations.
-Use `glyde-mm doctor examples/multi-symbol-paper.yaml` to check every selected market.
-Each of up to 16 distinct markets has its own strategy instance, precision, base-unit
-position cap and optional strategy overrides. Each may set `strategy` to choose a different
-strategy type; it defaults to the top-level type. Market settings extend shared
-`strategy_config`, so keep shared keys compatible with every selected type. Do not
-combine `symbol` and `markets`.
-Existing single-symbol configs keep their behavior.
-
-The whole session shares **one account, simulator, dispatcher, daily equity baseline,
-persisted order-attempt budget and ambiguous-outcome halt**. The required multi-market
-`max_total_notional` bounds gross worst-case exposure in USDC, summing each market's
-larger possible absolute position after its outstanding buys or sells. Open and pending
-orders count once; long BTC cannot cancel short ETH in this calculation. Each quantity
-uses the larger of the current ask and relevant limit prices. External positions/orders
-also count: a missing or stale book for any exposed asset refuses new orders. This is a
-local pre-trade bound, not a guarantee against price changes or losses.
-
-All books must arrive before quoting. In **live mode**, one Glyde WS session carries every
-selected book and shared owner/order/fill state; HTTP is used only for startup snapshots and
-metadata. Paper subscribes to public books/trades and keeps its simulated account locally.
-A stale book pauses that market and confirms cancellation of its quotes. Other fresh
-markets keep quoting once the stale market is flat and its outstanding orders are retired.
-A fresh book restarts the paused strategy instance, including its volatility warm-up.
-Single-market runs pause the same way. A market stale for longer than
-`risk.max_stale_pause_seconds` (default 300) ends the run with the stale risk stop.
-If the stale market has a position, new quotes that require its notional valuation pause
-until that book is fresh; stale prices never become an assumed account-level bound.
-
-A private/account stream failure, unknown cancellation, daily-loss stop or other risk violation
-still stops the shared session; a disconnect or continuity gap retires quotes and reconnects. Shutdown cancels the
-bot's own tagged orders on **every configured symbol**, leaving manual orders, other symbols and
-all positions untouched.
-Use a dedicated account and only one runner for it. Paper status lines show each market's
-inventory/fills/quotes; their PnL is the **same account-wide PnL**, not additive market PnL.
-`stop <config>` coordinates and verifies the full configured set; retain the exact config
-and state directory. Live mode still requires typed confirmation of the comma-separated
-list in configuration order (for example `BTC,ETH`), and checks existing exposure across
-all selected markets before it can acquire cleanup authority. `--i-understand` does not
-bypass risk limits. Begin in paper mode; no multi-market live qualification is claimed.
-
-Public-book `record`/`replay` currently require a separate single-symbol config and refuse
-`markets` configs rather than silently replaying just one market. Public external-reference
-settings, when enabled, are evaluated independently for each selected market.
-
-## Offline API compatibility checks
-
-`pytest -q tests/test_public_api_compatibility.py` replays frozen public HTTP and
-WebSocket wire frames through the real client, including metadata, books, mids,
-trade snapshots/updates and subscription acknowledgements. It forbids sockets,
-credential reads and private requests. See the [fixture provenance](tests/fixtures/one-api-public/README.md):
-the initial recording is synthetic, so these checks catch client wire regressions
-without claiming the production service is reachable or qualified.
-
-## Avellaneda–Stoikov with public books and trades
-
-The existing `avellaneda_market_making` strategy adapts Hummingbot's normalized
-reservation-price/spread model. `risk_factor` controls inventory aversion,
-`liquidity_kappa` is an explicit order-book depth calibration, and
-`inventory_target_position` is a signed base-position target. These parameters do
-not raise any shared position, notional, loss or order-rate cap.
-
-For an opt-in streaming-paper experiment, copy
-[avellaneda-trades-paper.yaml](examples/avellaneda-trades-paper.yaml):
-
-```sh
-glyde-mm paper examples/avellaneda-trades-paper.yaml
-```
-
-`volatility_source: book_and_trades` uses the One API `l2Book` and `trades` streams.
-Each complete source-time interval contributes the mean of its latest midpoint
-and volume-weighted trade price. Volatility is the RMS change across consecutive
-completed intervals; repeated callbacks cannot warm it up. Missing books/trades,
-gaps or zero movement withhold quotes; lost readiness retires existing quotes on
-the next strategy tick. The default remains `volatility_source: book`.
-
-This combined estimator is a Glyde adaptation, not Hummingbot's automatic
-trade-intensity calibration. `liquidity_kappa` stays user-configured. The combined
-mode currently refuses live and book-only replay before trading: paper results
-do not qualify private fills or live execution. See the
-[model equations and sampling contract](docs/strategies.md#avellaneda-market-making)
-and [Apache-2.0 reference](https://github.com/hummingbot/hummingbot/tree/9af100d6822da7d2d0291a906c730ef172284ee2/hummingbot/strategy/avellaneda_market_making).
-
-## Type checking
-
-Install development tools with `python -m pip install -e '.[dev]'`, then run
-`mypy --strict src/glyde_mm`. CI checks every source module on its Python matrix;
-there are no source exclusions or per-module relaxations. Dynamic JSON/YAML values
-are typed at the wire/config boundary, while exchange models, transport injection
-and strategy callbacks retain explicit types. The untyped third-party Hyperliquid
-SDK import is the only external import exception. Wheels include the PEP 561
-`py.typed` marker, checked by the package installation script.
-
-### PMM ping-pong, bands and ladders
-
-```sh
-glyde-mm paper examples/ping-pong-paper.yaml
-```
-
-The example combines three scaled levels, optional fixed price bands and paper
-ping-pong. A partial fill switches to the opposite side only after confirmed
-cancellation of the old quotes. Bands and risk caps still apply, even if that
-leaves no eligible side. This is direction alternation, not a guarantee of flat
-inventory or a paired profit exit. Live mode and book-only replay refuse ping-pong
-until identified own-fill delivery is available. See [strategy details](docs/strategies.md).
-
-## Paper versus live execution report
-
-```sh
-glyde-mm reconcile --session-file /private/path/session.jsonl
-```
-
-Offline reconciliation compares captured private WS fills with public-tape paper
-fills for the same acknowledged original quotes. It reports slippage, model-missed
-quantities and actual USDC fee impact, with missing evidence refused or unavailable.
-A complete execution capture is required; ordinary diagnostic logs are insufficient.
-See [capture format and limitations](docs/reconciliation.md). No trading or state reset
-is performed.
-
-## Your own strategy plugin
-
-Advanced users can select `plugin:module:Class` and a frozen, typed dataclass of
-parameters. Plugins return passive `Quote` intents; the host owns order IDs,
-cancel-before-replace, and every risk check. Start with:
-
-```sh
-glyde-mm paper examples/plugin-paper.yaml
-```
-
-See [the base class, lifecycle and config contract](docs/plugins.md) and the
-[included example](src/glyde_mm/strategies/example_plugin.py). Only import code
-you trust: local Python plugins run with your process permissions, not in a sandbox.
-
-## Push-only live state
-
-Live runs subscribe to `l2Book` plus authenticated `clearinghouseState`,
-`openOrders`, `orderUpdates` and `userFills`. The private channels share one
-sequenced One API group; account, orders and fills become visible together only
-at `glydeBatchEnd`. HTTP `/info` reads are limited to startup metadata and the
-existing exposure preflight. Quote refresh, pretrade checks and cleanup never
-poll account or order endpoints. Paper accounts continue to use the local
-simulator, fed by public WS books and trades.
-
-Missing/duplicate/reordered parts, sequence gaps, changed session/epoch, unsafe
-controls, queue overflow or stale source/local account times stop quoting.
-Pings and cache reads never refresh account timestamps. A partial batch has a
-two-second deadline. A server without these sequenced channels refuses the run;
-there is no HTTP fallback. Initial subscription snapshots must cover all private
-roots before quoting. Earlier private fill rows are not replayed as new fills.
-
-A socket drop retires quotes and attempts cancellation of recorded original IDs,
-even if read authority has expired. Confirmed terminal/cancel receipts retire tracked IDs once,
-without waiting for a dead read stream; the old session still refuses reads and new orders.
-The runner then reconnects with jittered exponential backoff (1s to 30s), resubscribes, waits for
-fresh complete WS snapshots and cancels every open order that snapshot shows before quoting again.
-Transient transport and projection failures, including a reconcile sweep whose snapshot does not
-arrive, keep retrying for `max_stale_pause_seconds` (default 300) before the run stops.
-`disconnected`/`reconnected` events record each episode.
-A stale book while connected pauses only that market: its quotes are retired, and the next fresh
-book cancels whatever the venue still shows for it before quoting resumes. `book_stale`/`book_fresh`
-events (market index, reason, pause length) and `glyde_mm_stale_pauses_total` record each pause. A
-sequence gap, changed session/epoch or resnapshot request reconnects like a socket drop, from a
-fresh snapshot. Refusals, unknown outcomes and risk halts never reconnect; they stop the session. Restart
-repeats exposure checks while retaining durable loss, rate and unknown-outcome state. A lost, late or
-refused cancel receipt pauses trading while the bot asks the venue (`openOrders` plus
-`historicalOrders`) for proof, retrying with backoff for up to `max_stale_pause_seconds`. Proof
-that every order is terminal resumes quoting with no latch; without proof the original IDs latch.
-An owner stream that lags or stalls after a cancel reconnects instead of stopping. No order is
-re-signed to escape uncertainty. At the next live startup, a `cancel_outcome_unknown` latch clears itself
-only when the venue's `openOrders` omits and `historicalOrders` shows a terminal status for every
-listed original; otherwise it stays. A cancel latch listing no original is never written. While Glyde
-reports its engine halted or not ready (`GET /v1/health` not READY, a `glydeSafety` frame, or an
-engine/projection refusal code), proof and reconnects keep waiting; that time does not count against
-`max_stale_pause_seconds` and is bounded by `max_engine_halt_seconds` (default 1800). Resting
-orders survive a halt by design, so once health is READY the bot re-sends refused cancels, proves
-them, reconciles its tagged orders and resumes quoting with any fill counted as inventory. Private evidence caches are bounded; exhaustion stops the session.
-A malformed or partial frame from a degraded engine resnapshots and reconnects like a socket drop;
-only identity mismatches and refusals without a retry hint stop the run. With
-`risk.keep_quotes_on_disconnect_seconds` set, quotes stay resting through a short drop and are
-cancelled once it outlasts that bound. A live start cancels the bot's own tagged orders left by a
-killed run. Under systemd with `WatchdogSec=` and `NotifyAccess=main`, the bot pings the watchdog
-every 5 seconds while its event loop runs, so a wedged process is killed and restarted.
-An HTTP 429 or a rate/budget refusal on an order or cancel is a definite refusal, not an unknown
-outcome: resting quotes stay and the strategy backs off (30s doubling to 300s, at least any
-`Retry-After`). Cancels share one signed action per 16 orders. To keep venue requests low, set
-`quote_refresh: changed_levels` (only quotes that moved past the refresh tolerance are replaced)
-and `max_quote_actions_per_minute`.
-
-### Offline quote-resilience checks
-
-`tests/test_quote_resilience.py` drives the real signed client, sequenced cache, risk wrapper
-and runner against the offline matching ledger. It covers WS disconnect/gap, silent books,
-ETH/BTC staleness flips, cooperative interruption and restart with the same state directory.
-Quotes retire within a two-second **test** bound with responsive simulated cancellation;
-confirmed IDs are never cancelled twice, and recovery installs fresh quotes. Lost cancel
-receipts keep the durable original-ID fence until the simulated venue's order history proves
-every original closed.
-These checks do not establish a production latency SLA or SIGKILL/venue-outage cleanup.
