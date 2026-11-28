@@ -311,3 +311,15 @@ async def test_live_outage_past_the_stale_pause_window_ends_without_a_latch(tmp_
     assert not wire.orders()
     assert any("reconnect window" in line for line in lines)
     assert json.loads(risk_state_path(selected, tmp_path).read_text())["execution"] is None
+
+
+async def test_live_first_connect_timeout_retries_and_quotes(tmp_path):
+    # 28 Nov 13:17: the first connect's owner cut never arrived, the account read timed out
+    # and the bot exited for systemd to restart. It now retries in-process.
+    wire, selected = ProjectionOutageWire(books_only={1}), live_config()
+    async with episode(wire, selected, tmp_path) as (task, stop):
+        await run_until(task, lambda: len(wire.orders()) == 4, seconds=8)
+        assert wire.connections == 2 and not task.done()
+        stop.set()
+        await asyncio.wait_for(task, CANCEL_BOUND_SECONDS)
+    assert not wire.orders()

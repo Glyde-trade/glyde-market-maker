@@ -127,6 +127,11 @@ def _price_tick(book: Book, size_decimals: int) -> Decimal:
     return max(Decimal(1).scaleb(mid.adjusted() - 4), Decimal(1).scaleb(-max(0, 6 - size_decimals)))
 
 
+# Failures that retry even before the first quote, inside the same bounded reconnect window:
+# a deferred subscription, a stale account cut, and a timed-out first read (28 Nov 2026).
+FIRST_CONNECT_RETRIES = (SubscriptionDeferred, StaleAccount, TimeoutError)
+
+
 async def _wait_out_halt(
     source: MarketClient,
     stop: asyncio.Event,
@@ -863,7 +868,7 @@ async def _run_session(
                     # halted, is retried even before the first quote.
                     if not reconnectable(error) or (
                         first
-                        and not isinstance(error, SubscriptionDeferred)
+                        and not isinstance(error, FIRST_CONNECT_RETRIES)
                         and not await engine_halted(error)
                     ):
                         raise
@@ -890,7 +895,7 @@ async def _run_session(
                     )
                     if not retryable or (
                         first
-                        and not isinstance(error, (SubscriptionDeferred, StaleAccount))
+                        and not isinstance(error, FIRST_CONNECT_RETRIES)
                         and not await engine_halted(error)
                     ):
                         raise
