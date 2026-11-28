@@ -30,6 +30,7 @@ class Client:
         self.calls = []
         self.outcome = "resting"
         self.cancel_outcome = "cancelled"
+        self.modify_outcome = "resting"
         self.cancel_gate = None
         self.place_gate = None
         self.serial = 0
@@ -50,6 +51,14 @@ class Client:
         return [
             OrderResult(self.outcome, f"{self.serial}-{i}", o.client_order_id)
             for i, o in enumerate(orders)
+        ]
+
+    async def modify_orders(self, requests):
+        self.calls.append(("modify", tuple(requests)))
+        if self.modify_outcome == "timeout":
+            raise TimeoutError("accepted, response lost")
+        return [
+            OrderResult(self.modify_outcome, r.order_id, r.order.client_order_id) for r in requests
         ]
 
     async def cancel_orders(self, requests):
