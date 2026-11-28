@@ -48,7 +48,7 @@ title="[bot-stop] ${preset}: ${signature:-$outcome}"
 echo "In one or two sentences, what did you see? (e.g. 'bot stopped 10 min in', 'book empty'). End with Enter:"
 read -r what_happened
 
-body_file="$(mktemp -t glyde-bug.XXXXXX)"
+body_file="$(mktemp "${TMPDIR:-/tmp}/glyde-bug.XXXXXX")"
 {
   echo "**What happened (reporter):** ${what_happened:-not given}"
   echo
