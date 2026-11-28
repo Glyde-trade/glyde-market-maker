@@ -384,3 +384,27 @@ async def test_real_server_null_end_index_required_and_bad_end_never_commits(inv
     with pytest.raises(OneApiError):
         state.consume(frames[-1])
     assert state._account is None
+
+
+def open_order(oid, px, cloid=None):
+    return {"oid": oid, "coin": "BTC", "side": "B", "sz": "0.1", "limitPx": px, "cloid": cloid}
+
+
+async def test_unparseable_untagged_open_order_is_skipped_and_logged_once(capsys):
+    # A pending Market IOC from another trader arrived with limitPx "0" (28 Nov 2026).
+    market_ioc = open_order(7, "0")
+    state = LiveStateClient(None, config())
+    roots = owner_roots(OWNER, orders=[market_ioc, open_order(8, "99")])
+    seed(state, roots)
+    for frame in batch("mm-owner", roots, owner=OWNER, sequence=2, previous=1):
+        state.consume(frame)
+    assert [order.order_id for order in await state.open_orders()] == ["8"]
+    logged = capsys.readouterr().out
+    assert logged.count("skipped unparseable untagged open order") == 1
+    assert '"limitPx": "0"' in logged
+
+
+async def test_unparseable_bot_open_order_still_refuses_the_snapshot():
+    state = LiveStateClient(None, config())
+    with pytest.raises(OneApiError, match="invalid streamed open order"):
+        seed(state, owner_roots(OWNER, orders=[open_order(7, "0", "0x676d6d31" + "a" * 24)]))
