@@ -111,6 +111,20 @@ class SubscriptionDeferred(StreamDisconnected):
 # Glyde refuses an order, cancel or modify action outside 1..16 entries
 # (docs/one-api/hl-compatibility.md); larger batches are split into several signed actions.
 MAX_ACTION_ENTRIES = 16
+# Glyde admits order entries per account per minute, counted per entry (backend
+# order_rate_limits.go): (entries per minute, burst). Actions are split to the burst and paced
+# so a ladder never asks for more than the bucket holds.
+ORDER_ENTRY_RATES = {"place": (30, 15), "cancel": (20, 10)}
+ACTION_BUCKETS = {
+    "order": ("place", "orders"),
+    "batchModify": ("place", "modifies"),
+    "cancel": ("cancel", "cancels"),
+    "cancelByCloid": ("cancel", "cancels"),
+}
+MAX_PLACE_ENTRIES = min(MAX_ACTION_ENTRIES, ORDER_ENTRY_RATES["place"][1])
+MAX_CANCEL_ENTRIES = min(MAX_ACTION_ENTRIES, ORDER_ENTRY_RATES["cancel"][1])
+# Refresh entries per minute that both buckets admit at their sustained rates.
+DEFAULT_QUOTE_ACTIONS_PER_MINUTE = sum(rate for rate, _ in ORDER_ENTRY_RATES.values())
 RETRYABLE_REFUSALS = frozenset({"PROJECTION_UNAVAILABLE"})
 REFUSAL_RETRY_MAX_SECONDS = 60.0
 _REASON_CODE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
@@ -316,6 +330,34 @@ def history_from_wire(rows: object) -> list[HistoricalOrder]:
         raise OneApiError("invalid historical orders") from None
 
 
+class EntryBucket:
+    """A local mirror of one Glyde admission bucket: wait for room instead of being refused."""
+
+    def __init__(self, per_minute: int, burst: int) -> None:
+        self.rate, self.burst = per_minute / 60, float(burst)
+        self.tokens, self.updated = self.burst, time.monotonic()
+        self._lock = asyncio.Lock()
+
+    def _refill(self) -> None:
+        now = time.monotonic()
+        self.tokens = min(self.burst, self.tokens + (now - self.updated) * self.rate)
+        self.updated = now
+
+    async def take(self, entries: int) -> None:
+        async with self._lock:
+            while True:
+                self._refill()
+                if self.tokens >= min(entries, self.burst):
+                    self.tokens -= entries
+                    return
+                await asyncio.sleep((min(entries, self.burst) - self.tokens) / self.rate)
+
+    def refused(self, retry_after: float) -> None:
+        """Glyde said wait: no entry may go before retry_after has passed."""
+        self._refill()
+        self.tokens = min(self.tokens, -max(retry_after, 1.0) * self.rate)
+
+
 class OneApiClient:
     def __init__(
         self,
@@ -339,6 +381,7 @@ class OneApiClient:
         self.public_clock: tuple[float, float, float] | None = None
         self._read_credential: tuple[str, float] | None = None
         self._read_lock = asyncio.Lock()
+        self._buckets = {name: EntryBucket(*rate) for name, rate in ORDER_ENTRY_RATES.items()}
 
     async def __aenter__(self) -> OneApiClient:
         return self
@@ -561,6 +604,10 @@ class OneApiClient:
             raise OneApiError("paper mode cannot submit exchange actions")
         if not self.config.owner or not self.config.vault_address:
             raise ValueError("live mode requires the registered owner and vault_address namespace")
+        bucket_entries = ACTION_BUCKETS.get(str(action.get("type")))
+        bucket = self._buckets.get(bucket_entries[0]) if bucket_entries else None
+        if bucket is not None and bucket_entries is not None:
+            await bucket.take(len(action.get(bucket_entries[1]) or ()))
         # Only nonce allocation/signing is serialized; unrelated provider calls can proceed.
         async with self._sign_lock:
             self._agent_wallet()
@@ -577,9 +624,22 @@ class OneApiClient:
                 "signature": signature,
                 "vaultAddress": self.config.vault_address,
             }
-        result = await self._post("/exchange", envelope, action=True)
+        try:
+            result = await self._post("/exchange", envelope, action=True)
+        except RateLimited as error:
+            if bucket is not None:
+                bucket.refused(error.retry_after)
+            raise
         if not isinstance(result, dict) or result.get("status") not in {"ok", "err"}:
             raise OutcomeUnknown("exchange returned an unrecognized receipt")
+        refusal = result.get("response")
+        if (
+            bucket is not None
+            and result.get("status") == "err"
+            and isinstance(refusal, str)
+            and _RATE_LIMITED_TEXT.search(refusal)
+        ):
+            bucket.refused(_rate_limit_seconds(result.get("retryAfter")))
         return result
 
     async def _chunked(
@@ -588,15 +648,15 @@ class OneApiClient:
         orders: Sequence[OrderRequest],
         action: Callable[[Sequence[Any]], Awaitable[dict[str, Any]]],
     ) -> list[OrderResult]:
-        """Send at most MAX_ACTION_ENTRIES per signed action, in order.
+        """Send at most MAX_PLACE_ENTRIES per signed action, in order.
 
         A refusal of the first action means nothing was placed and is raised. Once an earlier
         action has placed orders, a refused later action (and every one after it, which is
         not sent) is reported per order as rejected, so placed orders stay accounted for.
         """
         results: list[OrderResult] = []
-        for start in range(0, len(rows), MAX_ACTION_ENTRIES):
-            part = slice(start, start + MAX_ACTION_ENTRIES)
+        for start in range(0, len(rows), MAX_PLACE_ENTRIES):
+            part = slice(start, start + MAX_PLACE_ENTRIES)
             try:
                 results.extend(self._order_results(await action(rows[part]), orders[part]))
             except ActionRefused:
@@ -704,7 +764,7 @@ class OneApiClient:
         )
 
     async def cancel_orders(self, orders: Sequence[CancelRequest]) -> list[CancelResult]:
-        # One signed action per wire type and MAX_ACTION_ENTRIES chunk, not one per order:
+        # One signed action per wire type and MAX_CANCEL_ENTRIES chunk, not one per order:
         # every action costs Glyde a venue request.
         by_id: list[tuple[int, dict[str, Any]]] = []
         by_cloid: list[tuple[int, dict[str, Any]]] = []
@@ -720,8 +780,8 @@ class OneApiClient:
                 by_cloid.append((index, {"asset": asset, "cloid": request.client_order_id}))
         statuses: dict[int, Any] = {}
         for kind, rows in (("cancel", by_id), ("cancelByCloid", by_cloid)):
-            for start in range(0, len(rows), MAX_ACTION_ENTRIES):
-                part = rows[start : start + MAX_ACTION_ENTRIES]
+            for start in range(0, len(rows), MAX_CANCEL_ENTRIES):
+                part = rows[start : start + MAX_CANCEL_ENTRIES]
                 action = {"type": kind, "cancels": [wire for _, wire in part]}
                 for (index, _), status in zip(
                     part, self._statuses(await self.exchange(action), len(part)), strict=True

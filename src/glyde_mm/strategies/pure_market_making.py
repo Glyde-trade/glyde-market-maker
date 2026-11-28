@@ -92,6 +92,7 @@ class PureMarketMakingConfig:
     # within the refresh tolerance (exact price when unset) and replaces only the rest.
     quote_refresh: str = "replace_all"
     # Cap on order entries placed plus cancelled per rolling minute by refreshes; None is no cap.
+    # Live runs that leave it unset get DEFAULT_QUOTE_ACTIONS_PER_MINUTE (see runner).
     max_quote_actions_per_minute: int | None = None
 
     def __post_init__(self) -> None:

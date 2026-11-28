@@ -6,15 +6,18 @@ request budget was exhausted. These pin the cheaper refresh and the back-off.
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal as D
 
 import httpx
 import pytest
 from test_pure_market_making import Client, book
+from test_risk import FakeClient, guard
 
-from glyde_mm.client import OneApiClient, RateLimited
+from glyde_mm.client import EntryBucket, OneApiClient, RateLimited
 from glyde_mm.config import Config
-from glyde_mm.models import CancelRequest
+from glyde_mm.models import CancelRequest, OrderRequest, bot_client_order_id
+from glyde_mm.risk import RiskManagedClient
 from glyde_mm.strategies import PureMarketMakingConfig, PureMarketMakingStrategy, StrategyContext
 
 
@@ -184,3 +187,92 @@ async def test_cancels_share_one_signed_action(unsigned, monkeypatch):
     monkeypatch.setattr(client, "_asset", asset)
     results = await client.cancel_orders([CancelRequest("BTC", order_id=str(i)) for i in range(10)])
     assert len(sent) == 1 and [r.status for r in results] == ["cancelled"] * 10
+
+
+async def test_cancels_split_to_glydes_cancel_burst(unsigned, monkeypatch):
+    # 28 Nov 2026 (#120): a 16-entry cancel used 16 of the account's 10-entry cancel burst.
+    sent = []
+
+    def handler(request):
+        count = len(__import__("json").loads(request.content)["action"]["cancels"])
+        sent.append(count)
+        return httpx.Response(
+            200,
+            json={"status": "ok", "response": {"data": {"statuses": ["success"] * count}}},
+        )
+
+    client = live_client(httpx.MockTransport(handler))
+
+    async def asset(symbol):
+        return 0, None
+
+    monkeypatch.setattr(client, "_asset", asset)
+    await client.cancel_orders([CancelRequest("BTC", order_id=str(i)) for i in range(25)])
+    assert sent == [10, 10, 5]
+
+
+@pytest.mark.paced
+async def test_entry_bucket_paces_instead_of_asking_past_the_burst():
+    bucket = EntryBucket(per_minute=600, burst=2)  # 10 entries a second.
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    for _ in range(3):
+        await bucket.take(2)
+    assert loop.time() - started >= 0.35  # The burst, then two waits of 0.2s.
+    bucket.refused(1.0)
+    started = loop.time()
+    await bucket.take(1)
+    assert loop.time() - started >= 1.0
+
+
+@pytest.mark.paced
+async def test_client_waits_out_a_refusal_before_the_next_action(unsigned, monkeypatch):
+    sent = []
+
+    def handler(request):
+        sent.append(asyncio.get_running_loop().time())
+        if len(sent) == 1:
+            return httpx.Response(429, headers={"Retry-After": "1"})
+        return httpx.Response(
+            200, json={"status": "ok", "response": {"data": {"statuses": ["success"]}}}
+        )
+
+    client = live_client(httpx.MockTransport(handler))
+    with pytest.raises(RateLimited):
+        await client.exchange({"type": "cancel", "cancels": [{"a": 0, "o": 1}]})
+    await client.exchange({"type": "cancel", "cancels": [{"a": 0, "o": 1}]})
+    assert sent[1] - sent[0] >= 1.0
+
+
+async def test_rate_limited_sweep_cancel_is_resent_not_an_unknown_outcome(monkeypatch):
+    # #120: a rate-refused cancel latched cancel_outcome_unknown and stopped the run.
+    monkeypatch.setattr("glyde_mm.risk.asyncio.sleep", _no_sleep)
+    g, _ = guard()
+    raw = RateLimitedOnce()
+    managed = RiskManagedClient(raw, g, cleanup_symbols=("BTC",))
+    cloid = bot_client_order_id()
+    g.pending[cloid] = OrderRequest("BTC", "buy", D("0.01"), D("99"), client_order_id=cloid)
+    await managed.cancel_all("BTC")
+    assert g.halted is None and raw.refusals == 2 and raw.all_cancels == 1
+
+
+async def _no_sleep(seconds):
+    return None
+
+
+class RateLimitedOnce(FakeClient):
+    def __init__(self):
+        super().__init__()
+        self.refusals = 0
+
+    async def cancel_orders(self, orders):
+        if self.refusals == 0:
+            self.refusals += 1
+            raise RateLimited("exchange refused the action: rate limited", 1.0)
+        return await super().cancel_orders(orders)
+
+    async def cancel_all(self, symbol=None):
+        if self.refusals == 1:
+            self.refusals += 1
+            raise RateLimited("exchange refused the action: rate limited", 1.0)
+        await super().cancel_all(symbol)
